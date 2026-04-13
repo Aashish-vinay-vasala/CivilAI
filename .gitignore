@@ -1,0 +1,9 @@
+.env
+.env.local
+.env.production
+**/venv/
+**/__pycache__/
+*.pkl
+*.pyc
+node_modules/
+.next/
