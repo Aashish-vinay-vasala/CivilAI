@@ -1,9 +1,33 @@
+# Environment
 .env
 .env.local
 .env.production
+**/.env
+
+# Python
 **/venv/
 **/__pycache__/
-*.pkl
-*.pyc
-node_modules/
-.next/
+**/*.pyc
+**/*.pyo
+**/*.pkl
+**/*.egg-info/
+**/dist/
+**/build/
+
+# Node
+**/node_modules/
+**/.next/
+**/out/
+
+# ML
+**/mlruns/
+**/*.h5
+**/*.model
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
