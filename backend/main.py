@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.api.v1.routes import copilot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green
+from app.api.v1.routes import copilot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments
 
 app = FastAPI(
     title="CivilAI API",
@@ -24,9 +24,21 @@ app.include_router(
 )
 
 app.include_router(
+    payments.router,
+    prefix="/api/v1/payments",
+    tags=["Payment Tracker"]
+)
+
+app.include_router(
     projects.router,
     prefix="/api/v1/projects",
     tags=["Projects"]
+)
+
+app.include_router(
+    vendors.router,
+    prefix="/api/v1/vendors",
+    tags=["Vendor Scoring"]
 )
 
 app.include_router(
