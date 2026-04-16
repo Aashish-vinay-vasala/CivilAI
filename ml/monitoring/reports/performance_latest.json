@@ -1,0 +1,72 @@
+{
+  "timestamp": "2026-04-16T17:37:10.134212",
+  "total_runs": 17,
+  "avg_accuracy": 0.7413333333333333,
+  "avg_auc": 0.6830526629677572,
+  "models": {
+    "equipment_pipeline_run": {
+      "accuracy": 0.84,
+      "f1_score": 0.8461538461538461,
+      "roc_auc": 0.9408000000000001
+    },
+    "turnover_pipeline_run": {
+      "accuracy": 0.87,
+      "f1_score": 0.8773584905660378,
+      "roc_auc": 0.9593397745571659
+    },
+    "safety_pipeline_run": {
+      "accuracy": 0.88,
+      "f1_score": 0.8545454545454545,
+      "roc_auc": 0.9557289002557544
+    },
+    "delay_pipeline_run": {
+      "accuracy": 0.885,
+      "f1_score": 0.8866995073891626,
+      "roc_auc": 0.9699919710959455
+    },
+    "cost_overrun_pipeline_run": {
+      "accuracy": 0.82,
+      "f1_score": 0.8144329896907216,
+      "roc_auc": 0.9320932093209321
+    },
+    "equipment_failure_rf_v1": {
+      "accuracy": 0.7,
+      "precision": 0.5,
+      "recall": 0.16666666666666666,
+      "f1_score": 0.25,
+      "roc_auc": 0.28571428571428575
+    },
+    "turnover_xgboost_v1": {
+      "accuracy": 0.575,
+      "precision": 0.3333333333333333,
+      "recall": 0.0625,
+      "f1_score": 0.10526315789473684,
+      "roc_auc": 0.328125
+    },
+    "safety_risk_rf_v1": {
+      "accuracy": 0.87,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1_score": 0.0,
+      "roc_auc": 0.6088888888888889
+    },
+    "delay_prediction_xgboost_v1": {
+      "accuracy": 0.5333333333333333,
+      "precision": 0.627906976744186,
+      "recall": 0.6923076923076923,
+      "f1_score": 0.6585365853658537,
+      "roc_auc": 0.43101343101343104
+    },
+    "cost_overrun_regression_v1": {
+      "r2_score": -0.6157407880955001,
+      "mae": 67.41447395076752
+    },
+    "cost_overrun_xgboost_v1": {
+      "accuracy": 0.44,
+      "precision": 0.5,
+      "recall": 0.5,
+      "f1_score": 0.5,
+      "roc_auc": 0.41883116883116883
+    }
+  }
+}

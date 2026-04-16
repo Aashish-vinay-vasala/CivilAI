@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-04-16T17:32:29.865571",
+  "models": {
+    "cost_overrun": {
+      "status": "stable",
+      "psi_avg": 0.05,
+      "features_checked": 3
+    },
+    "delay_prediction": {
+      "status": "stable",
+      "psi_avg": 0.04,
+      "features_checked": 3
+    },
+    "safety_risk": {
+      "status": "stable",
+      "psi_avg": 0.03,
+      "features_checked": 2
+    },
+    "workforce_turnover": {
+      "status": "stable",
+      "psi_avg": 0.04,
+      "features_checked": 3
+    },
+    "equipment_failure": {
+      "status": "stable",
+      "psi_avg": 0.05,
+      "features_checked": 3
+    }
+  }
+}

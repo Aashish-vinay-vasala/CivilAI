@@ -1,0 +1,78 @@
+name: CivilAI ML Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ml/**'
+      - '.github/workflows/ml_pipeline.yml'
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly retraining every Sunday
+  workflow_dispatch:      # Manual trigger
+
+jobs:
+  ml-pipeline:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ml
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pandas numpy scikit-learn xgboost mlflow prefect joblib
+
+      - name: Generate training data
+        run: python data/download_data.py
+
+      - name: Run MLflow training
+        run: python mlflow_tracking.py
+
+      - name: Run Prefect pipeline
+        run: python pipelines/train_pipeline.py
+
+      - name: Run drift detection
+        run: python monitoring/drift_detector.py
+
+      - name: Run performance monitor
+        run: python monitoring/performance_monitor.py
+
+      - name: Check model quality gate
+        run: |
+          python -c "
+          import json
+          with open('monitoring/reports/performance_latest.json') as f:
+              report = json.load(f)
+          avg_acc = report['avg_accuracy']
+          print(f'Average accuracy: {avg_acc:.2%}')
+          if avg_acc < 0.70:
+              print('FAILED: Accuracy below 70% threshold!')
+              exit(1)
+          print('PASSED: Models meet quality threshold!')
+          "
+
+      - name: Upload MLflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-results
+          path: |
+            ml/mlflow.db
+            ml/monitoring/reports/
+          retention-days: 30
+
+      - name: Upload trained models
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-models
+          path: ml/models/saved/
+          retention-days: 30
