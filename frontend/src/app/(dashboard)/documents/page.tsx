@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FileText,
@@ -21,6 +21,7 @@ import {
   ChevronRight,
   Download,
   Eye,
+  Database,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -36,7 +37,7 @@ const docTypeData = [
   { name: "Drawings", value: 15, color: "#8b5cf6" },
 ];
 
-const recentDocs = [
+const fallbackDocs = [
   { name: "Contract_BlockA.pdf", type: "pdf", status: "processed", size: "2.4 MB", date: "2h ago", category: "Contract" },
   { name: "Safety_Audit_June.xlsx", type: "excel", status: "processed", size: "1.1 MB", date: "4h ago", category: "Safety" },
   { name: "Site_Drawing_Rev3.pdf", type: "pdf", status: "pending", size: "5.2 MB", date: "6h ago", category: "Drawing" },
@@ -56,6 +57,8 @@ const quickQuestions = [
   "Highlight unusual clauses",
 ];
 
+const categories = ["All", "Contract", "Safety", "Drawing", "Permit", "Invoice", "BOQ", "General"];
+
 interface DocMessage {
   role: "user" | "assistant";
   content: string;
@@ -74,9 +77,26 @@ export default function DocumentsPage() {
   const [docChatLoading, setDocChatLoading] = useState(false);
   const [currentDoc, setCurrentDoc] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
+  const [realDocs, setRealDocs] = useState<any[]>([]);
+  const [docsLoading, setDocsLoading] = useState(true);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
-  const categories = ["All", "Contract", "Safety", "Drawing", "Permit", "Invoice", "BOQ"];
+  useEffect(() => {
+    fetchDocs();
+  }, []);
+
+  const fetchDocs = async () => {
+    try {
+      const response = await axios.get("http://localhost:8000/api/v1/documents/list");
+      if (response.data.documents?.length > 0) {
+        setRealDocs(response.data.documents);
+      }
+    } catch (err) {
+      console.error("Failed to fetch docs", err);
+    } finally {
+      setDocsLoading(false);
+    }
+  };
 
   const handleFile = async (file: File) => {
     setLoading(true);
@@ -97,9 +117,10 @@ export default function DocumentsPage() {
       setDocChatOpen(true);
       setDocMessages([{
         role: "assistant",
-        content: `✅ I've processed **"${file.name}"** successfully!\n\nI can see the full content and answer any questions about it. Try asking me to summarize it, identify risks, extract key dates, or anything else!`,
+        content: `✅ I've processed "${file.name}" and saved it to the database! I can see the full content and answer any questions about it. What would you like to know?`,
       }]);
-      toast.success("Document processed!");
+      toast.success("Document processed & saved!");
+      fetchDocs(); // Refresh document list
     } catch {
       toast.error("Failed to process document");
     } finally {
@@ -153,7 +174,20 @@ export default function DocumentsPage() {
     }
   };
 
-  const filtered = recentDocs.filter(d => {
+  const allDocs = realDocs.length > 0
+    ? realDocs.map((doc: any) => ({
+        name: doc.original_name || doc.filename,
+        type: doc.filename?.endsWith(".xlsx") || doc.original_name?.endsWith(".xlsx") ? "excel" : "pdf",
+        status: doc.status || "processed",
+        size: "—",
+        date: new Date(doc.created_at).toLocaleDateString(),
+        category: doc.doc_type
+          ? doc.doc_type.charAt(0).toUpperCase() + doc.doc_type.slice(1)
+          : "General",
+      }))
+    : fallbackDocs;
+
+  const filtered = allDocs.filter(d => {
     const matchSearch = d.name.toLowerCase().includes(search.toLowerCase());
     const matchCat = activeCategory === "All" || d.category === activeCategory;
     return matchSearch && matchCat;
@@ -172,10 +206,10 @@ export default function DocumentsPage() {
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: "Total Documents", value: "248", color: "border-blue-500/20 bg-blue-500/5" },
-          { label: "Processed", value: "231", color: "border-emerald-500/20 bg-emerald-500/5" },
-          { label: "Pending", value: "12", color: "border-orange-500/20 bg-orange-500/5" },
-          { label: "This Week", value: "+18", color: "border-purple-500/20 bg-purple-500/5" },
+          { label: "Total Documents", value: realDocs.length > 0 ? realDocs.length.toString() : "248", color: "border-blue-500/20 bg-blue-500/5" },
+          { label: "Processed", value: realDocs.length > 0 ? realDocs.filter(d => d.status === "processed").length.toString() : "231", color: "border-emerald-500/20 bg-emerald-500/5" },
+          { label: "Pending", value: realDocs.length > 0 ? realDocs.filter(d => d.status === "pending").length.toString() : "12", color: "border-orange-500/20 bg-orange-500/5" },
+          { label: "In Database", value: realDocs.length > 0 ? `${realDocs.length} Live` : "0", color: "border-purple-500/20 bg-purple-500/5" },
         ].map((kpi, i) => (
           <motion.div
             key={i}
@@ -213,56 +247,61 @@ export default function DocumentsPage() {
               if (file) handleFile(file);
             }}
           >
-            <motion.div
-              animate={{ y: dragOver ? -5 : 0 }}
-              transition={{ duration: 0.2 }}
-            >
+            <motion.div animate={{ y: dragOver ? -5 : 0 }} transition={{ duration: 0.2 }}>
               <div className="w-16 h-16 rounded-2xl gradient-blue flex items-center justify-center mx-auto mb-4">
                 {loading ? <Loader2 className="w-8 h-8 text-white animate-spin" /> : <Upload className="w-8 h-8 text-white" />}
               </div>
               <p className="text-foreground font-semibold text-lg mb-1">
-                {loading ? "Processing document..." : "Drop your document here"}
+                {loading ? "Processing & saving to database..." : "Drop your document here"}
               </p>
               <p className="text-sm text-muted-foreground mb-2">
                 Contracts · Blueprints · BOQ · Reports · Permits · Invoices
               </p>
               <p className="text-xs text-muted-foreground mb-4">
-                PDF · Excel · Word · PNG · JPG
+                PDF · Excel · Word · PNG · JPG — Saved to Supabase Storage
               </p>
             </motion.div>
             <div className="flex gap-2 justify-center flex-wrap">
               <input
                 type="text"
-                placeholder="Optional: What to analyze? (e.g. find payment terms)"
+                placeholder="Optional: What to analyze?"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 w-72"
+                className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
                 onClick={(e) => e.stopPropagation()}
               />
-              <label className="cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="file"
-                  className="hidden"
-                  accept=".pdf,.xlsx,.xls,.docx,.png,.jpg,.jpeg"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-                />
-                <Button className="gradient-blue text-white border-0">
-                  <Upload className="w-4 h-4 mr-2" />
-                  Browse Files
-                </Button>
-              </label>
+              <Button
+  className="gradient-blue text-white border-0"
+  onClick={(e) => {
+    e.stopPropagation();
+    document.getElementById("file-upload")?.click();
+  }}
+>
+  <Upload className="w-4 h-4 mr-2" />
+  Browse Files
+</Button>
+<input
+  id="file-upload"
+  type="file"
+  className="hidden"
+  accept=".pdf,.xlsx,.xls,.docx,.png,.jpg,.jpeg"
+  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+/>
             </div>
           </div>
 
-          {/* Document Types that can be analyzed */}
+          {/* Supported Types */}
           <div className="bg-card border border-border rounded-2xl p-5">
-            <p className="text-sm font-medium text-foreground mb-3">Supported Document Types</p>
+            <div className="flex items-center gap-2 mb-3">
+              <Database className="w-4 h-4 text-emerald-400" />
+              <p className="text-sm font-medium text-foreground">Supported Document Types</p>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               {[
                 { label: "Contracts", desc: "Risk analysis, clause review", color: "text-blue-400", bg: "bg-blue-500/10" },
-                { label: "Blueprints", desc: "Drawing analysis, clash detection", color: "text-purple-400", bg: "bg-purple-500/10" },
+                { label: "Blueprints", desc: "Drawing analysis, AI vision", color: "text-purple-400", bg: "bg-purple-500/10" },
                 { label: "BOQ", desc: "Cost extraction, price analysis", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-                { label: "Safety Reports", desc: "Risk identification, violations", color: "text-red-400", bg: "bg-red-500/10" },
+                { label: "Safety Reports", desc: "Risk identification", color: "text-red-400", bg: "bg-red-500/10" },
                 { label: "Permits", desc: "Expiry tracking, compliance", color: "text-orange-400", bg: "bg-orange-500/10" },
                 { label: "Invoices", desc: "Data extraction, payment terms", color: "text-yellow-400", bg: "bg-yellow-500/10" },
               ].map((type, i) => (
@@ -353,11 +392,10 @@ export default function DocumentsPage() {
                       <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
                         msg.role === "assistant" ? "gradient-blue" : "bg-secondary border border-border"
                       }`}>
-                        {msg.role === "assistant" ? (
-                          <Bot className="w-3.5 h-3.5 text-white" />
-                        ) : (
-                          <span className="text-xs text-foreground">U</span>
-                        )}
+                        {msg.role === "assistant"
+                          ? <Bot className="w-3.5 h-3.5 text-white" />
+                          : <span className="text-xs text-foreground">U</span>
+                        }
                       </div>
                       <div className={`max-w-[80%] rounded-2xl px-3 py-2.5 text-xs leading-relaxed ${
                         msg.role === "assistant"
@@ -411,7 +449,7 @@ export default function DocumentsPage() {
         </motion.div>
       </div>
 
-      {/* AI Analysis Result */}
+      {/* AI Analysis */}
       {analysis && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -434,7 +472,14 @@ export default function DocumentsPage() {
         className="bg-card border border-border rounded-2xl p-6"
       >
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-foreground">Document Library</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-foreground">Document Library</h3>
+            {realDocs.length > 0 && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
+                {realDocs.length} from Supabase DB
+              </span>
+            )}
+          </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
             <input
@@ -463,48 +508,61 @@ export default function DocumentsPage() {
           ))}
         </div>
 
-        <div className="space-y-2">
-          {filtered.map((doc, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.05 }}
-              className="flex items-center gap-3 p-3 rounded-xl bg-secondary/40 hover:bg-secondary/70 transition-colors group"
-            >
-              <div className="w-9 h-9 rounded-xl bg-secondary flex items-center justify-center flex-shrink-0">
-                {getFileIcon(doc.type)}
+        {docsLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {filtered.length === 0 ? (
+              <div className="text-center py-8">
+                <FileText className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
+                <p className="text-sm text-muted-foreground">No documents found</p>
+                <p className="text-xs text-muted-foreground">Upload a document to get started</p>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-foreground truncate font-medium">{doc.name}</p>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-xs text-muted-foreground">{doc.size}</span>
-                  <span className="text-xs text-muted-foreground">·</span>
-                  <span className="text-xs text-muted-foreground">{doc.date}</span>
-                  <span className="text-xs px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground">{doc.category}</span>
-                </div>
-              </div>
-              {getStatusBadge(doc.status)}
-              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <Button variant="ghost" size="icon" className="w-7 h-7">
-                  <Eye className="w-3.5 h-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" className="w-7 h-7">
-                  <Download className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            </motion.div>
-          ))}
-        </div>
+            ) : (
+              filtered.map((doc, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.05 }}
+                  className="flex items-center gap-3 p-3 rounded-xl bg-secondary/40 hover:bg-secondary/70 transition-colors group"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-secondary flex items-center justify-center flex-shrink-0">
+                    {getFileIcon(doc.type)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-foreground truncate font-medium">{doc.name}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs text-muted-foreground">{doc.size}</span>
+                      <span className="text-xs text-muted-foreground">·</span>
+                      <span className="text-xs text-muted-foreground">{doc.date}</span>
+                      <span className="text-xs px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground">{doc.category}</span>
+                    </div>
+                  </div>
+                  {getStatusBadge(doc.status)}
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Button variant="ghost" size="icon" className="w-7 h-7">
+                      <Eye className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="w-7 h-7">
+                      <Download className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </motion.div>
+              ))
+            )}
+          </div>
+        )}
       </motion.div>
 
       <ModuleChat
         context="Document Intelligence"
         placeholder="Ask about documents, contracts, reports..."
         pageSummaryData={{
-          totalDocs: 248,
-          processed: 231,
-          pending: 12,
+          totalDocs: realDocs.length || 248,
+          processed: realDocs.filter(d => d.status === "processed").length || 231,
           docTypes: docTypeData,
         }}
       />

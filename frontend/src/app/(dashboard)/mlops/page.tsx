@@ -30,15 +30,16 @@ import {
   Line,
 } from "recharts";
 import { Button } from "@/components/ui/button";
+import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 
-const modelMetrics = [
-  { name: "Cost Overrun", accuracy: 83, f1: 82.7, auc: 93.8, status: "production", type: "XGBoost" },
-  { name: "Delay Prediction", accuracy: 88.5, f1: 88.7, auc: 97.0, status: "production", type: "XGBoost" },
-  { name: "Safety Risk", accuracy: 88, f1: 85.5, auc: 95.6, status: "production", type: "Random Forest" },
-  { name: "Workforce Turnover", accuracy: 87, f1: 87.7, auc: 95.9, status: "production", type: "XGBoost" },
-  { name: "Equipment Failure", accuracy: 84, f1: 84.6, auc: 94.1, status: "production", type: "Random Forest" },
+const fallbackModels = [
+  { name: "Cost Overrun", accuracy: 83, f1: 0.827, auc: 0.938, status: "FINISHED", type: "XGBoost" },
+  { name: "Delay Prediction", accuracy: 88.5, f1: 0.887, auc: 0.97, status: "FINISHED", type: "XGBoost" },
+  { name: "Safety Risk", accuracy: 88, f1: 0.855, auc: 0.956, status: "FINISHED", type: "Random Forest" },
+  { name: "Workforce Turnover", accuracy: 87, f1: 0.877, auc: 0.959, status: "FINISHED", type: "XGBoost" },
+  { name: "Equipment Failure", accuracy: 84, f1: 0.846, auc: 0.941, status: "FINISHED", type: "Random Forest" },
 ];
 
 const radarData = [
@@ -48,11 +49,6 @@ const radarData = [
   { metric: "Precision", score: 84 },
   { metric: "Recall", score: 86 },
   { metric: "Stability", score: 92 },
-];
-
-const trainingHistory = [
-  { run: "Run 1", cost: 44, delay: 53, safety: 87, turnover: 57, equipment: 70 },
-  { run: "Run 2", cost: 83, delay: 88, safety: 88, turnover: 87, equipment: 84 },
 ];
 
 const driftData = [
@@ -77,6 +73,34 @@ const pipelineSteps = [
 export default function MLOpsPage() {
   const [loading, setLoading] = useState(false);
   const [lastTrained, setLastTrained] = useState("Today 17:21");
+  const [realRuns, setRealRuns] = useState<any[]>([]);
+  const [predStats, setPredStats] = useState<any>(null);
+  const [comparison, setComparison] = useState<any>(null);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [totalRuns, setTotalRuns] = useState(17);
+
+  useEffect(() => {
+    fetchMLOpsData();
+  }, []);
+
+  const fetchMLOpsData = async () => {
+    setDataLoading(true);
+    try {
+      const [runsRes, statsRes, compRes] = await Promise.all([
+        axios.get("http://localhost:8001/mlops/experiment-runs"),
+        axios.get("http://localhost:8001/mlops/prediction-stats"),
+        axios.get("http://localhost:8001/mlops/model-comparison"),
+      ]);
+      setRealRuns(runsRes.data.runs?.filter((r: any) => r.accuracy !== null) || []);
+      setTotalRuns(runsRes.data.total_runs || 17);
+      setPredStats(statsRes.data);
+      setComparison(compRes.data);
+    } catch (err) {
+      console.error("Failed to fetch MLOps data", err);
+    } finally {
+      setDataLoading(false);
+    }
+  };
 
   const runPipeline = async () => {
     setLoading(true);
@@ -87,6 +111,39 @@ export default function MLOpsPage() {
       toast.success("Pipeline completed successfully!");
     }, 3000);
   };
+
+  // Build training history from comparison data
+  const trainingHistory = comparison
+    ? Object.entries(comparison).slice(0, 5).map(([name, versions]: any) => {
+        const sorted = [...versions].sort((a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        return {
+          model: name,
+          v1: sorted[0]?.accuracy || 0,
+          v2: sorted[sorted.length - 1]?.accuracy || 0,
+        };
+      })
+    : [];
+
+  const displayModels = realRuns.length > 0
+    ? realRuns.slice(0, 5).map(r => ({
+        name: r.name,
+        accuracy: r.accuracy,
+        f1: r.f1,
+        auc: r.auc,
+        status: r.status,
+        type: r.name.includes("rf") ? "Random Forest" : "XGBoost",
+      }))
+    : fallbackModels;
+
+  const avgAccuracy = displayModels.length > 0
+    ? (displayModels.reduce((sum, m) => sum + (m.accuracy || 0), 0) / displayModels.length).toFixed(1)
+    : "86.1";
+
+  const avgAuc = displayModels.length > 0
+    ? (displayModels.reduce((sum, m) => sum + (m.auc || 0), 0) / displayModels.length).toFixed(3)
+    : "0.953";
 
   return (
     <div className="space-y-6">
@@ -120,10 +177,10 @@ export default function MLOpsPage() {
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: "Models in Production", value: "5", icon: Brain, color: "border-blue-500/20 bg-blue-500/5", iconColor: "text-blue-400" },
-          { label: "Avg Accuracy", value: "86.1%", icon: TrendingUp, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400" },
-          { label: "Avg AUC Score", value: "0.953", icon: Activity, color: "border-purple-500/20 bg-purple-500/5", iconColor: "text-purple-400" },
-          { label: "Last Trained", value: lastTrained, icon: RefreshCw, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400" },
+          { label: "Total Runs", value: totalRuns.toString(), icon: Brain, color: "border-blue-500/20 bg-blue-500/5", iconColor: "text-blue-400" },
+          { label: "Avg Accuracy", value: `${avgAccuracy}%`, icon: TrendingUp, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400" },
+          { label: "Avg AUC Score", value: avgAuc, icon: Activity, color: "border-purple-500/20 bg-purple-500/5", iconColor: "text-purple-400" },
+          { label: "Total Predictions", value: predStats ? predStats.total_predictions.toString() : "0", icon: Cpu, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400" },
         ].map((kpi, i) => (
           <motion.div
             key={i}
@@ -137,7 +194,11 @@ export default function MLOpsPage() {
               <p className="text-sm text-muted-foreground">{kpi.label}</p>
               <kpi.icon className={`w-4 h-4 ${kpi.iconColor}`} />
             </div>
-            <p className="text-2xl font-bold text-foreground">{kpi.value}</p>
+            {dataLoading ? (
+              <Loader2 className="w-5 h-5 animate-spin text-blue-400 mt-1" />
+            ) : (
+              <p className="text-2xl font-bold text-foreground">{kpi.value}</p>
+            )}
           </motion.div>
         ))}
       </div>
@@ -152,7 +213,11 @@ export default function MLOpsPage() {
         <div className="flex items-center gap-2 mb-4">
           <Database className="w-5 h-5 text-blue-400" />
           <h3 className="font-semibold text-foreground">Model Registry</h3>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">MLflow Tracked</span>
+          {realRuns.length > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
+              Live from MLflow
+            </span>
+          )}
         </div>
 
         {/* Table Header */}
@@ -165,7 +230,7 @@ export default function MLOpsPage() {
         </div>
 
         <div className="space-y-1">
-          {modelMetrics.map((model, i) => (
+          {displayModels.map((model, i) => (
             <motion.div
               key={i}
               initial={{ opacity: 0, x: -10 }}
@@ -175,7 +240,7 @@ export default function MLOpsPage() {
             >
               <div className="col-span-2 flex items-center gap-2">
                 <Brain className="w-4 h-4 text-blue-400" />
-                <span className="text-sm font-medium text-foreground">{model.name}</span>
+                <span className="text-sm font-medium text-foreground truncate">{model.name}</span>
               </div>
               <span className="text-xs px-2 py-1 rounded-lg bg-secondary text-muted-foreground">
                 {model.type}
@@ -191,9 +256,9 @@ export default function MLOpsPage() {
                 </div>
                 <span className="text-xs text-foreground">{model.accuracy}%</span>
               </div>
-              <span className="text-sm font-medium text-emerald-400">{model.auc}%</span>
+              <span className="text-sm font-medium text-emerald-400">{model.auc}</span>
               <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 w-fit">
-                {model.status}
+                {model.status === "FINISHED" ? "production" : model.status}
               </span>
             </motion.div>
           ))}
@@ -208,13 +273,15 @@ export default function MLOpsPage() {
           transition={{ delay: 0.3 }}
           className="bg-card border border-border rounded-2xl p-6"
         >
-          <h3 className="font-semibold text-foreground mb-2">Model Performance</h3>
-          <p className="text-xs text-muted-foreground mb-4">Accuracy by model (%)</p>
+          <h3 className="font-semibold text-foreground mb-2">Model Accuracy Comparison</h3>
+          <p className="text-xs text-muted-foreground mb-4">
+            {realRuns.length > 0 ? "Live from MLflow" : "Sample data"} — accuracy %
+          </p>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={modelMetrics} layout="vertical">
+            <BarChart data={displayModels} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
               <XAxis type="number" domain={[0, 100]} tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
-              <YAxis dataKey="name" type="category" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} width={120} />
+              <YAxis dataKey="name" type="category" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} width={130} />
               <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
               <Bar dataKey="accuracy" fill="#3b82f6" radius={[0, 6, 6, 0]} name="Accuracy %" />
             </BarChart>
@@ -239,45 +306,36 @@ export default function MLOpsPage() {
         </motion.div>
       </div>
 
-      {/* Training History */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
-        className="bg-card border border-border rounded-2xl p-6"
-      >
-        <h3 className="font-semibold text-foreground mb-2">Training History</h3>
-        <p className="text-xs text-muted-foreground mb-4">Accuracy improvement across runs (%)</p>
-        <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={trainingHistory}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-            <XAxis dataKey="run" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
-            <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
-            <Line type="monotone" dataKey="cost" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4 }} name="Cost" />
-            <Line type="monotone" dataKey="delay" stroke="#10b981" strokeWidth={2} dot={{ r: 4 }} name="Delay" />
-            <Line type="monotone" dataKey="safety" stroke="#f59e0b" strokeWidth={2} dot={{ r: 4 }} name="Safety" />
-            <Line type="monotone" dataKey="turnover" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 4 }} name="Turnover" />
-            <Line type="monotone" dataKey="equipment" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} name="Equipment" />
-          </LineChart>
-        </ResponsiveContainer>
-        <div className="flex flex-wrap gap-4 mt-2">
-          {[
-            { color: "bg-blue-400", label: "Cost" },
-            { color: "bg-emerald-400", label: "Delay" },
-            { color: "bg-orange-400", label: "Safety" },
-            { color: "bg-purple-400", label: "Turnover" },
-            { color: "bg-red-400", label: "Equipment" },
-          ].map((l) => (
-            <div key={l.label} className="flex items-center gap-1.5">
-              <div className={`w-2 h-2 rounded-full ${l.color}`} />
-              <span className="text-xs text-muted-foreground">{l.label}</span>
-            </div>
-          ))}
-        </div>
-      </motion.div>
+      {/* Version Comparison */}
+      {trainingHistory.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="bg-card border border-border rounded-2xl p-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <h3 className="font-semibold text-foreground">Model Version Improvement</h3>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live MLflow</span>
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={trainingHistory} barGap={4}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
+              <XAxis dataKey="model" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
+              <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
+              <Bar dataKey="v1" fill="#ef444450" radius={[6, 6, 0, 0]} name="V1 Accuracy %" />
+              <Bar dataKey="v2" fill="#10b981" radius={[6, 6, 0, 0]} name="V2 Accuracy %" />
+            </BarChart>
+          </ResponsiveContainer>
+          <div className="flex gap-4 mt-2">
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-400" /><span className="text-xs text-muted-foreground">V1 (Initial)</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-400" /><span className="text-xs text-muted-foreground">V2 (Improved)</span></div>
+          </div>
+        </motion.div>
+      )}
 
-      {/* Drift Detection + Pipeline */}
+      {/* Drift + Pipeline */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <motion.div
           initial={{ opacity: 0, x: -20 }}
@@ -305,7 +363,10 @@ export default function MLOpsPage() {
                     initial={{ width: 0 }}
                     animate={{ width: `${Math.min(item.psi * 300, 100)}%` }}
                     transition={{ delay: 0.5 + i * 0.1, duration: 0.8 }}
-                    className={`h-1.5 rounded-full ${item.psi < 0.1 ? "bg-emerald-500" : item.psi < 0.2 ? "bg-orange-500" : "bg-red-500"}`}
+                    className={`h-1.5 rounded-full ${
+                      item.psi < 0.1 ? "bg-emerald-500" :
+                      item.psi < 0.2 ? "bg-orange-500" : "bg-red-500"
+                    }`}
                   />
                 </div>
                 <span className="text-xs text-muted-foreground w-12 text-right">PSI={item.psi}</span>
@@ -363,11 +424,11 @@ export default function MLOpsPage() {
         context="MLOps Dashboard"
         placeholder="Ask about models, pipelines, drift..."
         pageSummaryData={{
-          modelsInProduction: 5,
-          avgAccuracy: "86.1%",
-          avgAUC: "0.953",
-          modelMetrics,
-          driftData,
+          totalRuns,
+          avgAccuracy,
+          avgAuc,
+          predStats,
+          realRuns: realRuns.slice(0, 5),
         }}
       />
     </div>
