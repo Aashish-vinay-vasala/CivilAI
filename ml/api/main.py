@@ -5,6 +5,11 @@ import joblib
 import numpy as np
 import pandas as pd
 import os
+import time
+import sys
+from datetime import datetime
+sys.path.append(".")
+from monitoring.prediction_logger import log_prediction
 
 app = FastAPI(title="CivilAI ML API")
 
@@ -75,6 +80,7 @@ class CostInput(BaseModel):
 @app.post("/predict/cost-overrun")
 def predict_cost_overrun(data: CostInput):
     try:
+        start = time.time()
         pt_enc = encoders["cost"].transform([data.project_type])[0]
         features = [[pt_enc, data.duration_months, data.team_size,
                      data.change_orders, data.material_price_increase,
@@ -82,12 +88,16 @@ def predict_cost_overrun(data: CostInput):
         prediction = models["cost_overrun"].predict(features)[0]
         probability = models["cost_overrun"].predict_proba(features)[0][1]
         overrun_pct = models["cost_regression"].predict(features)[0]
-        return {
+        latency = round((time.time() - start) * 1000, 2)
+
+        result = {
             "will_overrun": bool(prediction),
             "probability": round(float(probability) * 100, 1),
             "estimated_overrun_pct": round(float(overrun_pct), 2),
             "risk_level": "High" if probability > 0.7 else "Medium" if probability > 0.4 else "Low"
         }
+        log_prediction("cost_overrun", data.model_dump(), result, latency)
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -297,5 +307,51 @@ def get_equipment_stats():
             "health_by_type": by_type,
             "total_equipment": len(df),
         }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/mlops/prediction-stats")
+def get_prediction_stats():
+    try:
+        from monitoring.prediction_logger import get_prediction_stats
+        return get_prediction_stats()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/mlops/model-comparison")
+def get_model_comparison():
+    try:
+        from monitoring.model_comparison import compare_model_versions
+        return compare_model_versions()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/mlops/experiment-runs")
+def get_experiment_runs():
+    try:
+        import mlflow
+        mlflow.set_tracking_uri("sqlite:///mlflow.db")
+        client = mlflow.tracking.MlflowClient()
+        experiments = client.search_experiments()
+        for exp in experiments:
+            if exp.name == "CivilAI_Construction_ML":
+                runs = client.search_runs(
+                    experiment_ids=[exp.experiment_id],
+                    order_by=["start_time DESC"],
+                    max_results=20
+                )
+                return {
+                    "experiment": exp.name,
+                    "total_runs": len(runs),
+                    "runs": [{
+                        "name": r.data.tags.get("mlflow.runName", "unknown"),
+                        "accuracy": round(r.data.metrics.get("accuracy", 0) * 100, 1) if "accuracy" in r.data.metrics else None,
+                        "f1": round(r.data.metrics.get("f1_score", 0), 3),
+                        "auc": round(r.data.metrics.get("roc_auc", 0), 3),
+                        "status": r.info.status,
+                        "timestamp": datetime.fromtimestamp(r.info.start_time / 1000).strftime("%Y-%m-%d %H:%M"),
+                    } for r in runs if r.data.metrics]
+                }
+        return {"error": "Experiment not found"}
     except Exception as e:
         return {"error": str(e)}
