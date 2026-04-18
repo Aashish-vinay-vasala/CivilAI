@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
+  Globe,
+  Boxes,
   Cpu,
   Settings,
   LayoutDashboard,
@@ -40,6 +42,8 @@ const navItems = [
   { href: "/contracts", icon: FileSignature, label: "Contracts" },
   { href: "/procurement", icon: ShoppingCart, label: "Procurement" },
   { href: "/compliance", icon: ClipboardCheck, label: "Compliance" },
+  { href: "/bim", icon: Boxes, label: "BIM & CAD" },
+  { href: "/digital-twin", icon: Globe, label: "Digital Twin" },
   { href: "/equipment", icon: Wrench, label: "Equipment" },
   { href: "/green", icon: Leaf, label: "Green Monitor" },
   { href: "/vendors", icon: Star, label: "Vendor Scoring" },

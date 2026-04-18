@@ -1,8 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.api.v1.routes import copilot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments
-
+from app.api.v1.routes import copilot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim
 app = FastAPI(
     title="CivilAI API",
     description="AI-Powered Construction Management Platform",
@@ -117,6 +116,12 @@ app.include_router(
     reports.router,
     prefix="/api/v1/reports",
     tags=["Reports"]
+)
+
+app.include_router(
+    bim.router,
+    prefix="/api/v1/bim",
+    tags=["BIM & CAD"]
 )
 
 @app.get("/")
