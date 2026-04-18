@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState } from "react";
+import { motion } from "framer-motion";
 import {
   Building2,
   Upload,
@@ -13,7 +13,7 @@ import {
   FileText,
   Eye,
   Sparkles,
-  X,
+  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
@@ -33,8 +33,11 @@ import {
 } from "recharts";
 import dynamic from "next/dynamic";
 
-
 const BIMViewer3D = dynamic(() => import("@/components/bim/BIMViewer3D"), { ssr: false });
+const SiteProgress3D = dynamic(() => import("@/components/bim/SiteProgress3D"), { ssr: false });
+const SafetyHeatmap3D = dynamic(() => import("@/components/bim/SafetyHeatmap3D"), { ssr: false });
+const EquipmentMap3D = dynamic(() => import("@/components/bim/EquipmentMap3D"), { ssr: false });
+const SpacePlanning3D = dynamic(() => import("@/components/bim/SpacePlanning3D"), { ssr: false });
 
 const sampleElements = [
   { name: "Walls", count: 124, color: "#3b82f6" },
@@ -53,107 +56,25 @@ const sampleStoreys = [
   { name: "Roof", elevation: 14.0 },
 ];
 
+const tabs = [
+  { id: "overview", label: "Overview", icon: Building2 },
+  { id: "viewer", label: "3D Viewer", icon: Eye },
+  { id: "elements", label: "Elements", icon: Layers },
+  { id: "clashes", label: "Clashes", icon: AlertTriangle },
+  { id: "drawing", label: "Drawing AI", icon: Sparkles },
+  { id: "progress", label: "Progress", icon: CheckCircle },
+  { id: "safety", label: "Safety Map", icon: AlertTriangle },
+  { id: "equipment", label: "Equipment", icon: Wrench },
+  { id: "space", label: "Space Plan", icon: Box },
+];
+
 export default function BIMPage() {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const [bimData, setBimData] = useState<any>(null);
   const [clashData, setClashData] = useState<any>(null);
-  const [quantities, setQuantities] = useState<any>(null);
   const [analysis, setAnalysis] = useState("");
   const [drawingAnalysis, setDrawingAnalysis] = useState("");
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  // Draw simple 2D floor plan visualization
-  useEffect(() => {
-    if (activeTab === "viewer" && canvasRef.current) {
-      drawFloorPlan();
-    }
-  }, [activeTab, bimData]);
-
-  const drawFloorPlan = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const w = canvas.width;
-    const h = canvas.height;
-
-    // Background
-    ctx.fillStyle = "#0f172a";
-    ctx.fillRect(0, 0, w, h);
-
-    // Grid
-    ctx.strokeStyle = "#1e293b";
-    ctx.lineWidth = 1;
-    for (let x = 0; x < w; x += 40) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
-    }
-    for (let y = 0; y < h; y += 40) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
-
-    // Draw building outline
-    ctx.strokeStyle = "#3b82f6";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(60, 60, 500, 360);
-
-    // Draw rooms
-    const rooms = [
-      { x: 60, y: 60, w: 200, h: 180, label: "Living Room", color: "#3b82f620" },
-      { x: 260, y: 60, w: 160, h: 180, label: "Kitchen", color: "#10b98120" },
-      { x: 420, y: 60, w: 140, h: 180, label: "Bedroom 1", color: "#8b5cf620" },
-      { x: 60, y: 240, w: 160, h: 180, label: "Bedroom 2", color: "#f59e0b20" },
-      { x: 220, y: 240, w: 140, h: 180, label: "Bathroom", color: "#06b6d420" },
-      { x: 360, y: 240, w: 200, h: 180, label: "Office", color: "#ef444420" },
-    ];
-
-    rooms.forEach(room => {
-      ctx.fillStyle = room.color;
-      ctx.fillRect(room.x, room.y, room.w, room.h);
-      ctx.strokeStyle = "#3b82f6";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(room.x, room.y, room.w, room.h);
-
-      ctx.fillStyle = "#94a3b8";
-      ctx.font = "11px Arial";
-      ctx.textAlign = "center";
-      ctx.fillText(room.label, room.x + room.w / 2, room.y + room.h / 2);
-    });
-
-    // Draw doors
-    ctx.strokeStyle = "#f59e0b";
-    ctx.lineWidth = 2;
-    [[160, 240], [320, 240], [480, 240]].forEach(([x, y]) => {
-      ctx.beginPath();
-      ctx.arc(x, y, 20, 0, Math.PI / 2);
-      ctx.stroke();
-    });
-
-    // Labels
-    ctx.fillStyle = "#94a3b8";
-    ctx.font = "12px Arial";
-    ctx.textAlign = "left";
-    ctx.fillText("N ↑", 20, 30);
-
-    // Scale
-    ctx.strokeStyle = "#64748b";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(440, 440);
-    ctx.lineTo(560, 440);
-    ctx.stroke();
-    ctx.fillStyle = "#64748b";
-    ctx.font = "10px Arial";
-    ctx.textAlign = "center";
-    ctx.fillText("10m", 500, 435);
-  };
 
   const handleIFCUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -162,10 +83,7 @@ export default function BIMPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await axios.post(
-        "http://localhost:8000/api/v1/bim/analyze-ifc-ai",
-        formData
-      );
+      const response = await axios.post("http://localhost:8000/api/v1/bim/analyze-ifc-ai", formData);
       setBimData(response.data.bim_data);
       setAnalysis(response.data.ai_analysis);
       toast.success("IFC file parsed & analyzed!");
@@ -184,10 +102,7 @@ export default function BIMPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await axios.post(
-        "http://localhost:8000/api/v1/bim/clash-detection",
-        formData
-      );
+      const response = await axios.post("http://localhost:8000/api/v1/bim/clash-detection", formData);
       setClashData(response.data.data);
       toast.success("Clash detection complete!");
       setActiveTab("clashes");
@@ -205,10 +120,7 @@ export default function BIMPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await axios.post(
-        "http://localhost:8000/api/v1/bim/analyze-drawing",
-        formData
-      );
+      const response = await axios.post("http://localhost:8000/api/v1/bim/analyze-drawing", formData);
       setDrawingAnalysis(response.data.analysis);
       toast.success("Drawing analyzed!");
       setActiveTab("drawing");
@@ -229,35 +141,36 @@ export default function BIMPage() {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between"
+        className="flex items-center justify-between flex-wrap gap-3"
       >
         <div>
           <h1 className="text-3xl font-bold text-foreground">BIM & CAD Intelligence</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            IFC parsing · Clash detection · Drawing analysis · Digital twin
+            IFC parsing · Clash detection · 3D viewer · Digital twin · Space planning
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <label className="cursor-pointer">
             <input type="file" className="hidden" accept=".ifc" onChange={handleIFCUpload} />
-            <Button variant="outline" onClick={(e) => e.currentTarget.previousElementSibling?.click()}>
+            <Button variant="outline">
               <Box className="w-4 h-4 mr-2 text-blue-400" />
               Upload IFC
             </Button>
           </label>
           <label className="cursor-pointer">
             <input type="file" className="hidden" accept=".png,.jpg,.jpeg" onChange={handleDrawingUpload} />
-            <Button variant="outline" onClick={(e) => e.currentTarget.previousElementSibling?.click()}>
+            <Button variant="outline">
               <FileText className="w-4 h-4 mr-2 text-purple-400" />
               Analyze Drawing
             </Button>
           </label>
           <label className="cursor-pointer">
             <input type="file" className="hidden" accept=".ifc" onChange={handleClashDetection} />
-            <Button className="gradient-blue text-white border-0" onClick={(e) => e.currentTarget.previousElementSibling?.click()}>
+            <Button className="gradient-blue text-white border-0">
               {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <AlertTriangle className="w-4 h-4 mr-2" />}
               Clash Detection
             </Button>
@@ -290,17 +203,18 @@ export default function BIMPage() {
 
       {/* Tabs */}
       <div className="flex gap-2 flex-wrap">
-        {["overview", "elements", "viewer", "clashes", "drawing"].map((tab) => (
+        {tabs.map((tab) => (
           <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors capitalize ${
-              activeTab === tab
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
+              activeTab === tab.id
                 ? "bg-blue-500 text-white"
                 : "bg-secondary text-muted-foreground hover:text-foreground"
             }`}
           >
-            {tab === "drawing" ? "Drawing AI" : tab}
+            <tab.icon className="w-3.5 h-3.5" />
+            {tab.label}
           </button>
         ))}
       </div>
@@ -323,15 +237,10 @@ export default function BIMPage() {
                   { label: "Clash Detection", desc: "Find geometry conflicts", accept: ".ifc", icon: AlertTriangle, color: "red", onChange: handleClashDetection },
                 ].map((item, i) => (
                   <label key={i} className="cursor-pointer block">
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept={item.accept}
-                      onChange={item.onChange}
-                    />
-                    <div className={`flex items-center gap-4 p-4 rounded-xl border border-border hover:border-${item.color}-500/50 hover:bg-${item.color}-500/5 transition-all`}>
-                      <div className={`w-10 h-10 rounded-xl bg-${item.color}-500/10 flex items-center justify-center`}>
-                        <item.icon className={`w-5 h-5 text-${item.color}-400`} />
+                    <input type="file" className="hidden" accept={item.accept} onChange={item.onChange} />
+                    <div className="flex items-center gap-4 p-4 rounded-xl border border-border hover:bg-secondary/50 transition-all">
+                      <div className="w-10 h-10 rounded-xl bg-secondary flex items-center justify-center">
+                        <item.icon className="w-5 h-5 text-muted-foreground" />
                       </div>
                       <div className="flex-1">
                         <p className="text-sm font-medium text-foreground">{item.label}</p>
@@ -356,15 +265,7 @@ export default function BIMPage() {
               </h3>
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
-                  <Pie
-                    data={elementData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={80}
-                    paddingAngle={5}
-                    dataKey="count"
-                  >
+                  <Pie data={elementData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={5} dataKey="count">
                     {elementData.map((entry, i) => (
                       <Cell key={i} fill={entry.color} />
                     ))}
@@ -415,6 +316,27 @@ export default function BIMPage() {
         </div>
       )}
 
+      {/* 3D Viewer Tab */}
+      {activeTab === "viewer" && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <Eye className="w-5 h-5 text-blue-400" />
+            <h3 className="font-semibold text-foreground">3D BIM Viewer</h3>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400">Three.js</span>
+            {bimData && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
+                {bimData.storeys?.length || 4} Storeys
+              </span>
+            )}
+          </div>
+          <BIMViewer3D bimData={bimData} />
+        </motion.div>
+      )}
+
       {/* Elements Tab */}
       {activeTab === "elements" && (
         <motion.div
@@ -439,44 +361,18 @@ export default function BIMPage() {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
-
           {bimData?.materials && (
             <div className="mt-4">
               <p className="text-sm font-medium text-foreground mb-2">Materials Found:</p>
               <div className="flex flex-wrap gap-2">
                 {bimData.materials.map((mat: string, i: number) => (
-                  <span key={i} className="text-xs px-2 py-1 rounded-lg bg-secondary text-muted-foreground">
-                    {mat}
-                  </span>
+                  <span key={i} className="text-xs px-2 py-1 rounded-lg bg-secondary text-muted-foreground">{mat}</span>
                 ))}
               </div>
             </div>
           )}
         </motion.div>
       )}
-
-      {/* Viewer Tab */}
-      {activeTab === "viewer" && (
-  <motion.div
-    initial={{ opacity: 0, y: 10 }}
-    animate={{ opacity: 1, y: 0 }}
-    className="bg-card border border-border rounded-2xl p-6"
-  >
-    <div className="flex items-center gap-2 mb-4">
-      <Eye className="w-5 h-5 text-blue-400" />
-      <h3 className="font-semibold text-foreground">3D BIM Viewer</h3>
-      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
-        Three.js
-      </span>
-      {bimData && (
-        <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
-          {bimData.storeys?.length || 4} Storeys
-        </span>
-      )}
-    </div>
-    <BIMViewer3D bimData={bimData} />
-  </motion.div>
-)}
 
       {/* Clashes Tab */}
       {activeTab === "clashes" && (
@@ -515,9 +411,7 @@ export default function BIMPage() {
                         <p className="text-sm text-foreground">{w.type}</p>
                         <p className="text-xs text-muted-foreground">{w.description}</p>
                       </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400 ml-auto">
-                        {w.severity}
-                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400 ml-auto">{w.severity}</span>
                     </div>
                   ))}
                 </div>
@@ -551,10 +445,72 @@ export default function BIMPage() {
               </label>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">
-              {drawingAnalysis}
-            </p>
+            <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{drawingAnalysis}</p>
           )}
+        </motion.div>
+      )}
+
+      {/* Site Progress Tab */}
+      {activeTab === "progress" && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <CheckCircle className="w-5 h-5 text-emerald-400" />
+            <h3 className="font-semibold text-foreground">Site Progress Tracker</h3>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">3D Visualization</span>
+          </div>
+          <SiteProgress3D />
+        </motion.div>
+      )}
+
+      {/* Safety Heatmap Tab */}
+      {activeTab === "safety" && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <AlertTriangle className="w-5 h-5 text-red-400" />
+            <h3 className="font-semibold text-foreground">Safety Heatmap</h3>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-400">Live Risk Zones</span>
+          </div>
+          <SafetyHeatmap3D />
+        </motion.div>
+      )}
+
+      {/* Equipment Map Tab */}
+      {activeTab === "equipment" && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <Wrench className="w-5 h-5 text-orange-400" />
+            <h3 className="font-semibold text-foreground">Equipment Location Map</h3>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400">3D Site Map</span>
+          </div>
+          <EquipmentMap3D />
+        </motion.div>
+      )}
+
+      {/* Space Planning Tab */}
+      {activeTab === "space" && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <Box className="w-5 h-5 text-purple-400" />
+            <h3 className="font-semibold text-foreground">Space Planning</h3>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">Interactive Layout</span>
+          </div>
+          <SpacePlanning3D />
         </motion.div>
       )}
 
