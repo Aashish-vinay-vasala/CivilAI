@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
+  Hammer,
   GitBranch,
   CloudSun,
   Globe,
@@ -46,6 +47,7 @@ const navItems = [
   { href: "/compliance", icon: ClipboardCheck, label: "Compliance" },
   { href: "/bim", icon: Boxes, label: "BIM & CAD" },
   { href: "/digital-twin", icon: Globe, label: "Digital Twin" },
+  { href: "/construction", icon: Hammer, label: "Construction" },
   { href: "/equipment", icon: Wrench, label: "Equipment" },
   { href: "/green", icon: Leaf, label: "Green Monitor" },
   { href: "/vendors", icon: Star, label: "Vendor Scoring" },
