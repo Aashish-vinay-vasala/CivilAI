@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
+  AlertTriangle,
   Zap,
   LineChart,
   TrendingUp,
@@ -58,6 +59,7 @@ const navItems = [
   { href: "/reports", icon: BarChart3, label: "Reports" },
   { href: "/analytics", icon: TrendingUp, label: "Analytics" },
   { href: "/predictive", icon: Zap, label: "Predictive AI" },
+  { href: "/anomaly", icon: AlertTriangle, label: "Anomaly Detection" },
   { href: "/writing", icon: PenTool, label: "Writing Assistant" },
   { href: "/mlops", icon: Cpu, label: "MLOps" },
   { href: "/gnn", icon: GitBranch, label: "GNN Risk" },
