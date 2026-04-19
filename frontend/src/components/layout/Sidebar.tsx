@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
+  GitBranch,
+  CloudSun,
   Globe,
   Boxes,
   Cpu,
@@ -52,6 +54,8 @@ const navItems = [
   { href: "/analytics", icon: TrendingUp, label: "Analytics" },
   { href: "/writing", icon: PenTool, label: "Writing Assistant" },
   { href: "/mlops", icon: Cpu, label: "MLOps" },
+  { href: "/gnn", icon: GitBranch, label: "GNN Risk" },
+  { href: "/weather", icon: CloudSun, label: "Weather" },
   { href: "/copilot", icon: Bot, label: "AI Copilot" },
   { href: "/settings", icon: Settings, label: "Settings" },
 ];

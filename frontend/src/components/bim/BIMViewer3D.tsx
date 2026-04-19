@@ -40,19 +40,47 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
     walls: true, windows: true, columns: true, floors: true, roof: true, doors: true, spaces: false,
   });
   const [hasRealGeometry, setHasRealGeometry] = useState(false);
+  const [realMeshes, setRealMeshes] = useState<any[]>([]);
+  const [loadingIFC, setLoadingIFC] = useState(false);
+  const [ifcFileName, setIfcFileName] = useState("");
 
   const storeyCount = bimData?.storeys?.length || 4;
   const floorH = 3.5;
 
   const floorColors = [0x3b82f6, 0x10b981, 0xf59e0b, 0x8b5cf6, 0xef4444, 0x06b6d4];
-  const typeColors = {
+  const typeColors: { [key: string]: number } = {
     walls: 0x334155,
     windows: 0x3b82f6,
     columns: 0x475569,
     floors: 0x1e293b,
     roof: 0x0f172a,
     doors: 0xf59e0b,
-    spaces: 0x8b5cf620,
+    spaces: 0x8b5cf6,
+  };
+
+  const handleIFCFor3D = async (file: File) => {
+    setLoadingIFC(true);
+    setIfcFileName(file.name);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("http://localhost:8000/api/v1/bim/parse-3d", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.success && data.meshes && data.meshes.length > 0) {
+        setRealMeshes(data.meshes);
+        setHasRealGeometry(true);
+      } else {
+        alert("No geometry found in IFC file. Try a different file.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Failed to parse IFC file.");
+    } finally {
+      setLoadingIFC(false);
+    }
   };
 
   useEffect(() => {
@@ -63,10 +91,10 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0f172a);
-    scene.fog = new THREE.Fog(0x0f172a, 100, 250);
+    scene.fog = new THREE.Fog(0x0f172a, 200, 600);
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
     camera.position.set(40, 32, 40);
     camera.lookAt(0, 8, 0);
     cameraRef.current = camera;
@@ -79,28 +107,22 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambientLight);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
     dirLight.position.set(20, 40, 20);
     dirLight.castShadow = true;
     scene.add(dirLight);
-    const blueLight = new THREE.PointLight(0x3b82f6, 0.8, 80);
+    const blueLight = new THREE.PointLight(0x3b82f6, 0.8, 200);
     blueLight.position.set(-15, 15, -15);
     scene.add(blueLight);
-    scene.add(new THREE.GridHelper(100, 50, 0x1e293b, 0x1e293b));
+    scene.add(new THREE.GridHelper(200, 50, 0x1e293b, 0x1e293b));
 
-    // Build from real IFC geometry or fallback
-    if (bimData?.geometry && bimData?.has_geometry) {
-      setHasRealGeometry(true);
-      buildFromIFCGeometry(scene, bimData.geometry, bimData.storeys);
+    if (realMeshes.length > 0) {
+      buildFromRealMeshes(scene, realMeshes);
     } else {
-      setHasRealGeometry(false);
       buildDefaultBuilding(scene);
     }
 
-    // Raycaster
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
     const canvas = renderer.domElement;
@@ -129,7 +151,7 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
       if (dx > 3 || dy > 3) stateRef.current.isDragging = true;
       if (!stateRef.current.isDragging) return;
       stateRef.current.angle -= (e.clientX - stateRef.current.prevX) * 0.008;
-      stateRef.current.targetY = Math.max(2, Math.min(70,
+      stateRef.current.targetY = Math.max(2, Math.min(100,
         stateRef.current.targetY - (e.clientY - stateRef.current.prevY) * 0.15
       ));
       stateRef.current.prevX = e.clientX;
@@ -138,8 +160,8 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
     const onMouseUp = () => { canvas.style.cursor = "grab"; };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      stateRef.current.radius = Math.max(10, Math.min(120,
-        stateRef.current.radius + e.deltaY * 0.05
+      stateRef.current.radius = Math.max(5, Math.min(300,
+        stateRef.current.radius + e.deltaY * 0.1
       ));
     };
 
@@ -158,7 +180,7 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
       camera.position.x = Math.sin(s.angle) * s.radius;
       camera.position.z = Math.cos(s.angle) * s.radius;
       camera.position.y = s.targetY;
-      camera.lookAt(0, 8, 0);
+      camera.lookAt(0, s.targetY * 0.3, 0);
       renderer.render(scene, camera);
     };
     animate();
@@ -183,185 +205,104 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
       renderer.dispose();
     };
-  }, [bimData]);
+  }, [bimData, realMeshes]);
 
-  // Build from real IFC geometry
-  const buildFromIFCGeometry = (
-    scene: THREE.Scene,
-    geometry: any,
-    storeys: any[]
-  ) => {
+  const buildFromRealMeshes = (scene: THREE.Scene, meshes: any[]) => {
     meshGroupsRef.current = {
       walls: [], windows: [], columns: [], floors: [], roof: [], doors: [], spaces: []
     };
 
-    const scale = 0.01; // IFC units are usually mm, convert to meters
+    // Calculate center for auto-positioning
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
 
-    // Render walls
-    geometry.walls?.forEach((wall: any) => {
-      const [w, h, d] = wall.dimensions || [5, 2.8, 0.3];
-      const [x, y, z] = wall.position || [0, 0, 0];
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          Math.abs(w) * scale || 5,
-          Math.abs(h) * scale || 2.8,
-          Math.abs(d) * scale || 0.3
-        ),
-        new THREE.MeshLambertMaterial({ color: typeColors.walls })
-      );
-      mesh.position.set(x * scale, y * scale + (Math.abs(h) * scale) / 2, z * scale);
-      mesh.rotation.y = wall.rotation || 0;
-      mesh.userData = {
-        type: "wall",
-        name: wall.name,
-        floor: wall.floor,
-        material: wall.material,
-        id: wall.id,
-      };
-      mesh.castShadow = true;
-      scene.add(mesh);
-      meshGroupsRef.current.walls.push(mesh);
+    meshes.forEach(meshData => {
+      meshData.vertices?.forEach((v: number[]) => {
+        minX = Math.min(minX, v[0]); maxX = Math.max(maxX, v[0]);
+        minY = Math.min(minY, v[1]); maxY = Math.max(maxY, v[1]);
+        minZ = Math.min(minZ, v[2]); maxZ = Math.max(maxZ, v[2]);
+      });
     });
 
-    // Render floors/slabs
-    geometry.floors?.forEach((floor: any) => {
-      const [w, h, d] = floor.dimensions || [10, 0.3, 8];
-      const [x, y, z] = floor.position || [0, 0, 0];
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          Math.abs(w) * scale || 10,
-          Math.abs(h) * scale || 0.3,
-          Math.abs(d) * scale || 8
-        ),
-        new THREE.MeshLambertMaterial({ color: typeColors.floors })
-      );
-      mesh.position.set(x * scale, y * scale, z * scale);
-      mesh.userData = { type: "floor", name: floor.name, floor: floor.floor, id: floor.id };
-      mesh.receiveShadow = true;
-      scene.add(mesh);
-      meshGroupsRef.current.floors.push(mesh);
-    });
+    const centerX = (minX + maxX) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+    const extentX = maxX - minX;
+    const extentZ = maxZ - minZ;
+    const maxExtent = Math.max(extentX, extentZ);
 
-    // Render columns
-    geometry.columns?.forEach((col: any) => {
-      const [w, h, d] = col.dimensions || [0.5, 2.8, 0.5];
-      const [x, y, z] = col.position || [0, 0, 0];
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          Math.abs(w) * scale || 0.5,
-          Math.abs(h) * scale || 2.8,
-          Math.abs(d) * scale || 0.5
-        ),
-        new THREE.MeshLambertMaterial({ color: typeColors.columns })
-      );
-      mesh.position.set(x * scale, y * scale + (Math.abs(h) * scale) / 2, z * scale);
-      mesh.userData = { type: "column", name: col.name, floor: col.floor, id: col.id };
-      mesh.castShadow = true;
-      scene.add(mesh);
-      meshGroupsRef.current.columns.push(mesh);
-    });
+    // Auto-fit camera
+    stateRef.current.radius = maxExtent * 1.2;
+    stateRef.current.targetY = (maxY - minY) * 0.6;
 
-    // Render doors
-    geometry.doors?.forEach((door: any) => {
-      const w = door.width || 0.9;
-      const h = door.height || 2.1;
-      const [x, y, z] = door.position || [0, 0, 0];
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(w * scale || 0.9, h * scale || 2.1, 0.1),
-        new THREE.MeshLambertMaterial({
-          color: typeColors.doors, transparent: true, opacity: 0.8
-        })
-      );
-      mesh.position.set(x * scale, y * scale + (h * scale) / 2, z * scale);
-      mesh.rotation.y = door.rotation || 0;
-      mesh.userData = {
-        type: "door",
-        name: door.name,
-        floor: door.floor,
-        width: `${w}m`,
-        height: `${h}m`,
-        id: door.id,
-      };
-      scene.add(mesh);
-      meshGroupsRef.current.doors = meshGroupsRef.current.doors || [];
-      meshGroupsRef.current.doors.push(mesh);
-    });
+    meshes.forEach(meshData => {
+      try {
+        if (!meshData.vertices || !meshData.faces || meshData.vertices.length === 0) return;
 
-    // Render windows
-    geometry.windows?.forEach((win: any) => {
-      const w = win.width || 1.2;
-      const h = win.height || 1.2;
-      const [x, y, z] = win.position || [0, 0, 0];
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(w * scale || 1.2, h * scale || 1.2, 0.1),
-        new THREE.MeshLambertMaterial({
-          color: typeColors.windows, transparent: true, opacity: 0.4
-        })
-      );
-      mesh.position.set(x * scale, y * scale + (h * scale) / 2, z * scale);
-      mesh.rotation.y = win.rotation || 0;
-      mesh.userData = {
-        type: "window",
-        name: win.name,
-        floor: win.floor,
-        width: `${w}m`,
-        height: `${h}m`,
-        id: win.id,
-      };
-      scene.add(mesh);
-      meshGroupsRef.current.windows.push(mesh);
-    });
+        const geometry = new THREE.BufferGeometry();
 
-    // Render spaces
-    geometry.spaces?.forEach((space: any) => {
-      const [w, h, d] = space.dimensions || [4, 2.8, 4];
-      const [x, y, z] = space.position || [0, 0, 0];
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          Math.abs(w) * scale || 4,
-          Math.abs(h) * scale || 2.8,
-          Math.abs(d) * scale || 4
-        ),
-        new THREE.MeshLambertMaterial({
-          color: 0x3b82f6, transparent: true, opacity: 0.1
-        })
-      );
-      mesh.position.set(x * scale, y * scale + (Math.abs(h) * scale) / 2, z * scale);
-      mesh.userData = {
-        type: "space",
-        name: space.name,
-        floor: space.floor,
-        area: `${space.area}m²`,
-        id: space.id,
-      };
-      scene.add(mesh);
-      meshGroupsRef.current.spaces = meshGroupsRef.current.spaces || [];
-      meshGroupsRef.current.spaces.push(mesh);
+        // Center the model
+        const centeredVerts: number[] = [];
+        meshData.vertices.forEach((v: number[]) => {
+          centeredVerts.push(v[0] - centerX, v[1], v[2] - centerZ);
+        });
+
+        geometry.setAttribute(
+          "position",
+          new THREE.BufferAttribute(new Float32Array(centeredVerts), 3)
+        );
+        geometry.setIndex(
+          new THREE.BufferAttribute(new Uint32Array(meshData.faces), 1)
+        );
+        geometry.computeVertexNormals();
+
+        const material = new THREE.MeshLambertMaterial({
+          color: new THREE.Color(meshData.color),
+          transparent: meshData.transparent,
+          opacity: meshData.opacity,
+          side: THREE.DoubleSide,
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.userData = {
+          type: meshData.type.replace("Ifc", "").toLowerCase(),
+          name: meshData.name,
+          floor: meshData.floor,
+          id: meshData.id,
+        };
+
+        scene.add(mesh);
+
+        const typeKey =
+          meshData.type.includes("Wall") ? "walls" :
+          meshData.type.includes("Slab") ? "floors" :
+          meshData.type.includes("Column") ? "columns" :
+          meshData.type.includes("Window") ? "windows" :
+          meshData.type.includes("Door") ? "doors" :
+          meshData.type.includes("Roof") ? "roof" :
+          meshData.type.includes("Stair") ? "walls" : "walls";
+
+        if (!meshGroupsRef.current[typeKey]) meshGroupsRef.current[typeKey] = [];
+        meshGroupsRef.current[typeKey].push(mesh);
+
+      } catch (e) {
+        console.error("Mesh error:", e);
+      }
     });
 
     // Ground
-    addGround(scene);
-    autoFitCamera(geometry);
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(maxExtent * 4, maxExtent * 4),
+      new THREE.MeshLambertMaterial({ color: 0x0a0f1a })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = minY - 0.1;
+    ground.receiveShadow = true;
+    scene.add(ground);
   };
 
-  // Auto-fit camera to model bounds
-  const autoFitCamera = (geometry: any) => {
-    const allPositions = [
-      ...(geometry.walls || []),
-      ...(geometry.floors || []),
-      ...(geometry.columns || []),
-    ].map((el: any) => el.position || [0, 0, 0]);
-
-    if (allPositions.length === 0) return;
-    const scale = 0.01;
-    const xs = allPositions.map((p: number[]) => Math.abs(p[0] * scale));
-    const zs = allPositions.map((p: number[]) => Math.abs(p[2] * scale));
-    const maxExtent = Math.max(...xs, ...zs, 10);
-    stateRef.current.radius = maxExtent * 2.5;
-    stateRef.current.targetY = maxExtent * 1.2;
-  };
-
-  // Default building (no IFC)
   const buildDefaultBuilding = (scene: THREE.Scene) => {
     const bW = 14; const bD = 10;
     meshGroupsRef.current = {
@@ -403,19 +344,18 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
         [-bD / 2, bD / 2].forEach((wz) => {
           const win = new THREE.Mesh(new THREE.BoxGeometry(2, 1.6, 0.4), glassMat);
           win.position.set(wx, y + floorH / 2, wz);
-          win.userData = { type: "window", floor: f, name: `Window F${f + 1}-${wi + 1}`, width: "2000mm", height: "1600mm" };
+          win.userData = { type: "window", floor: f, name: `Window F${f + 1}-${wi + 1}` };
           scene.add(win);
           meshGroupsRef.current.windows.push(win);
         });
       });
 
-      [[-bW / 2, -bD / 2], [bW / 2, -bD / 2], [-bW / 2, bD / 2], [bW / 2, bD / 2],
-       [0, -bD / 2], [0, bD / 2], [-bW / 2, 0], [bW / 2, 0]
+      [[-bW/2,-bD/2],[bW/2,-bD/2],[-bW/2,bD/2],[bW/2,bD/2],[0,-bD/2],[0,bD/2],[-bW/2,0],[bW/2,0]
       ].forEach(([cx, cz], ci) => {
         const col = new THREE.Mesh(new THREE.BoxGeometry(0.6, floorH, 0.6), columnMat);
         col.position.set(cx, y + floorH / 2, cz);
         col.castShadow = true;
-        col.userData = { type: "column", floor: f, name: `Column C${ci + 1} F${f + 1}`, size: "600x600mm" };
+        col.userData = { type: "column", floor: f, name: `Column C${ci + 1} F${f + 1}` };
         scene.add(col);
         meshGroupsRef.current.columns.push(col);
       });
@@ -430,10 +370,6 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
     scene.add(roof);
     meshGroupsRef.current.roof.push(roof);
 
-    addGround(scene);
-  };
-
-  const addGround = (scene: THREE.Scene) => {
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(200, 200),
       new THREE.MeshLambertMaterial({ color: 0x0a0f1a })
@@ -450,17 +386,14 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
       meshes.forEach((mesh) => {
         const mat = mesh.material as THREE.MeshLambertMaterial;
         const floor = mesh.userData.floor ?? 0;
-
         if (colorMode === "byType") {
-          mat.color.setHex(typeColors[type as keyof typeof typeColors] || 0x334155);
+          mat.color.setHex(typeColors[type] || 0x334155);
           mat.transparent = ["windows", "spaces"].includes(type);
           mat.opacity = type === "windows" ? 0.4 : type === "spaces" ? 0.1 : 1;
           mat.wireframe = false;
         } else if (colorMode === "byFloor") {
           mat.color.setHex(floorColors[floor % floorColors.length]);
-          mat.transparent = false;
-          mat.opacity = 1;
-          mat.wireframe = false;
+          mat.transparent = false; mat.opacity = 1; mat.wireframe = false;
         } else if (colorMode === "xray") {
           mat.color.setHex(0x3b82f6);
           mat.transparent = true;
@@ -468,26 +401,21 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
           mat.wireframe = false;
         } else if (colorMode === "wireframe") {
           mat.color.setHex(0x3b82f6);
-          mat.transparent = false;
-          mat.opacity = 1;
-          mat.wireframe = true;
+          mat.transparent = false; mat.opacity = 1; mat.wireframe = true;
         } else if (colorMode === "night") {
           mat.color.setHex(type === "windows" ? 0xfbbf24 : 0x1e293b);
-          mat.transparent = type === "windows";
-          mat.opacity = type === "windows" ? 0.9 : 1;
+          mat.transparent = type === "windows"; mat.opacity = type === "windows" ? 0.9 : 1;
           mat.wireframe = false;
         } else if (colorMode === "day") {
           mat.color.setHex(type === "windows" ? 0x93c5fd : 0xe2e8f0);
-          mat.transparent = type === "windows";
-          mat.opacity = type === "windows" ? 0.6 : 1;
+          mat.transparent = type === "windows"; mat.opacity = type === "windows" ? 0.6 : 1;
           mat.wireframe = false;
         }
         mat.needsUpdate = true;
       });
     });
-
     if (sceneRef.current) {
-      sceneRef.current.background = new THREE.Color(colorMode === "day" ? 0x93c5fd : 0x0f172a);
+      sceneRef.current.background = new THREE.Color(colorMode === "day" ? 0x87ceeb : 0x0f172a);
     }
   }, [colorMode]);
 
@@ -495,10 +423,8 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
   useEffect(() => {
     Object.values(meshGroupsRef.current).flat().forEach((mesh) => {
       const floor = mesh.userData.floor ?? 0;
-      const baseY = floor * floorH;
-
       if (displayMode === "exploded") {
-        mesh.position.y += floor * 2;
+        mesh.position.y += floor * 3;
       } else if (displayMode === "isolated") {
         mesh.visible = floor === isolatedFloor || mesh.userData.type === "roof";
       } else {
@@ -507,11 +433,10 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
     });
   }, [displayMode, isolatedFloor]);
 
-  // Apply show/hide types
+  // Apply show/hide
   useEffect(() => {
     Object.entries(showTypes).forEach(([type, visible]) => {
-      const meshes = meshGroupsRef.current[type] || [];
-      meshes.forEach(m => { m.visible = visible; });
+      (meshGroupsRef.current[type] || []).forEach(m => { m.visible = visible; });
     });
   }, [showTypes]);
 
@@ -520,101 +445,57 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
     stateRef.current.isRotating = false;
     setIsRotating(false);
     if (view === "top") {
-      stateRef.current.angle = 0;
-      stateRef.current.targetY = 80;
-      stateRef.current.radius = 30;
+      stateRef.current.angle = 0; stateRef.current.targetY = 100; stateRef.current.radius = 50;
     } else if (view === "front") {
-      stateRef.current.angle = 0;
-      stateRef.current.targetY = 20;
-      stateRef.current.radius = 50;
+      stateRef.current.angle = 0; stateRef.current.targetY = 20; stateRef.current.radius = 80;
     } else if (view === "side") {
-      stateRef.current.angle = Math.PI / 2;
-      stateRef.current.targetY = 20;
-      stateRef.current.radius = 50;
+      stateRef.current.angle = Math.PI / 2; stateRef.current.targetY = 20; stateRef.current.radius = 80;
     } else {
-      stateRef.current.angle = Math.PI / 4;
-      stateRef.current.targetY = 30;
-      stateRef.current.radius = 55;
-      stateRef.current.isRotating = true;
-      setIsRotating(true);
+      stateRef.current.angle = Math.PI / 4; stateRef.current.targetY = 30; stateRef.current.radius = 55;
+      stateRef.current.isRotating = true; setIsRotating(true);
     }
-  };
-
-  const resetCamera = () => {
-    stateRef.current.angle = Math.PI / 4;
-    stateRef.current.radius = 55;
-    stateRef.current.targetY = 30;
-    stateRef.current.isRotating = true;
-    setIsRotating(true);
-    setViewMode("perspective");
   };
 
   return (
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap gap-2 items-center">
-        {/* View Mode */}
         <div className="flex gap-1 bg-secondary rounded-xl p-1">
           {(["perspective", "top", "front", "side"] as ViewMode[]).map(v => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize ${
-                viewMode === v ? "bg-blue-500 text-white" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
+            <button key={v} onClick={() => setView(v)}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize ${viewMode === v ? "bg-blue-500 text-white" : "text-muted-foreground hover:text-foreground"}`}>
               {v === "perspective" ? "3D" : v.charAt(0).toUpperCase() + v.slice(1)}
             </button>
           ))}
         </div>
 
-        {/* Color Mode */}
         <div className="flex gap-1 bg-secondary rounded-xl p-1 flex-wrap">
           {([
-            { id: "byType", label: "Type" },
-            { id: "byFloor", label: "Floor" },
-            { id: "xray", label: "X-Ray" },
-            { id: "wireframe", label: "Wire" },
-            { id: "day", label: "Day" },
-            { id: "night", label: "Night" },
+            { id: "byType", label: "Type" }, { id: "byFloor", label: "Floor" },
+            { id: "xray", label: "X-Ray" }, { id: "wireframe", label: "Wire" },
+            { id: "day", label: "Day" }, { id: "night", label: "Night" },
           ] as { id: ColorMode; label: string }[]).map(c => (
-            <button
-              key={c.id}
-              onClick={() => setColorMode(c.id)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                colorMode === c.id ? "bg-purple-500 text-white" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
+            <button key={c.id} onClick={() => setColorMode(c.id)}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${colorMode === c.id ? "bg-purple-500 text-white" : "text-muted-foreground hover:text-foreground"}`}>
               {c.label}
             </button>
           ))}
         </div>
 
-        {/* Display Mode */}
         <div className="flex gap-1 bg-secondary rounded-xl p-1">
           {([
-            { id: "normal", label: "Normal" },
-            { id: "exploded", label: "Exploded" },
-            { id: "isolated", label: "Isolate" },
+            { id: "normal", label: "Normal" }, { id: "exploded", label: "Exploded" }, { id: "isolated", label: "Isolate" },
           ] as { id: DisplayMode; label: string }[]).map(d => (
-            <button
-              key={d.id}
-              onClick={() => setDisplayMode(d.id)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                displayMode === d.id ? "bg-emerald-500 text-white" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
+            <button key={d.id} onClick={() => setDisplayMode(d.id)}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${displayMode === d.id ? "bg-emerald-500 text-white" : "text-muted-foreground hover:text-foreground"}`}>
               {d.label}
             </button>
           ))}
         </div>
 
         {displayMode === "isolated" && (
-          <select
-            value={isolatedFloor}
-            onChange={(e) => setIsolatedFloor(parseInt(e.target.value))}
-            className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none"
-          >
+          <select value={isolatedFloor} onChange={(e) => setIsolatedFloor(parseInt(e.target.value))}
+            className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none">
             {Array.from({ length: storeyCount }, (_, i) => (
               <option key={i} value={i}>Floor {i + 1}</option>
             ))}
@@ -622,22 +503,10 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
         )}
 
         <div className="flex gap-1 ml-auto">
-          <button onClick={resetCamera} className="px-3 py-1.5 rounded-xl bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border transition-colors">↺ Reset</button>
-          <button
-            onClick={() => {
-              stateRef.current.radius = Math.max(20, stateRef.current.radius * 0.7);
-            }}
-            className="px-3 py-1.5 rounded-xl bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border transition-colors"
-          >⊡ Fit</button>
-          <button
-            onClick={() => {
-              stateRef.current.isRotating = !stateRef.current.isRotating;
-              setIsRotating(stateRef.current.isRotating);
-            }}
-            className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${
-              isRotating ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-secondary text-muted-foreground border-border"
-            }`}
-          >
+          <button onClick={() => { stateRef.current.angle = Math.PI/4; stateRef.current.radius=55; stateRef.current.targetY=30; stateRef.current.isRotating=true; setIsRotating(true); setViewMode("perspective"); }}
+            className="px-3 py-1.5 rounded-xl bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border">↺ Reset</button>
+          <button onClick={() => { stateRef.current.isRotating = !stateRef.current.isRotating; setIsRotating(stateRef.current.isRotating); }}
+            className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${isRotating ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-secondary text-muted-foreground border-border"}`}>
             {isRotating ? "⏸" : "▶"} Auto
           </button>
         </div>
@@ -646,25 +515,37 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
       {/* Show/Hide Types */}
       <div className="flex gap-2 flex-wrap">
         {Object.entries(showTypes).map(([type, visible]) => (
-          <button
-            key={type}
+          <button key={type}
             onClick={() => setShowTypes(prev => ({ ...prev, [type]: !prev[type as keyof typeof prev] }))}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border capitalize ${
-              visible
-                ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
-                : "bg-secondary/50 text-muted-foreground border-border line-through"
-            }`}
-          >
+            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border capitalize ${visible ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-secondary/50 text-muted-foreground border-border line-through"}`}>
             {type}
           </button>
         ))}
+      </div>
+
+      {/* IFC Upload Button */}
+      <div className="flex items-center gap-3 p-3 rounded-xl bg-blue-500/5 border border-blue-500/20">
+        <label className="cursor-pointer">
+          <input type="file" className="hidden" accept=".ifc"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleIFCFor3D(f); }} />
+          <button
+            onClick={(e) => (e.currentTarget.previousElementSibling as HTMLElement)?.click()}
+            className="px-4 py-2 rounded-xl bg-blue-500 text-white text-xs font-medium hover:bg-blue-600 transition-colors"
+          >
+            {loadingIFC ? "⏳ Processing..." : "📁 Load IFC → Real 3D"}
+          </button>
+        </label>
+        {hasRealGeometry ? (
+          <span className="text-xs text-emerald-400">✅ {ifcFileName} — {realMeshes.length} real meshes rendered</span>
+        ) : (
+          <span className="text-xs text-muted-foreground">Upload an IFC file to render real building geometry</span>
+        )}
       </div>
 
       {/* 3D Viewer */}
       <div className="relative w-full rounded-2xl overflow-hidden border border-border" style={{ height: "600px" }}>
         <div ref={mountRef} className="w-full h-full" />
 
-        {/* Mode Badge */}
         <div className="absolute top-4 left-4 flex flex-col gap-2">
           <div className="bg-secondary/80 backdrop-blur rounded-xl px-3 py-2 border border-border">
             <p className="text-xs text-muted-foreground">🖱️ Drag · Scroll · Click element</p>
@@ -683,10 +564,9 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
           )}
         </div>
 
-        {/* Legend */}
         <div className="absolute top-4 right-4 bg-secondary/80 backdrop-blur rounded-xl p-3 border border-border">
           <p className="text-xs font-medium text-foreground mb-2">
-            {hasRealGeometry ? "IFC Model" : "Default Model"}
+            {hasRealGeometry ? `📐 ${ifcFileName}` : "🏢 Default Model"}
           </p>
           {[
             { color: "#334155", label: "Walls" },
@@ -700,15 +580,14 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
               <span className="text-xs text-muted-foreground">{l.label}</span>
             </div>
           ))}
-          {bimData && (
+          {hasRealGeometry && (
             <div className="mt-2 pt-2 border-t border-border">
-              <p className="text-xs text-muted-foreground">{storeyCount} Storeys</p>
-              <p className="text-xs text-muted-foreground">{bimData.total_elements} Elements</p>
+              <p className="text-xs text-emerald-400">{realMeshes.length} meshes</p>
+              <p className="text-xs text-muted-foreground">{storeyCount} storeys</p>
             </div>
           )}
         </div>
 
-        {/* Selected Element Panel */}
         {selectedElement && (
           <div className="absolute bottom-4 left-4 bg-secondary/90 backdrop-blur rounded-xl p-3 border border-blue-500/30 min-w-48">
             <div className="flex items-center justify-between mb-2">
