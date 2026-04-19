@@ -5,6 +5,7 @@ from supabase import create_client
 from app.config import settings
 from app.ai.groq_client import analyze_document
 import uuid
+from datetime import datetime, timedelta
 
 router = APIRouter()
 supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SECRET_KEY)
@@ -304,5 +305,42 @@ def save_evm_snapshot(data: dict):
         data["id"] = str(uuid.uuid4())
         res = supabase.table("evm_snapshots").insert(data).execute()
         return {"status": "success", "snapshot": res.data[0] if res.data else data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/anomaly-history/{project_id}")
+def get_anomaly_history(project_id: str):
+    try:
+        res = supabase.table("anomaly_history").select("*")\
+            .eq("project_id", project_id)\
+            .order("detected_at", desc=False)\
+            .execute()
+        return {"status": "success", "history": res.data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/anomaly-history")
+def save_anomalies(data: dict):
+    try:
+        project_id = data.get("project_id")
+        anomalies = data.get("anomalies", [])
+        saved = []
+        for a in anomalies:
+            if a.get("type") == "info":
+                continue
+            record = {
+                "id": str(uuid.uuid4()),
+                "project_id": project_id,
+                "anomaly_type": a.get("type"),
+                "severity": a.get("severity"),
+                "title": a.get("title"),
+                "description": a.get("description"),
+                "deviation": a.get("deviation", 0),
+                "category": a.get("category"),
+                "detected_at": datetime.now().isoformat(),
+            }
+            supabase.table("anomaly_history").insert(record).execute()
+            saved.append(record)
+        return {"status": "success", "saved": len(saved)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
