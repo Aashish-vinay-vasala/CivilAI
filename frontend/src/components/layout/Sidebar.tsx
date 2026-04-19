@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
+  LineChart,
+  TrendingUp,
   Hammer,
   GitBranch,
   CloudSun,
@@ -26,7 +28,6 @@ import {
   Building2,
   ChevronLeft,
   ChevronRight,
-  TrendingUp,
   Leaf,
   Star,
   CreditCard,
@@ -51,6 +52,7 @@ const navItems = [
   { href: "/equipment", icon: Wrench, label: "Equipment" },
   { href: "/green", icon: Leaf, label: "Green Monitor" },
   { href: "/vendors", icon: Star, label: "Vendor Scoring" },
+  { href: "/evm", icon: LineChart, label: "EVM" },
   { href: "/payments", icon: CreditCard, label: "Payment Tracker" },
   { href: "/reports", icon: BarChart3, label: "Reports" },
   { href: "/analytics", icon: TrendingUp, label: "Analytics" },
