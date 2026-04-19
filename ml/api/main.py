@@ -355,3 +355,47 @@ def get_experiment_runs():
         return {"error": "Experiment not found"}
     except Exception as e:
         return {"error": str(e)}
+    
+class GNNInput(BaseModel):
+    tasks: list = []
+    equipment: list = []
+    incidents: list = []
+    budget: float = 1000000
+    spent: float = 0
+    project_name: str = "Project"
+
+@app.post("/gnn/risk-analysis")
+def gnn_risk_analysis(data: GNNInput):
+    try:
+        import sys
+        sys.path.append(".")
+        from models.gnn_risk import run_gnn_risk_analysis
+        result = run_gnn_risk_analysis(data.dict())
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/gnn/test")
+def gnn_test():
+    try:
+        from models.gnn_risk import run_gnn_risk_analysis
+        test_data = {
+            "tasks": [
+                {"id": "1", "task_name": "Foundation", "actual_progress": 100, "status": "done", "delay_days": 0, "priority": "high"},
+                {"id": "2", "task_name": "Structure", "actual_progress": 60, "status": "delayed", "delay_days": 15, "priority": "high"},
+                {"id": "3", "task_name": "MEP Works", "actual_progress": 30, "status": "atrisk", "delay_days": 5, "priority": "medium"},
+            ],
+            "equipment": [
+                {"id": "1", "name": "Tower Crane", "health_score": 92, "status": "operational", "operating_hours": 2400},
+                {"id": "2", "name": "Generator", "health_score": 45, "status": "critical", "operating_hours": 8900},
+            ],
+            "incidents": [
+                {"id": "1", "incident_type": "Fall", "severity": "Severe", "status": "open", "location": "Zone A"},
+            ],
+            "budget": 5000000,
+            "spent": 2500000,
+        }
+        return run_gnn_risk_analysis(test_data)
+    except Exception as e:
+        return {"error": str(e)}
+    

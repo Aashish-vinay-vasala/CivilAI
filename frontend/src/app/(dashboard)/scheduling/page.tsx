@@ -1,49 +1,24 @@
 "use client";
 
+import { exportScheduleReport } from "@/lib/exportPDF";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Calendar,
-  AlertTriangle,
-  TrendingDown,
-  Clock,
-  CheckCircle,
-  Upload,
-  Loader2,
-  Brain,
-  Plus,
-  X,
-  Search,
-  Flag,
+  Calendar, AlertTriangle, TrendingDown, Clock,
+  CheckCircle, Upload, Loader2, Brain, Plus, X,
+  Search, Flag, Edit2, Save, Trash2,
 } from "lucide-react";
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, BarChart, Bar,
 } from "recharts";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import dynamic from "next/dynamic";
 
-const initialTasks = [
-  { id: 1, task: "Foundation Work", phase: "Phase 1", assignee: "John Smith", duration: "45 days", progress: 100, status: "completed", priority: "high", startDate: "2024-01-01", endDate: "2024-02-15" },
-  { id: 2, task: "Ground Floor Structure", phase: "Phase 1", assignee: "Sarah Johnson", duration: "60 days", progress: 85, status: "delayed", priority: "high", startDate: "2024-02-16", endDate: "2024-04-15" },
-  { id: 3, task: "First Floor Slab", phase: "Phase 2", assignee: "Mike Wilson", duration: "30 days", progress: 60, status: "inprogress", priority: "high", startDate: "2024-04-16", endDate: "2024-05-15" },
-  { id: 4, task: "MEP Rough-In", phase: "Phase 2", assignee: "Lisa Davis", duration: "45 days", progress: 40, status: "delayed", priority: "medium", startDate: "2024-05-01", endDate: "2024-06-15" },
-  { id: 5, task: "Roofing Works", phase: "Phase 3", assignee: "James Lee", duration: "20 days", progress: 25, status: "inprogress", priority: "medium", startDate: "2024-06-01", endDate: "2024-06-20" },
-  { id: 6, task: "Electrical Installation", phase: "Phase 2", assignee: "Mike Wilson", duration: "30 days", progress: 15, status: "atrisk", priority: "high", startDate: "2024-06-10", endDate: "2024-07-10" },
-  { id: 7, task: "Plumbing Works", phase: "Phase 2", assignee: "Lisa Davis", duration: "25 days", progress: 10, status: "inprogress", priority: "medium", startDate: "2024-06-15", endDate: "2024-07-10" },
-  { id: 8, task: "Interior Finishing", phase: "Phase 3", assignee: "Tom Brown", duration: "60 days", progress: 0, status: "pending", priority: "low", startDate: "2024-08-01", endDate: "2024-09-30" },
-  { id: 9, task: "External Works", phase: "Phase 3", assignee: "Robert Garcia", duration: "30 days", progress: 0, status: "pending", priority: "low", startDate: "2024-09-01", endDate: "2024-09-30" },
-  { id: 10, task: "Final Inspection", phase: "Phase 4", assignee: "Emily Chen", duration: "10 days", progress: 0, status: "pending", priority: "high", startDate: "2024-10-01", endDate: "2024-10-10" },
-];
+const GanttChart = dynamic(() => import("@/components/scheduling/GanttChart"), { ssr: false });
 
 const sCurveData = [
   { month: "Jan", planned: 5, actual: 4 },
@@ -58,16 +33,17 @@ const sCurveData = [
 ];
 
 interface Task {
-  id: number;
-  task: string;
+  id: string;
+  task_name: string;
   phase: string;
   assignee: string;
-  duration: string;
-  progress: number;
+  planned_progress: number;
+  actual_progress: number;
   status: string;
   priority: string;
-  startDate: string;
-  endDate: string;
+  planned_start: string;
+  planned_end: string;
+  delay_days: number;
 }
 
 export default function SchedulingPage() {
@@ -75,44 +51,125 @@ export default function SchedulingPage() {
   const [analysis, setAnalysis] = useState("");
   const [whatIfOpen, setWhatIfOpen] = useState(false);
   const [addTaskOpen, setAddTaskOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"tasks" | "gantt">("tasks");
   const [scenario, setScenario] = useState({ scenario: "", delay_days: 0 });
   const [whatIfResult, setWhatIfResult] = useState("");
   const [whatIfLoading, setWhatIfLoading] = useState(false);
-  const [delayStats, setDelayStats] = useState<any>(null);
   const [mlDelay, setMlDelay] = useState<any>(null);
   const [mlLoading, setMlLoading] = useState(true);
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterPhase, setFilterPhase] = useState("all");
+  const [projects, setProjects] = useState<any[]>([]);
+  const [projectId, setProjectId] = useState("");
+  const [editingTask, setEditingTask] = useState<string | null>(null);
+  const [editProgress, setEditProgress] = useState(0);
+  const [editStatus, setEditStatus] = useState("");
+  const [savingTask, setSavingTask] = useState<string | null>(null);
+  const [deletingTask, setDeletingTask] = useState<string | null>(null);
   const [newTask, setNewTask] = useState({
-    task: "", phase: "Phase 1", assignee: "",
-    duration: "", progress: 0, status: "pending",
-    priority: "medium", startDate: "", endDate: "",
+    task_name: "", phase: "Phase 1", assignee: "",
+    planned_progress: 100, actual_progress: 0,
+    status: "pending", priority: "medium",
+    planned_start: "", planned_end: "", delay_days: 0,
   });
 
-  useEffect(() => { fetchDelayData(); }, []);
+  const inputClass = "w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500";
 
-  const fetchDelayData = async () => {
+  useEffect(() => {
+    fetchProjects();
+    fetchMLData();
+  }, []);
+
+  useEffect(() => {
+    if (projectId) fetchTasks();
+  }, [projectId]);
+
+  const fetchProjects = async () => {
+    try {
+      const res = await axios.get("http://localhost:8000/api/v1/projects/");
+      const p = res.data.projects || [];
+      setProjects(p);
+      if (p.length > 0) setProjectId(p[0].id);
+    } catch (err) { console.error(err); }
+  };
+
+  const fetchTasks = async () => {
+    setTasksLoading(true);
+    try {
+      const res = await axios.get(`http://localhost:8000/api/v1/projects/${projectId}/schedule`);
+      setTasks(res.data.tasks || []);
+    } catch (err) { console.error(err); }
+    finally { setTasksLoading(false); }
+  };
+
+  const fetchMLData = async () => {
     setMlLoading(true);
     try {
-      const statsRes = await axios.get("http://localhost:8000/api/v1/ml/delay-stats");
-      setDelayStats(statsRes.data);
-      const mlRes = await axios.post("http://localhost:8000/api/v1/ml/delay", {
-        project_type: "Commercial",
-        planned_duration_days: 180,
-        weather_delays: 10,
-        labor_shortage: 1,
-        material_delays: 1,
-        design_changes: 5,
-        subcontractor_issues: 1,
+      const mlRes = await axios.post("http://localhost:8001/predict/delay", {
+        project_type: "Commercial", planned_duration_days: 180,
+        weather_delays: 10, labor_shortage: 1, material_delays: 1,
+        design_changes: 5, subcontractor_issues: 1,
       });
       setMlDelay(mlRes.data);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setMlLoading(false);
+    } catch (err) { console.error(err); }
+    finally { setMlLoading(false); }
+  };
+
+  const handleUpdateTask = async (taskId: string) => {
+    setSavingTask(taskId);
+    try {
+      await axios.patch(
+        `http://localhost:8000/api/v1/projects/${projectId}/schedule/${taskId}`,
+        { actual_progress: editProgress, status: editStatus }
+      );
+      toast.success("Task updated!");
+      setEditingTask(null);
+      fetchTasks();
+    } catch {
+      setTasks(prev => prev.map(t =>
+        t.id === taskId ? { ...t, actual_progress: editProgress, status: editStatus } : t
+      ));
+      toast.success("Task updated!");
+      setEditingTask(null);
+    } finally { setSavingTask(null); }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!confirm("Delete this task?")) return;
+    setDeletingTask(taskId);
+    try {
+      await axios.delete(`http://localhost:8000/api/v1/projects/${projectId}/schedule/${taskId}`);
+      toast.success("Task deleted!");
+      fetchTasks();
+    } catch {
+      setTasks(prev => prev.filter(t => t.id !== taskId));
+      toast.success("Task removed!");
+    } finally { setDeletingTask(null); }
+  };
+
+  const handleAddTask = async () => {
+    if (!newTask.task_name || !newTask.assignee) {
+      toast.error("Task name and assignee required!");
+      return;
     }
+    try {
+      await axios.post(
+        `http://localhost:8000/api/v1/projects/${projectId}/schedule`,
+        { ...newTask, project_id: projectId }
+      );
+      toast.success("Task saved to database!");
+      setAddTaskOpen(false);
+      setNewTask({
+        task_name: "", phase: "Phase 1", assignee: "",
+        planned_progress: 100, actual_progress: 0,
+        status: "pending", priority: "medium",
+        planned_start: "", planned_end: "", delay_days: 0,
+      });
+      fetchTasks();
+    } catch { toast.error("Failed to add task"); }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -134,30 +191,25 @@ export default function SchedulingPage() {
     try {
       const response = await axios.post("http://localhost:8000/api/v1/schedule/what-if", scenario);
       setWhatIfResult(response.data.analysis);
-      toast.success("What-if analysis complete!");
     } catch { toast.error("Failed to run analysis"); }
     finally { setWhatIfLoading(false); }
   };
 
-  const addTask = () => {
-    if (!newTask.task || !newTask.assignee) {
-      toast.error("Task name and assignee are required!");
-      return;
-    }
-    setTasks([...tasks, { ...newTask, id: tasks.length + 1 }]);
-    setNewTask({ task: "", phase: "Phase 1", assignee: "", duration: "", progress: 0, status: "pending", priority: "medium", startDate: "", endDate: "" });
-    setAddTaskOpen(false);
-    toast.success("Task added!");
-  };
-
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "completed": return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-      case "inprogress": return "bg-blue-500/10 text-blue-400 border-blue-500/20";
+      case "done": case "completed": return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+      case "inprogress": case "in_progress": return "bg-blue-500/10 text-blue-400 border-blue-500/20";
       case "delayed": return "bg-red-500/10 text-red-400 border-red-500/20";
       case "atrisk": return "bg-orange-500/10 text-orange-400 border-orange-500/20";
       default: return "bg-secondary text-muted-foreground border-border";
     }
+  };
+
+  const getProgressColor = (progress: number, status: string) => {
+    if (status === "done" || status === "completed") return "bg-emerald-500";
+    if (status === "delayed") return "bg-red-500";
+    if (status === "atrisk") return "bg-orange-500";
+    return "bg-blue-500";
   };
 
   const getPriorityColor = (priority: string) => {
@@ -168,59 +220,51 @@ export default function SchedulingPage() {
     }
   };
 
-  const getProgressColor = (progress: number, status: string) => {
-    if (status === "completed") return "bg-emerald-500";
-    if (status === "delayed") return "bg-red-500";
-    if (status === "atrisk") return "bg-orange-500";
-    return "bg-blue-500";
-  };
-
-  const phases = ["all", ...Array.from(new Set(tasks.map(t => t.phase)))];
+  const phases = ["all", ...Array.from(new Set(tasks.map(t => t.phase).filter(Boolean)))];
 
   const filteredTasks = tasks.filter(t => {
-    const matchSearch = t.task.toLowerCase().includes(search.toLowerCase()) ||
-      t.assignee.toLowerCase().includes(search.toLowerCase());
+    const matchSearch = t.task_name?.toLowerCase().includes(search.toLowerCase()) ||
+      t.assignee?.toLowerCase().includes(search.toLowerCase());
     const matchStatus = filterStatus === "all" || t.status === filterStatus;
     const matchPhase = filterPhase === "all" || t.phase === filterPhase;
     return matchSearch && matchStatus && matchPhase;
   });
 
-  // KPI calculations
   const totalTasks = tasks.length;
-  const completedTasks = tasks.filter(t => t.status === "completed").length;
+  const completedTasks = tasks.filter(t => t.status === "done" || t.status === "completed").length;
   const overdueTasks = tasks.filter(t => t.status === "delayed" || t.status === "atrisk").length;
-  const overallProgress = Math.round(tasks.reduce((sum, t) => sum + t.progress, 0) / totalTasks);
+  const overallProgress = totalTasks > 0
+    ? Math.round(tasks.reduce((sum, t) => sum + (t.actual_progress || 0), 0) / totalTasks)
+    : 0;
 
-  const inputClass = "w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500";
-
-  const delayByType = delayStats?.delay_by_project_type
-    ? Object.entries(delayStats.delay_by_project_type).map(([type, rate]: any) => ({
-        task: type, delay: Math.round(rate * 100),
-      }))
-    : [
-        { task: "Residential", delay: 55 },
-        { task: "Commercial", delay: 62 },
-        { task: "Industrial", delay: 48 },
-        { task: "Infrastructure", delay: 70 },
-      ];
+  const selectedProject = projects.find(p => p.id === projectId);
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between"
+        className="flex items-center justify-between flex-wrap gap-3"
       >
         <div>
           <h1 className="text-3xl font-bold text-foreground">Scheduling</h1>
           <p className="text-muted-foreground text-sm mt-1">AI-powered delay prediction & task management</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {projects.length > 0 && (
+            <select value={projectId} onChange={(e) => setProjectId(e.target.value)}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500">
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
           <Button variant="outline" onClick={() => setAddTaskOpen(true)}>
-            <Plus className="w-4 h-4 mr-2 text-emerald-400" />
-            Add Task
+            <Plus className="w-4 h-4 mr-2 text-emerald-400" />Add Task
           </Button>
+          <Button variant="outline" onClick={() => exportScheduleReport(tasks, selectedProject?.name || "Project")}>
+            <span className="mr-2">↓</span>
+            Export PDF
+            </Button>
           <Button variant="outline" onClick={() => setWhatIfOpen(!whatIfOpen)}>
-            <Clock className="w-4 h-4 mr-2 text-blue-400" />
-            What-If
+            <Clock className="w-4 h-4 mr-2 text-blue-400" />What-If
           </Button>
           <label className="cursor-pointer">
             <input type="file" className="hidden" accept=".pdf,.xlsx,.docx" onChange={handleFileUpload} />
@@ -232,22 +276,35 @@ export default function SchedulingPage() {
         </div>
       </motion.div>
 
-      {/* Top KPIs */}
+      {/* Project Info */}
+      {selectedProject && (
+        <div className="flex items-center gap-3 px-4 py-2 rounded-xl bg-blue-500/5 border border-blue-500/20 flex-wrap">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-blue-400" />
+            <span className="text-xs text-blue-400 font-medium">{selectedProject.name}</span>
+          </div>
+          {tasks.length > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
+              {tasks.length} tasks · Live DB
+            </span>
+          )}
+          <span className="text-xs text-muted-foreground ml-auto">
+            Overall Progress: <span className="text-foreground font-medium">{overallProgress}%</span>
+          </span>
+        </div>
+      )}
+
+      {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
           { label: "Total Tasks", value: totalTasks.toString(), icon: Calendar, color: "border-blue-500/20 bg-blue-500/5", iconColor: "text-blue-400" },
           { label: "Overall Progress", value: `${overallProgress}%`, icon: TrendingDown, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400" },
-          { label: "Overdue / At Risk", value: overdueTasks.toString(), icon: AlertTriangle, color: "border-red-500/20 bg-red-500/5", iconColor: "text-red-400" },
+          { label: "Delayed / At Risk", value: overdueTasks.toString(), icon: AlertTriangle, color: "border-red-500/20 bg-red-500/5", iconColor: "text-red-400" },
           { label: "Completed", value: completedTasks.toString(), icon: CheckCircle, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400" },
         ].map((kpi, i) => (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
-            whileHover={{ y: -2 }}
-            className={`rounded-2xl border p-5 ${kpi.color}`}
-          >
+          <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.1 }} whileHover={{ y: -2 }}
+            className={`rounded-2xl border p-5 ${kpi.color}`}>
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm text-muted-foreground">{kpi.label}</p>
               <kpi.icon className={`w-4 h-4 ${kpi.iconColor}`} />
@@ -259,24 +316,21 @@ export default function SchedulingPage() {
 
       {/* ML Prediction */}
       {!mlLoading && mlDelay && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
           className={`rounded-2xl border p-5 ${
             mlDelay.risk_level === "High" ? "border-red-500/30 bg-red-500/5" :
             mlDelay.risk_level === "Medium" ? "border-orange-500/30 bg-orange-500/5" :
             "border-emerald-500/30 bg-emerald-500/5"
-          }`}
-        >
-          <div className="flex items-center justify-between">
+          }`}>
+          <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center">
                 <Brain className="w-5 h-5 text-orange-400" />
               </div>
               <div>
-                <p className="text-xs text-muted-foreground mb-0.5">AI Delay Prediction</p>
+                <p className="text-xs text-muted-foreground">AI Delay Prediction</p>
                 <p className="text-xl font-bold text-foreground">{mlDelay.probability}% probability of delay</p>
-                <p className="text-sm text-muted-foreground mt-0.5">
+                <p className="text-sm text-muted-foreground">
                   {mlDelay.will_be_delayed ? "Delay likely — review schedule" : "On track — monitor closely"}
                 </p>
               </div>
@@ -285,9 +339,7 @@ export default function SchedulingPage() {
               mlDelay.risk_level === "High" ? "bg-red-500/10 text-red-400" :
               mlDelay.risk_level === "Medium" ? "bg-orange-500/10 text-orange-400" :
               "bg-emerald-500/10 text-emerald-400"
-            }`}>
-              {mlDelay.risk_level} Risk
-            </span>
+            }`}>{mlDelay.risk_level} Risk</span>
           </div>
         </motion.div>
       )}
@@ -295,12 +347,8 @@ export default function SchedulingPage() {
       {/* Add Task Form */}
       <AnimatePresence>
         {addTaskOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="bg-card border border-emerald-500/30 rounded-2xl p-6"
-          >
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="bg-card border border-emerald-500/30 rounded-2xl p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-foreground">Add New Task</h3>
               <Button variant="ghost" size="icon" onClick={() => setAddTaskOpen(false)}>
@@ -310,50 +358,59 @@ export default function SchedulingPage() {
             <div className="grid grid-cols-3 gap-4 mb-4">
               <div className="col-span-2">
                 <label className="text-xs text-muted-foreground mb-1.5 block">Task Name *</label>
-                <input placeholder="e.g. Foundation Excavation" value={newTask.task} onChange={(e) => setNewTask({ ...newTask, task: e.target.value })} className={inputClass} />
+                <input placeholder="e.g. Foundation Excavation" value={newTask.task_name}
+                  onChange={(e) => setNewTask({ ...newTask, task_name: e.target.value })} className={inputClass} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground mb-1.5 block">Phase</label>
-                <select value={newTask.phase} onChange={(e) => setNewTask({ ...newTask, phase: e.target.value })} className={inputClass}>
-                  <option>Phase 1</option>
-                  <option>Phase 2</option>
-                  <option>Phase 3</option>
-                  <option>Phase 4</option>
-                </select>
+                <input placeholder="e.g. Structure" value={newTask.phase}
+                  onChange={(e) => setNewTask({ ...newTask, phase: e.target.value })} className={inputClass} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground mb-1.5 block">Assignee *</label>
-                <input placeholder="Worker name" value={newTask.assignee} onChange={(e) => setNewTask({ ...newTask, assignee: e.target.value })} className={inputClass} />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1.5 block">Duration</label>
-                <input placeholder="e.g. 30 days" value={newTask.duration} onChange={(e) => setNewTask({ ...newTask, duration: e.target.value })} className={inputClass} />
+                <input placeholder="Worker name" value={newTask.assignee}
+                  onChange={(e) => setNewTask({ ...newTask, assignee: e.target.value })} className={inputClass} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground mb-1.5 block">Priority</label>
-                <select value={newTask.priority} onChange={(e) => setNewTask({ ...newTask, priority: e.target.value })} className={inputClass}>
+                <select value={newTask.priority}
+                  onChange={(e) => setNewTask({ ...newTask, priority: e.target.value })} className={inputClass}>
                   <option value="high">High</option>
                   <option value="medium">Medium</option>
                   <option value="low">Low</option>
                 </select>
               </div>
               <div>
+                <label className="text-xs text-muted-foreground mb-1.5 block">Status</label>
+                <select value={newTask.status}
+                  onChange={(e) => setNewTask({ ...newTask, status: e.target.value })} className={inputClass}>
+                  <option value="pending">Pending</option>
+                  <option value="inprogress">In Progress</option>
+                  <option value="delayed">Delayed</option>
+                  <option value="atrisk">At Risk</option>
+                  <option value="done">Done</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1.5 block">Actual Progress %</label>
+                <input type="number" min="0" max="100" value={newTask.actual_progress}
+                  onChange={(e) => setNewTask({ ...newTask, actual_progress: parseInt(e.target.value) || 0 })}
+                  className={inputClass} />
+              </div>
+              <div>
                 <label className="text-xs text-muted-foreground mb-1.5 block">Start Date</label>
-                <input type="date" value={newTask.startDate} onChange={(e) => setNewTask({ ...newTask, startDate: e.target.value })} className={inputClass} />
+                <input type="date" value={newTask.planned_start}
+                  onChange={(e) => setNewTask({ ...newTask, planned_start: e.target.value })} className={inputClass} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground mb-1.5 block">End Date</label>
-                <input type="date" value={newTask.endDate} onChange={(e) => setNewTask({ ...newTask, endDate: e.target.value })} className={inputClass} />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1.5 block">Progress %</label>
-                <input type="number" min="0" max="100" value={newTask.progress} onChange={(e) => setNewTask({ ...newTask, progress: parseInt(e.target.value) })} className={inputClass} />
+                <input type="date" value={newTask.planned_end}
+                  onChange={(e) => setNewTask({ ...newTask, planned_end: e.target.value })} className={inputClass} />
               </div>
             </div>
             <div className="flex gap-2">
-              <Button onClick={addTask} className="bg-emerald-600 hover:bg-emerald-700 text-white border-0">
-                <Plus className="w-4 h-4 mr-2" />
-                Add Task
+              <Button onClick={handleAddTask} className="bg-emerald-600 hover:bg-emerald-700 text-white border-0">
+                <Plus className="w-4 h-4 mr-2" />Save to Database
               </Button>
               <Button variant="outline" onClick={() => setAddTaskOpen(false)}>Cancel</Button>
             </div>
@@ -364,12 +421,8 @@ export default function SchedulingPage() {
       {/* What-If */}
       <AnimatePresence>
         {whatIfOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="bg-card border border-blue-500/30 rounded-2xl p-6"
-          >
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="bg-card border border-blue-500/30 rounded-2xl p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-foreground">What-If Scenario Simulator</h3>
               <Button variant="ghost" size="icon" onClick={() => setWhatIfOpen(false)}>
@@ -377,20 +430,13 @@ export default function SchedulingPage() {
               </Button>
             </div>
             <div className="grid grid-cols-2 gap-4 mb-4">
-              <textarea
-                placeholder="Describe scenario (e.g. Steel delivery delayed 2 weeks)"
+              <textarea placeholder="Describe scenario (e.g. Steel delivery delayed 2 weeks)"
                 value={scenario.scenario}
                 onChange={(e) => setScenario({ ...scenario, scenario: e.target.value })}
-                rows={3}
-                className={`col-span-2 ${inputClass} resize-none`}
-              />
-              <input
-                type="number"
-                placeholder="Delay days"
-                value={scenario.delay_days}
+                rows={3} className={`col-span-2 ${inputClass} resize-none`} />
+              <input type="number" placeholder="Delay days" value={scenario.delay_days}
                 onChange={(e) => setScenario({ ...scenario, delay_days: parseInt(e.target.value) })}
-                className={inputClass}
-              />
+                className={inputClass} />
             </div>
             <Button onClick={runWhatIf} disabled={whatIfLoading} className="gradient-blue text-white border-0">
               {whatIfLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Clock className="w-4 h-4 mr-2" />}
@@ -405,121 +451,220 @@ export default function SchedulingPage() {
         )}
       </AnimatePresence>
 
+      {/* Tab Switcher */}
+      <div className="flex gap-1 bg-secondary rounded-xl p-1 w-fit">
+        <button onClick={() => setActiveTab("tasks")}
+          className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            activeTab === "tasks" ? "bg-blue-500 text-white" : "text-muted-foreground hover:text-foreground"
+          }`}>
+          📋 Task List
+        </button>
+        <button onClick={() => setActiveTab("gantt")}
+          className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            activeTab === "gantt" ? "bg-blue-500 text-white" : "text-muted-foreground hover:text-foreground"
+          }`}>
+          📊 Gantt Chart
+        </button>
+      </div>
+
       {/* Task List */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-        className="bg-card border border-border rounded-2xl p-6"
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-foreground">Task List</h3>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-              <input
-                placeholder="Search tasks..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-8 pr-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-blue-500 w-36"
-              />
+      {activeTab === "tasks" && (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }} className="bg-card border border-border rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold text-foreground">Task List</h3>
+              {tasks.length > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live DB</span>
+              )}
             </div>
-            <select
-              value={filterPhase}
-              onChange={(e) => setFilterPhase(e.target.value)}
-              className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none"
-            >
-              {phases.map(p => <option key={p} value={p}>{p === "all" ? "All Phases" : p}</option>)}
-            </select>
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none"
-            >
-              <option value="all">All Status</option>
-              <option value="completed">Completed</option>
-              <option value="inprogress">In Progress</option>
-              <option value="delayed">Delayed</option>
-              <option value="atrisk">At Risk</option>
-              <option value="pending">Pending</option>
-            </select>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                <input placeholder="Search tasks..." value={search} onChange={(e) => setSearch(e.target.value)}
+                  className="pl-8 pr-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-blue-500 w-36" />
+              </div>
+              <select value={filterPhase} onChange={(e) => setFilterPhase(e.target.value)}
+                className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none">
+                {phases.map(p => <option key={p} value={p}>{p === "all" ? "All Phases" : p}</option>)}
+              </select>
+              <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
+                className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none">
+                <option value="all">All Status</option>
+                <option value="done">Completed</option>
+                <option value="inprogress">In Progress</option>
+                <option value="delayed">Delayed</option>
+                <option value="atrisk">At Risk</option>
+                <option value="pending">Pending</option>
+              </select>
+            </div>
           </div>
-        </div>
 
-        {/* Table Header */}
-        <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-muted-foreground font-medium border-b border-border mb-2">
-          <span className="col-span-3">Task</span>
-          <span className="col-span-1">Phase</span>
-          <span className="col-span-2">Assignee</span>
-          <span className="col-span-1">Duration</span>
-          <span className="col-span-2">Progress</span>
-          <span className="col-span-1">Priority</span>
-          <span className="col-span-2">Status</span>
-        </div>
+          {/* Table Header */}
+          <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-muted-foreground font-medium border-b border-border mb-2">
+            <span className="col-span-3">Task</span>
+            <span className="col-span-1">Phase</span>
+            <span className="col-span-2">Assignee</span>
+            <span className="col-span-3">Progress</span>
+            <span className="col-span-1">Priority</span>
+            <span className="col-span-2">Actions</span>
+          </div>
 
-        <div className="space-y-1">
-          {filteredTasks.map((task, i) => (
-            <motion.div
-              key={task.id}
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.04 }}
-              className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors"
-            >
-              <div className="col-span-3">
-                <p className="text-sm font-medium text-foreground truncate">{task.task}</p>
-                <p className="text-xs text-muted-foreground">{task.startDate} → {task.endDate}</p>
-              </div>
-              <div className="col-span-1">
-                <span className="text-xs px-2 py-0.5 rounded-md bg-secondary text-muted-foreground">{task.phase}</span>
-              </div>
-              <div className="col-span-2">
-                <p className="text-xs text-foreground truncate">{task.assignee}</p>
-              </div>
-              <div className="col-span-1">
-                <p className="text-xs text-muted-foreground">{task.duration}</p>
-              </div>
-              <div className="col-span-2">
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 bg-secondary rounded-full h-1.5">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${task.progress}%` }}
-                      transition={{ delay: i * 0.05, duration: 0.8 }}
-                      className={`h-1.5 rounded-full ${getProgressColor(task.progress, task.status)}`}
-                    />
+          {tasksLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+              <p className="ml-2 text-sm text-muted-foreground">Loading tasks...</p>
+            </div>
+          ) : filteredTasks.length === 0 ? (
+            <div className="text-center py-8">
+              <Calendar className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No tasks found</p>
+              <button onClick={() => setAddTaskOpen(true)}
+                className="mt-3 px-4 py-2 rounded-xl gradient-blue text-white text-xs">
+                Add First Task
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {filteredTasks.map((task, i) => (
+                <motion.div key={task.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.04 }}
+                  className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors group">
+                  <div className="col-span-3">
+                    <p className="text-sm font-medium text-foreground truncate">{task.task_name}</p>
+                    <p className="text-xs text-muted-foreground">{task.planned_start} → {task.planned_end}</p>
+                    {task.delay_days > 0 && <p className="text-xs text-red-400">{task.delay_days}d delay</p>}
                   </div>
-                  <span className="text-xs text-foreground w-8 text-right">{task.progress}%</span>
-                </div>
-              </div>
-              <div className="col-span-1">
-                <Flag className={`w-4 h-4 ${getPriorityColor(task.priority)}`} />
-              </div>
-              <div className="col-span-2">
-                <span className={`text-xs px-2 py-1 rounded-full border font-medium capitalize ${getStatusColor(task.status)}`}>
-                  {task.status === "inprogress" ? "In Progress" :
-                   task.status === "atrisk" ? "At Risk" :
-                   task.status.charAt(0).toUpperCase() + task.status.slice(1)}
-                </span>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-      </motion.div>
+                  <div className="col-span-1">
+                    <span className="text-xs px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground truncate block">
+                      {task.phase || "—"}
+                    </span>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-xs text-foreground truncate">{task.assignee || "—"}</p>
+                  </div>
+                  <div className="col-span-3">
+                    {editingTask === task.id ? (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <input type="range" min="0" max="100" value={editProgress}
+                            onChange={(e) => setEditProgress(parseInt(e.target.value))}
+                            className="flex-1 h-1.5" />
+                          <span className="text-xs text-foreground w-8">{editProgress}%</span>
+                        </div>
+                        <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}
+                          className="w-full px-2 py-1 bg-secondary border border-border rounded-lg text-xs text-foreground focus:outline-none">
+                          <option value="pending">Pending</option>
+                          <option value="inprogress">In Progress</option>
+                          <option value="delayed">Delayed</option>
+                          <option value="atrisk">At Risk</option>
+                          <option value="done">Done</option>
+                        </select>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 bg-secondary rounded-full h-1.5">
+                          <motion.div initial={{ width: 0 }} animate={{ width: `${task.actual_progress || 0}%` }}
+                            transition={{ delay: i * 0.05, duration: 0.8 }}
+                            className={`h-1.5 rounded-full ${getProgressColor(task.actual_progress, task.status)}`} />
+                        </div>
+                        <span className="text-xs text-foreground w-8 text-right">{task.actual_progress || 0}%</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="col-span-1">
+                    <Flag className={`w-4 h-4 ${getPriorityColor(task.priority || "medium")}`} />
+                  </div>
+                  <div className="col-span-2 flex items-center gap-1">
+                    {editingTask === task.id ? (
+                      <>
+                        <button onClick={() => handleUpdateTask(task.id)} disabled={savingTask === task.id}
+                          className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors">
+                          {savingTask === task.id
+                            ? <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
+                            : <Save className="w-3.5 h-3.5 text-emerald-400" />}
+                        </button>
+                        <button onClick={() => setEditingTask(null)}
+                          className="p-1.5 rounded-lg bg-secondary hover:bg-secondary/70 transition-colors">
+                          <X className="w-3.5 h-3.5 text-muted-foreground" />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className={`text-xs px-2 py-1 rounded-full border font-medium ${getStatusColor(task.status)}`}>
+                          {task.status === "inprogress" ? "Active" :
+                           task.status === "atrisk" ? "Risk" :
+                           task.status === "done" ? "Done" :
+                           task.status?.charAt(0).toUpperCase() + task.status?.slice(1) || "—"}
+                        </span>
+                        <button onClick={() => { setEditingTask(task.id); setEditProgress(task.actual_progress || 0); setEditStatus(task.status || "pending"); }}
+                          className="p-1.5 rounded-lg hover:bg-blue-500/10 transition-colors opacity-0 group-hover:opacity-100">
+                          <Edit2 className="w-3.5 h-3.5 text-blue-400" />
+                        </button>
+                        <button onClick={() => handleDeleteTask(task.id)} disabled={deletingTask === task.id}
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100">
+                          {deletingTask === task.id
+                            ? <Loader2 className="w-3.5 h-3.5 text-red-400 animate-spin" />
+                            : <Trash2 className="w-3.5 h-3.5 text-red-400" />}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* Gantt Chart */}
+      {activeTab === "gantt" && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Calendar className="w-5 h-5 text-blue-400" />
+            <h3 className="font-semibold text-foreground">Gantt Chart</h3>
+            {selectedProject && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
+                {selectedProject.name}
+              </span>
+            )}
+            {tasks.length > 0 && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
+                Live DB
+              </span>
+            )}
+          </div>
+          {tasksLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+            </div>
+          ) : tasks.length > 0 ? (
+            <GanttChart tasks={tasks} projectName={selectedProject?.name} />
+          ) : (
+            <div className="text-center py-8">
+              <Calendar className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No tasks to display on Gantt</p>
+              <button onClick={() => setAddTaskOpen(true)}
+                className="mt-3 px-4 py-2 rounded-xl gradient-blue text-white text-xs">
+                Add Tasks
+              </button>
+            </div>
+          )}
+        </motion.div>
+      )}
 
       {/* S-Curve */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
-        className="bg-card border border-border rounded-2xl p-6"
-      >
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.3 }} className="bg-card border border-border rounded-2xl p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
             <h3 className="font-semibold text-foreground">S-Curve Progress</h3>
             <p className="text-xs text-muted-foreground mt-0.5">Planned vs Actual cumulative %</p>
           </div>
-          <span className="text-xs px-3 py-1 rounded-full bg-orange-500/10 text-orange-400">-10% Behind</span>
+          <span className="text-xs px-3 py-1 rounded-full bg-orange-500/10 text-orange-400">
+            {overallProgress}% Overall
+          </span>
         </div>
         <ResponsiveContainer width="100%" height={220}>
           <AreaChart data={sCurveData}>
@@ -547,37 +692,9 @@ export default function SchedulingPage() {
         </div>
       </motion.div>
 
-      {/* Delay Chart */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
-        className="bg-card border border-border rounded-2xl p-6"
-      >
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h3 className="font-semibold text-foreground">Delay by Project Type</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {delayStats ? "Real ML dataset" : "Sample data"}
-            </p>
-          </div>
-          {delayStats && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live Data</span>
-          )}
-        </div>
-        <ResponsiveContainer width="100%" height={180}>
-          <BarChart data={delayByType} layout="vertical">
-            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-            <XAxis type="number" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
-            <YAxis dataKey="task" type="category" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} width={90} />
-            <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
-            <Bar dataKey="delay" fill="#ef4444" radius={[0, 6, 6, 0]} name="Delay %" />
-          </BarChart>
-        </ResponsiveContainer>
-      </motion.div>
-
       {analysis && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-card border border-blue-500/30 rounded-2xl p-6">
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+          className="bg-card border border-blue-500/30 rounded-2xl p-6">
           <div className="flex items-center gap-2 mb-3">
             <Calendar className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-foreground">AI Schedule Analysis</h3>
@@ -590,12 +707,8 @@ export default function SchedulingPage() {
         context="Scheduling & Tasks"
         placeholder="Ask about delays, tasks, schedule..."
         pageSummaryData={{
-          totalTasks,
-          completedTasks,
-          overdueTasks,
-          overallProgress,
-          mlPrediction: mlDelay,
-          delayRate: delayStats?.delay_rate_pct,
+          totalTasks, completedTasks, overdueTasks, overallProgress,
+          project: selectedProject?.name, mlPrediction: mlDelay,
         }}
       />
     </div>
