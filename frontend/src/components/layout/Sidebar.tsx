@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
+  Zap,
   LineChart,
   TrendingUp,
   Hammer,
@@ -56,6 +57,7 @@ const navItems = [
   { href: "/payments", icon: CreditCard, label: "Payment Tracker" },
   { href: "/reports", icon: BarChart3, label: "Reports" },
   { href: "/analytics", icon: TrendingUp, label: "Analytics" },
+  { href: "/predictive", icon: Zap, label: "Predictive AI" },
   { href: "/writing", icon: PenTool, label: "Writing Assistant" },
   { href: "/mlops", icon: Cpu, label: "MLOps" },
   { href: "/gnn", icon: GitBranch, label: "GNN Risk" },
