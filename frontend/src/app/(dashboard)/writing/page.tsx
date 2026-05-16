@@ -75,19 +75,19 @@ export default function WritingPage() {
     try {
       let response;
       if (activeType === "letter") {
-        response = await axios.post("http://localhost:8000/api/v1/writing/letter", letterForm);
+        response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/writing/letter`, letterForm);
         setResult(response.data.letter);
       } else if (activeType === "email") {
-        response = await axios.post("http://localhost:8000/api/v1/writing/email", emailForm);
+        response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/writing/email`, emailForm);
         setResult(response.data.email);
       } else if (activeType === "notice") {
-        response = await axios.post("http://localhost:8000/api/v1/writing/notice", noticeForm);
+        response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/writing/notice`, noticeForm);
         setResult(response.data.notice);
       } else if (activeType === "variation") {
-        response = await axios.post("http://localhost:8000/api/v1/writing/variation-order", variationForm);
+        response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/writing/variation-order`, variationForm);
         setResult(response.data.variation_order);
       } else if (activeType === "dispute") {
-        response = await axios.post("http://localhost:8000/api/v1/writing/dispute-letter", disputeForm);
+        response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/writing/dispute-letter`, disputeForm);
         setResult(response.data.letter);
       }
       toast.success("Document generated!");
@@ -108,13 +108,13 @@ export default function WritingPage() {
       formData.append("file", file);
       let response;
       if (activeType === "blueprint") {
-        response = await axios.post("http://localhost:8000/api/v1/writing/analyze-blueprint", formData);
+        response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/writing/analyze-blueprint`, formData);
         setResult(response.data.analysis);
       } else if (activeType === "contract") {
-        response = await axios.post("http://localhost:8000/api/v1/writing/analyze-contract", formData);
+        response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/writing/analyze-contract`, formData);
         setResult(response.data.analysis);
       } else if (activeType === "boq") {
-        response = await axios.post("http://localhost:8000/api/v1/writing/analyze-boq", formData);
+        response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/writing/analyze-boq`, formData);
         setResult(response.data.analysis);
       }
       toast.success("Document analyzed!");

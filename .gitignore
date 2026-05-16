@@ -1,10 +1,9 @@
-# Environment
-.env
-.env.local
-.env.production
+# ─── Environment ──────────────────────────────────────────────────────────────
 **/.env
+**/.env.*
+!**/.env.example
 
-# Python
+# ─── Python ───────────────────────────────────────────────────────────────────
 **/venv/
 **/__pycache__/
 **/*.pyc
@@ -13,21 +12,57 @@
 **/*.egg-info/
 **/dist/
 **/build/
+.pytest_cache/
+**/.pytest_cache/
+**/.mypy_cache/
+**/*.pyi.bak
 
-# Node
+# ─── Node / Next.js ───────────────────────────────────────────────────────────
 **/node_modules/
 **/.next/
 **/out/
+**/.turbo/
+**/.vercel/
+**/coverage/
 
-# ML
+# ─── ML / Data ────────────────────────────────────────────────────────────────
 **/mlruns/
 **/*.h5
 **/*.model
+ml/monitoring/logs/
 
-# OS
+# ─── Claude Code ──────────────────────────────────────────────────────────────
+.claude/settings.local.json
+frontend/.agents/
+frontend/skills-lock.json
+
+# ─── Supabase CLI ─────────────────────────────────────────────────────────────
+**/supabase/.temp/
+
+# ─── Kubernetes secrets ───────────────────────────────────────────────────────
+k8s/secrets.yaml
+
+# ─── Credentials & keys ───────────────────────────────────────────────────────
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/credentials.json
+**/service-account*.json
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+**/*.log
+**/logs/
+!ml/monitoring/logs/.gitkeep
+
+# ─── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-# IDE
+# ─── IDE ──────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+*.swp
+*.swo

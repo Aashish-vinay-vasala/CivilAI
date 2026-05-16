@@ -1,6 +1,15 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from app.services.bim_service import parse_ifc_geometry, detect_clashes, extract_quantities, parse_ifc_for_3d
 from app.ai.gemini_client import analyze_image, analyze_text
+
+try:
+    from app.services.bim_service import parse_ifc_geometry, detect_clashes, extract_quantities, parse_ifc_for_3d
+    HAS_IFC = True
+except ImportError:
+    HAS_IFC = False
+    def parse_ifc_geometry(*a, **k): return {"success": False, "error": "ifcopenshell not installed"}
+    def detect_clashes(*a, **k): return {"success": False, "error": "ifcopenshell not installed"}
+    def extract_quantities(*a, **k): return {"success": False, "error": "ifcopenshell not installed"}
+    def parse_ifc_for_3d(*a, **k): return {"success": False, "error": "ifcopenshell not installed"}
 
 router = APIRouter()
 

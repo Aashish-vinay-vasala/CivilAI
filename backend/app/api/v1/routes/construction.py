@@ -5,7 +5,10 @@ from supabase import create_client
 from app.config import settings
 from app.ai.groq_client import analyze_document
 import uuid
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SECRET_KEY)
@@ -39,7 +42,7 @@ def get_punch_list(project_id: str):
 @router.post("/punch-list")
 def create_punch_item(item: PunchListCreate):
     try:
-        data = {**item.dict(), "id": str(uuid.uuid4())}
+        data = {**item.model_dump(), "id": str(uuid.uuid4())}
         res = supabase.table("punch_list").insert(data).execute()
         return {"status": "success", "item": res.data[0] if res.data else data}
     except Exception as e:
@@ -48,7 +51,7 @@ def create_punch_item(item: PunchListCreate):
 @router.patch("/punch-list/{item_id}")
 def update_punch_item(item_id: str, item: PunchListUpdate):
     try:
-        update_data = {k: v for k, v in item.dict().items() if v is not None}
+        update_data = {k: v for k, v in item.model_dump().items() if v is not None}
         res = supabase.table("punch_list").update(update_data).eq("id", item_id).execute()
         return {"status": "success", "item": res.data[0] if res.data else {}}
     except Exception as e:
@@ -92,7 +95,7 @@ def create_rfi(rfi: RFICreate):
         # Auto-generate RFI number
         existing = supabase.table("rfis").select("id").eq("project_id", rfi.project_id).execute()
         rfi_num = f"RFI-{str(len(existing.data or []) + 1).zfill(3)}"
-        data = {**rfi.dict(), "id": str(uuid.uuid4()), "rfi_number": rfi_num}
+        data = {**rfi.model_dump(), "id": str(uuid.uuid4()), "rfi_number": rfi_num}
         res = supabase.table("rfis").insert(data).execute()
         return {"status": "success", "rfi": res.data[0] if res.data else data}
     except Exception as e:
@@ -101,7 +104,7 @@ def create_rfi(rfi: RFICreate):
 @router.patch("/rfis/{rfi_id}")
 def update_rfi(rfi_id: str, rfi: RFIUpdate):
     try:
-        update_data = {k: v for k, v in rfi.dict().items() if v is not None}
+        update_data = {k: v for k, v in rfi.model_dump().items() if v is not None}
         res = supabase.table("rfis").update(update_data).eq("id", rfi_id).execute()
         return {"status": "success", "rfi": res.data[0] if res.data else {}}
     except Exception as e:
@@ -144,7 +147,7 @@ def create_submittal(submittal: SubmittalCreate):
     try:
         existing = supabase.table("submittals").select("id").eq("project_id", submittal.project_id).execute()
         sub_num = f"SUB-{str(len(existing.data or []) + 1).zfill(3)}"
-        data = {**submittal.dict(), "id": str(uuid.uuid4()), "submittal_number": sub_num}
+        data = {**submittal.model_dump(), "id": str(uuid.uuid4()), "submittal_number": sub_num}
         res = supabase.table("submittals").insert(data).execute()
         return {"status": "success", "submittal": res.data[0] if res.data else data}
     except Exception as e:
@@ -153,7 +156,7 @@ def create_submittal(submittal: SubmittalCreate):
 @router.patch("/submittals/{submittal_id}")
 def update_submittal(submittal_id: str, submittal: SubmittalUpdate):
     try:
-        update_data = {k: v for k, v in submittal.dict().items() if v is not None}
+        update_data = {k: v for k, v in submittal.model_dump().items() if v is not None}
         res = supabase.table("submittals").update(update_data).eq("id", submittal_id).execute()
         return {"status": "success"}
     except Exception as e:
@@ -200,10 +203,11 @@ def create_daily_report(report: DailyReportCreate):
         """
         try:
             ai_summary = analyze_document("", summary_prompt)
-        except:
+        except Exception as exc:
+            logger.exception("AI daily report summary failed: %s", exc)
             ai_summary = f"Daily report for {report.report_date}. {report.workers_on_site} workers on site. Work completed: {report.work_completed or 'As planned'}."
 
-        data = {**report.dict(), "id": str(uuid.uuid4()), "ai_summary": ai_summary}
+        data = {**report.model_dump(), "id": str(uuid.uuid4()), "ai_summary": ai_summary}
         res = supabase.table("daily_reports").insert(data).execute()
         return {"status": "success", "report": res.data[0] if res.data else data, "ai_summary": ai_summary}
     except Exception as e:
@@ -246,10 +250,11 @@ def create_meeting(meeting: MeetingCreate):
         """
         try:
             ai_summary = analyze_document("", summary_prompt)
-        except:
+        except Exception as exc:
+            logger.exception("AI meeting summary failed: %s", exc)
             ai_summary = f"Meeting held on {meeting.meeting_date}. Attendees: {meeting.attendees or 'Site team'}. Action items recorded."
 
-        data = {**meeting.dict(), "id": str(uuid.uuid4()), "ai_summary": ai_summary}
+        data = {**meeting.model_dump(), "id": str(uuid.uuid4()), "ai_summary": ai_summary}
         res = supabase.table("meeting_minutes").insert(data).execute()
         return {"status": "success", "meeting": res.data[0] if res.data else data, "ai_summary": ai_summary}
     except Exception as e:
@@ -276,7 +281,7 @@ def get_cost_codes(project_id: str):
 @router.post("/cost-codes")
 def create_cost_code(code: CostCodeCreate):
     try:
-        data = {**code.dict(), "id": str(uuid.uuid4())}
+        data = {**code.model_dump(), "id": str(uuid.uuid4())}
         res = supabase.table("cost_codes").insert(data).execute()
         return {"status": "success", "cost_code": res.data[0] if res.data else data}
     except Exception as e:
@@ -324,11 +329,9 @@ def save_anomalies(data: dict):
     try:
         project_id = data.get("project_id")
         anomalies = data.get("anomalies", [])
-        saved = []
-        for a in anomalies:
-            if a.get("type") == "info":
-                continue
-            record = {
+        now_iso = datetime.now(timezone.utc).isoformat()
+        records = [
+            {
                 "id": str(uuid.uuid4()),
                 "project_id": project_id,
                 "anomaly_type": a.get("type"),
@@ -337,10 +340,13 @@ def save_anomalies(data: dict):
                 "description": a.get("description"),
                 "deviation": a.get("deviation", 0),
                 "category": a.get("category"),
-                "detected_at": datetime.now().isoformat(),
+                "detected_at": now_iso,
             }
-            supabase.table("anomaly_history").insert(record).execute()
-            saved.append(record)
-        return {"status": "success", "saved": len(saved)}
+            for a in anomalies
+            if a.get("type") != "info"
+        ]
+        if records:
+            supabase.table("anomaly_history").insert(records).execute()
+        return {"status": "success", "saved": len(records)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

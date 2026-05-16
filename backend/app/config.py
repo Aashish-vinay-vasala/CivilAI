@@ -4,7 +4,7 @@ from typing import List
 class Settings(BaseSettings):
     APP_NAME: str = "CivilAI"
     DEBUG: bool = True
-    ALLOWED_ORIGINS: str = "http://localhost:3000"
+    ALLOWED_ORIGINS: str = "*"
     
     GROQ_API_KEY: str
     GEMINI_API_KEY: str

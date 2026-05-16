@@ -19,6 +19,14 @@ import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const SITE_TABS = [
+  { href: "/bim", label: "BIM & CAD" },
+  { href: "/digital-twin", label: "Digital Twin" },
+  { href: "/weather", label: "Weather" },
+  { href: "/green", label: "Green Monitor" },
+];
 import {
   BarChart,
   Bar,
@@ -83,7 +91,7 @@ export default function BIMPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await axios.post("http://localhost:8000/api/v1/bim/analyze-ifc-ai", formData);
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/bim/analyze-ifc-ai`, formData);
       setBimData(response.data.bim_data);
       setAnalysis(response.data.ai_analysis);
       toast.success("IFC file parsed & analyzed!");
@@ -102,7 +110,7 @@ export default function BIMPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await axios.post("http://localhost:8000/api/v1/bim/clash-detection", formData);
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/bim/clash-detection`, formData);
       setClashData(response.data.data);
       toast.success("Clash detection complete!");
       setActiveTab("clashes");
@@ -120,7 +128,7 @@ export default function BIMPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await axios.post("http://localhost:8000/api/v1/bim/analyze-drawing", formData);
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/bim/analyze-drawing`, formData);
       setDrawingAnalysis(response.data.analysis);
       toast.success("Drawing analyzed!");
       setActiveTab("drawing");
@@ -141,6 +149,7 @@ export default function BIMPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={SITE_TABS} />
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}

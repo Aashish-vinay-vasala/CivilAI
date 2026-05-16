@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Bot, Send, X, Loader2, Sparkles } from "lucide-react";
+import { Bot, Send, X, Loader2, Sparkles, Mic, MicOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
 
@@ -27,7 +27,38 @@ export default function ModuleChat({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
+  const [listening, setListening] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
+
+  const toggleVoice = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { alert("Voice not supported in this browser. Try Chrome."); return; }
+
+    if (listening) {
+      recognitionRef.current?.stop();
+      setListening(false);
+      return;
+    }
+
+    const recognition: any = new SR();
+    recognitionRef.current = recognition;
+    recognition.continuous = false;
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+
+    recognition.onstart = () => setListening(true);
+    recognition.onresult = (e: any) => {
+      const transcript = e.results[0][0].transcript;
+      setInput(transcript);
+      setListening(false);
+      // Auto-send after a short delay so user sees the transcribed text
+      setTimeout(() => send(transcript), 300);
+    };
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+    recognition.start();
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -51,7 +82,7 @@ export default function ModuleChat({
     setLoading(true);
     try {
       const response = await axios.post(
-        "http://localhost:8000/api/v1/copilot/chat",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/copilot/chat`,
         {
           message: `[Context: ${context}] ${msg}`,
           chat_history: messages,
@@ -86,7 +117,7 @@ export default function ModuleChat({
     setLoading(true);
     try {
       const response = await axios.post(
-        "http://localhost:8000/api/v1/copilot/chat",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/copilot/chat`,
         {
           message: summaryPrompt,
           chat_history: [],
@@ -269,6 +300,15 @@ export default function ModuleChat({
                     placeholder={placeholder || `Ask about ${context}...`}
                     className="flex-1 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                  <Button
+                    onClick={toggleVoice}
+                    size="icon"
+                    variant="ghost"
+                    className={`rounded-xl transition-colors ${listening ? "text-red-400 bg-red-500/10" : "text-muted-foreground"}`}
+                    title={listening ? "Stop recording" : "Speak to AI"}
+                  >
+                    {listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  </Button>
                   <Button
                     onClick={() => send()}
                     disabled={!input.trim() || loading}

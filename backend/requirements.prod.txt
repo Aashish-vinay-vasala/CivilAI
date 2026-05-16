@@ -1,0 +1,45 @@
+# Production-only requirements — excludes torch/ML training packages
+# (torch is ~2GB and only needed for local ML work, not API serving)
+fastapi==0.135.3
+uvicorn==0.44.0
+python-multipart==0.0.26
+pydantic==2.12.5
+pydantic-settings==2.13.1
+python-dotenv==1.2.2
+httpx==0.28.1
+
+# Groq (LLM + Whisper)
+groq==0.37.1
+
+# LangChain (without torch backend)
+langchain==1.2.15
+langchain-community==0.4.1
+langchain-core==1.2.28
+langchain-groq==1.1.2
+langchain-text-splitters==1.1.1
+langgraph==1.1.6
+langgraph-prebuilt==1.0.9
+
+# Supabase
+supabase==2.28.3
+postgrest==2.28.3
+
+# Document parsing
+pdfplumber==0.11.9
+PyMuPDF==1.27.2.2
+python-docx==1.2.0
+openpyxl==3.1.5
+
+# ChromaDB (uses onnxruntime for embeddings, much lighter than torch)
+chromadb==1.5.7
+
+# Utils
+orjson==3.11.8
+python-jose==3.5.0
+passlib==1.7.4
+bcrypt==5.0.0
+celery==5.6.3
+redis==7.4.0
+scikit-learn==1.8.0
+numpy==2.4.4
+ifcopenshell

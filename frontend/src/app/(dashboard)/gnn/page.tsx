@@ -34,7 +34,7 @@ export default function GNNPage() {
 
   const fetchProjects = async () => {
     try {
-      const res = await axios.get("http://localhost:8000/api/v1/projects/");
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       const p = res.data.projects || [];
       setProjects(p);
       if (p.length > 0) {
@@ -52,22 +52,22 @@ export default function GNNPage() {
     let tasks = [], equipment = [], incidents = [], project = null;
 
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/projects/${projectId}/schedule`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule`);
       tasks = res.data.tasks || [];
     } catch (e) { console.error("Tasks fetch failed", e); }
 
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/projects/${projectId}/equipment`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/equipment`);
       equipment = res.data.equipment || [];
     } catch (e) { console.error("Equipment fetch failed", e); }
 
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/projects/${projectId}/safety`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/safety`);
       incidents = res.data.incidents || [];
     } catch (e) { console.error("Safety fetch failed", e); }
 
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/projects/${projectId}`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}`);
       project = res.data.project;
     } catch (e) { console.error("Project fetch failed", e); }
 

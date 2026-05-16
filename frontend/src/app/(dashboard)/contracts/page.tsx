@@ -23,6 +23,13 @@ import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const DOCS_TABS = [
+  { href: "/documents", label: "Documents" },
+  { href: "/contracts", label: "Contracts" },
+  { href: "/compliance", label: "Compliance" },
+];
 
 const clauseRiskData = [
   { category: "Payment", risk: 75 },
@@ -57,7 +64,7 @@ export default function ContractsPage() {
       const formData = new FormData();
       formData.append("file", file);
       const response = await axios.post(
-        "http://localhost:8000/api/v1/contracts/analyze",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/contracts/analyze`,
         formData
       );
       setAnalysis(response.data.analysis);
@@ -73,7 +80,7 @@ export default function ContractsPage() {
     setRfiLoading(true);
     try {
       const response = await axios.post(
-        "http://localhost:8000/api/v1/contracts/rfi",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/contracts/rfi`,
         rfi
       );
       setRfiResult(response.data.rfi);
@@ -95,6 +102,7 @@ export default function ContractsPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={DOCS_TABS} />
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}

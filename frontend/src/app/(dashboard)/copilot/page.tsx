@@ -1,16 +1,44 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import dynamic from "next/dynamic";
+import { Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Bot, User, Loader2, Trash2, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
 
+const TranscribePage = dynamic(() => import("../transcribe/page"), {
+  ssr: false,
+  loading: () => <div className="flex items-center justify-center h-40"><Loader2 className="w-5 h-5 animate-spin text-blue-400" /></div>,
+});
+const WritingPage = dynamic(() => import("../writing/page"), {
+  ssr: false,
+  loading: () => <div className="flex items-center justify-center h-40"><Loader2 className="w-5 h-5 animate-spin text-blue-400" /></div>,
+});
+
+const COPILOT_TABS = [
+  { id: "chat",       label: "Chat" },
+  { id: "transcribe", label: "Transcription" },
+  { id: "writing",    label: "Writing Assistant" },
+];
+
+const STORAGE_KEY = "civilai_copilot_history";
+const MAX_HISTORY = 40;
+const RATE_LIMIT_MS = 1000;
+
 interface Message {
   role: "user" | "assistant";
   content: string;
-  timestamp: Date;
+  timestamp: string;
 }
+
+const INITIAL_MESSAGE: Message = {
+  role: "assistant",
+  content:
+    "Hello! I'm CivilAI Copilot, your AI assistant for construction management. I can help you with project scheduling, cost analysis, safety assessments, contract reviews, and much more. What would you like to know?",
+  timestamp: new Date().toISOString(),
+};
 
 const suggestions = [
   "What are the main causes of construction delays?",
@@ -21,88 +49,137 @@ const suggestions = [
   "Predict workforce requirements for next month",
 ];
 
+function loadHistory(): Message[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Message[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {
+    // corrupt storage — reset
+  }
+  return [INITIAL_MESSAGE];
+}
+
+function saveHistory(msgs: Message[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(msgs.slice(-MAX_HISTORY)));
+  } catch {
+    // storage quota — ignore
+  }
+}
+
 export default function CopilotPage() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "assistant",
-      content: "Hello! I'm CivilAI Copilot, your AI assistant for construction management. I can help you with project scheduling, cost analysis, safety assessments, contract reviews, and much more. What would you like to know?",
-      timestamp: new Date(),
-    },
-  ]);
+  const [subTab, setSubTab] = useState("chat");
+  const [messages, setMessages] = useState<Message[]>([INITIAL_MESSAGE]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
-
+  const lastSentAt = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+    setMessages(loadHistory());
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-  useEffect(() => {
-  setMounted(true);
-}, []);
 
-  const sendMessage = async (text?: string) => {
-    const messageText = text || input.trim();
-    if (!messageText || loading) return;
+  const sendMessage = useCallback(
+    async (text?: string) => {
+      const messageText = text || input.trim();
+      if (!messageText || loading) return;
 
-    const userMessage: Message = {
-      role: "user",
-      content: messageText,
-      timestamp: new Date(),
-    };
+      // Rate limit: 1 message per second
+      const now = Date.now();
+      if (now - lastSentAt.current < RATE_LIMIT_MS) return;
+      lastSentAt.current = now;
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
-    setLoading(true);
-
-    try {
-      const history = messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
-
-      const response = await axios.post(
-        "http://localhost:8000/api/v1/copilot/chat",
-        {
-          message: messageText,
-          chat_history: history,
-        }
-      );
-
-      const assistantMessage: Message = {
-        role: "assistant",
-        content: response.data.response,
-        timestamp: new Date(),
+      const userMsg: Message = {
+        role: "user",
+        content: messageText,
+        timestamp: new Date().toISOString(),
       };
 
-      setMessages((prev) => [...prev, assistantMessage]);
-    } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        {
+      const nextMessages = [...messages, userMsg];
+      setMessages(nextMessages);
+      saveHistory(nextMessages);
+      setInput("");
+      setLoading(true);
+
+      try {
+        const history = nextMessages.map((m) => ({ role: m.role, content: m.content }));
+        const response = await axios.post(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/v1/copilot/chat`,
+          { message: messageText, chat_history: history }
+        );
+
+        const assistantMsg: Message = {
+          role: "assistant",
+          content: response.data.response,
+          timestamp: new Date().toISOString(),
+        };
+        const withReply = [...nextMessages, assistantMsg];
+        setMessages(withReply);
+        saveHistory(withReply);
+      } catch {
+        const errMsg: Message = {
           role: "assistant",
           content: "Sorry, I encountered an error. Please try again.",
-          timestamp: new Date(),
-        },
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  };
+          timestamp: new Date().toISOString(),
+        };
+        const withErr = [...nextMessages, errMsg];
+        setMessages(withErr);
+        saveHistory(withErr);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [input, loading, messages]
+  );
 
   const clearChat = () => {
-    setMessages([
-      {
-        role: "assistant",
-        content: "Chat cleared! How can I help you?",
-        timestamp: new Date(),
-      },
-    ]);
+    const fresh = [{ ...INITIAL_MESSAGE, content: "Chat cleared! How can I help you?", timestamp: new Date().toISOString() }];
+    setMessages(fresh);
+    saveHistory(fresh);
   };
+
+  const tabBar = (
+    <div className="flex gap-0 border-b border-border shrink-0">
+      {COPILOT_TABS.map((t) => (
+        <button
+          key={t.id}
+          onClick={() => setSubTab(t.id)}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+            subTab === t.id
+              ? "border-blue-500 text-blue-400"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (subTab !== "chat") {
+    return (
+      <div className="space-y-0">
+        {tabBar}
+        <Suspense fallback={<div className="flex items-center justify-center h-40"><Loader2 className="w-5 h-5 animate-spin text-blue-400" /></div>}>
+          {subTab === "transcribe" && <div className="pt-6"><TranscribePage /></div>}
+          {subTab === "writing" && <div className="pt-6"><WritingPage /></div>}
+        </Suspense>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)]">
+      {tabBar}
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
@@ -114,14 +191,10 @@ export default function CopilotPage() {
             <Bot className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-foreground">
-              AI Copilot
-            </h1>
+            <h1 className="text-xl font-bold text-foreground">AI Copilot</h1>
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <p className="text-xs text-muted-foreground">
-                Powered by Groq LLaMA 3.3
-              </p>
+              <p className="text-xs text-muted-foreground">Powered by Groq LLaMA 3.3</p>
             </div>
           </div>
         </div>
@@ -145,13 +218,10 @@ export default function CopilotPage() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3 }}
-              className={`flex gap-3 ${
-                message.role === "user" ? "flex-row-reverse" : ""
-              }`}
+              className={`flex gap-3 ${message.role === "user" ? "flex-row-reverse" : ""}`}
             >
-              {/* Avatar */}
               <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
                   message.role === "assistant"
                     ? "gradient-blue"
                     : "bg-secondary border border-border"
@@ -163,8 +233,6 @@ export default function CopilotPage() {
                   <User className="w-4 h-4 text-foreground" />
                 )}
               </div>
-
-              {/* Message */}
               <div
                 className={`max-w-[75%] rounded-2xl px-4 py-3 ${
                   message.role === "assistant"
@@ -175,30 +243,25 @@ export default function CopilotPage() {
                 <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
                   {message.content}
                 </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {mounted ? message.timestamp.toLocaleTimeString() : ""}
-                </p>
+                {mounted && (
+                  <p className="text-xs text-muted-foreground mt-1" suppressHydrationWarning>
+                    {new Date(message.timestamp).toLocaleTimeString()}
+                  </p>
+                )}
               </div>
             </motion.div>
           ))}
         </AnimatePresence>
 
-        {/* Loading */}
         {loading && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex gap-3"
-          >
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3">
             <div className="w-8 h-8 rounded-full gradient-blue flex items-center justify-center">
               <Bot className="w-4 h-4 text-white" />
             </div>
             <div className="bg-card border border-border rounded-2xl rounded-tl-none px-4 py-3">
               <div className="flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
-                <span className="text-sm text-muted-foreground">
-                  Thinking...
-                </span>
+                <span className="text-sm text-muted-foreground">Thinking...</span>
               </div>
             </div>
           </motion.div>
@@ -256,14 +319,10 @@ export default function CopilotPage() {
         <Button
           onClick={() => sendMessage()}
           disabled={!input.trim() || loading}
-          className="gradient-blue text-white border-0 h-11 w-11 rounded-xl flex-shrink-0"
+          className="gradient-blue text-white border-0 h-11 w-11 rounded-xl shrink-0"
           size="icon"
         >
-          {loading ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Send className="w-4 h-4" />
-          )}
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
         </Button>
       </motion.div>
     </div>

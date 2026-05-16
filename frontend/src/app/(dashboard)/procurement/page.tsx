@@ -26,6 +26,13 @@ import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const PROJECT_TABS = [
+  { href: "/cost",        label: "Cost & Budget" },
+  { href: "/financials",  label: "Financial Budget" },
+  { href: "/procurement", label: "Procurement" },
+];
 
 const demandData = [
   { month: "Jul", cement: 450, steel: 280, lumber: 320 },
@@ -76,7 +83,7 @@ export default function ProcurementPage() {
       const formData = new FormData();
       formData.append("file", file);
       const response = await axios.post(
-        "http://localhost:8000/api/v1/procurement/analyze",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/procurement/analyze`,
         formData
       );
       setAnalysis(response.data.analysis);
@@ -92,7 +99,7 @@ export default function ProcurementPage() {
     setPoLoading(true);
     try {
       const response = await axios.post(
-        "http://localhost:8000/api/v1/procurement/purchase-order",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/procurement/purchase-order`,
         { ...po, items: [{ name: "Material", quantity: 100, unit: "tons", price: 500 }] }
       );
       setPoResult(response.data.purchase_order);
@@ -114,6 +121,7 @@ export default function ProcurementPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={PROJECT_TABS} />
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}

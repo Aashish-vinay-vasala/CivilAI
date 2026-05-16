@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
   Building2,
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
+import { useAuth, DUMMY_ACCOUNTS } from "@/lib/auth";
 import { toast } from "sonner";
 
 const features = [
@@ -37,15 +37,28 @@ const stats = [
   { value: "$0", label: "To Start" },
 ];
 
+const roleColors: Record<string, string> = {
+  "Project Director": "text-blue-400 bg-blue-500/10 border-blue-500/20",
+  "Project Admin": "text-purple-400 bg-purple-500/10 border-purple-500/20",
+  "Contractor": "text-orange-400 bg-orange-500/10 border-orange-500/20",
+  "Site Engineer": "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+};
+
 export default function LandingPage() {
-  const [mode, setMode] = useState<"landing" | "login" | "signup">("landing");
+  const [mode, setMode] = useState<"landing" | "login">("landing");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
-  const { signIn, signUp, signInWithGoogle } = useAuth();
+  const { signIn, user, loading: authLoading } = useAuth();
+
+  // Auto-redirect logged-in users straight to dashboard
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace("/dashboard");
+    }
+  }, [user, authLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,7 +68,7 @@ export default function LandingPage() {
       if (error) {
         toast.error(error.message);
       } else {
-        toast.success("Welcome back!");
+        toast.success("Welcome to CivilAI!");
         router.push("/dashboard");
       }
     } catch {
@@ -65,27 +78,14 @@ export default function LandingPage() {
     }
   };
 
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const { error } = await signUp(email, password, name);
-      if (error) {
-        toast.error(error.message);
-      } else {
-        toast.success("Account created! Check your email to confirm.");
-        setMode("login");
-      }
-    } catch {
-      toast.error("Signup failed");
-    } finally {
-      setLoading(false);
-    }
+  const fillAccount = (acc: typeof DUMMY_ACCOUNTS[0]) => {
+    setEmail(acc.email);
+    setPassword(acc.password);
   };
 
   const inputClass = "w-full px-4 py-3 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500";
 
-  if (mode === "login" || mode === "signup") {
+  if (mode === "login") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center px-4">
         <motion.div
@@ -95,56 +95,55 @@ export default function LandingPage() {
         >
           <div className="bg-card border border-border rounded-2xl p-8">
             {/* Logo */}
-            <div className="flex items-center gap-3 mb-8">
+            <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 rounded-xl gradient-blue flex items-center justify-center">
                 <Building2 className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-foreground">
-                  {mode === "login" ? "Welcome back" : "Create account"}
-                </h2>
-                <p className="text-xs text-muted-foreground">
-                  {mode === "login" ? "Sign in to CivilAI" : "Join CivilAI today"}
-                </p>
+                <h2 className="text-xl font-bold text-foreground">Welcome back</h2>
+                <p className="text-xs text-muted-foreground">Sign in to CivilAI</p>
               </div>
             </div>
 
-            {/* Google OAuth */}
-            <Button
-              variant="outline"
-              className="w-full mb-4"
-              onClick={signInWithGoogle}
-            >
-              <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-              Continue with Google
-            </Button>
+            {/* Demo accounts */}
+            <div className="mb-6">
+              <p className="text-xs text-muted-foreground mb-3 font-medium uppercase tracking-wide">
+                Quick access — click to fill credentials
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {DUMMY_ACCOUNTS.map((acc) => (
+                  <button
+                    key={acc.email}
+                    type="button"
+                    onClick={() => fillAccount(acc)}
+                    className={`flex items-center gap-2.5 p-3 rounded-xl border text-left hover:scale-[1.02] active:scale-[0.98] transition-all ${
+                      email === acc.email
+                        ? "border-blue-500/50 bg-blue-500/5"
+                        : "border-border hover:border-border/80 bg-secondary/50"
+                    }`}
+                  >
+                    <div className={`w-8 h-8 rounded-lg ${acc.color} flex items-center justify-center shrink-0`}>
+                      <span className="text-white text-xs font-bold">{acc.avatar}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-foreground truncate">{acc.name}</p>
+                      <p className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border w-fit mt-0.5 ${roleColors[acc.role]}`}>
+                        {acc.role}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="flex items-center gap-3 mb-4">
               <div className="flex-1 h-px bg-border" />
-              <span className="text-xs text-muted-foreground">or</span>
+              <span className="text-xs text-muted-foreground">or enter manually</span>
               <div className="flex-1 h-px bg-border" />
             </div>
 
             {/* Form */}
-            <form onSubmit={mode === "login" ? handleLogin : handleSignUp} className="space-y-4">
-              {mode === "signup" && (
-                <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Full Name</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="John Smith"
-                    required
-                    className={inputClass}
-                  />
-                </div>
-              )}
+            <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <label className="text-sm text-muted-foreground mb-1.5 block">Email</label>
                 <input
@@ -186,29 +185,14 @@ export default function LandingPage() {
                   ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   : <ArrowRight className="w-4 h-4 mr-2" />
                 }
-                {mode === "login" ? "Sign In" : "Create Account"}
+                Sign In
               </Button>
             </form>
 
-            <div className="mt-6 space-y-3">
-              {mode === "login" ? (
-                <p className="text-sm text-center text-muted-foreground">
-                  Don't have an account?{" "}
-                  <button onClick={() => setMode("signup")} className="text-blue-400 hover:text-blue-300">
-                    Sign up
-                  </button>
-                </p>
-              ) : (
-                <p className="text-sm text-center text-muted-foreground">
-                  Already have an account?{" "}
-                  <button onClick={() => setMode("login")} className="text-blue-400 hover:text-blue-300">
-                    Sign in
-                  </button>
-                </p>
-              )}
+            <div className="mt-5 space-y-3">
               <div className="flex items-center gap-2 text-xs text-muted-foreground justify-center">
                 <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                Secured by Supabase Auth
+                Demo environment — no real data stored
               </div>
               <button
                 onClick={() => setMode("landing")}
@@ -239,7 +223,7 @@ export default function LandingPage() {
         </div>
         <div className="flex items-center gap-3">
           <Button variant="ghost" onClick={() => setMode("login")}>Sign In</Button>
-          <Button className="gradient-blue text-white border-0" onClick={() => setMode("signup")}>
+          <Button className="gradient-blue text-white border-0" onClick={() => setMode("login")}>
             Get Started
           </Button>
         </div>
@@ -262,7 +246,7 @@ export default function LandingPage() {
             Predict delays, prevent overruns, and manage everything in one place.
           </p>
           <div className="flex gap-4 justify-center">
-            <Button size="lg" className="gradient-blue text-white border-0 px-8" onClick={() => setMode("signup")}>
+            <Button size="lg" className="gradient-blue text-white border-0 px-8" onClick={() => setMode("login")}>
               Start Free
               <ArrowRight className="w-4 h-4 ml-2" />
             </Button>
@@ -319,7 +303,7 @@ export default function LandingPage() {
         <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }}>
           <h2 className="text-3xl font-bold text-foreground mb-4">Ready to transform your projects?</h2>
           <p className="text-muted-foreground mb-8">Join construction companies using AI to build better</p>
-          <Button size="lg" className="gradient-blue text-white border-0 px-10" onClick={() => setMode("signup")}>
+          <Button size="lg" className="gradient-blue text-white border-0 px-10" onClick={() => setMode("login")}>
             Get Started Free
             <ArrowRight className="w-4 h-4 ml-2" />
           </Button>

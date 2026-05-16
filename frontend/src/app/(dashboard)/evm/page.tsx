@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
   DollarSign, Calendar, AlertTriangle, CheckCircle,
-  Loader2, RefreshCw, BarChart3,
+  Loader2, RefreshCw, BarChart3, Plus, Trash2,
 } from "lucide-react";
 import axios from "axios";
 import {
@@ -30,27 +30,18 @@ interface EVMData {
   percent_complete: number;
 }
 
-const calculateEVM = (tasks: any[], budget: number, spent: number): EVMData => {
+const calculateEVM = (tasks: any[], budget: number, spent: number): EVMData | null => {
   const totalTasks = tasks.length;
-  const bac = budget || 5000000;
+  const bac = budget;
 
-  if (totalTasks === 0) {
-    const pv = bac * 0.6;
-    const ev = bac * 0.5;
-    const ac = spent || bac * 0.55;
-    const sv = ev - pv;
-    const cv = ev - ac;
-    const spi = ev / pv;
-    const cpi = ev / ac;
-    const eac = bac / cpi;
-    return { bac, pv, ev, ac, sv, cv, spi, cpi, eac, etc: eac - ac, vac: bac - eac, tcpi: (bac - ev) / Math.max(bac - ac, 1), percent_complete: 50 };
-  }
+  if (!bac || bac <= 0) return null;
+  if (totalTasks === 0) return null;
 
   const avgPlanned = tasks.reduce((s, t) => s + (t.planned_progress || 0), 0) / totalTasks;
   const avgActual = tasks.reduce((s, t) => s + (t.actual_progress || 0), 0) / totalTasks;
   const pv = bac * (avgPlanned / 100);
   const ev = bac * (avgActual / 100);
-  const ac = spent || bac * 0.55;
+  const ac = spent > 0 ? spent : pv * 0.9; // use actual spend; if zero, approximate from PV
   const sv = ev - pv;
   const cv = ev - ac;
   const spi = pv > 0 ? ev / pv : 1;
@@ -70,13 +61,17 @@ export default function EVMPage() {
   const [loading, setLoading] = useState(false);
   const [selectedProject, setSelectedProject] = useState<any>(null);
   const [sCurveData, setSCurveData] = useState<any[]>([]);
+  const [costEntries, setCostEntries] = useState<any[]>([]);
+  const [showEntryForm, setShowEntryForm] = useState(false);
+  const [entryForm, setEntryForm] = useState({ amount: "", description: "", category: "", entry_date: "" });
+  const [entrySubmitting, setEntrySubmitting] = useState(false);
 
   useEffect(() => { fetchProjects(); }, []);
-  useEffect(() => { if (projectId) calculateProjectEVM(); }, [projectId]);
+  useEffect(() => { if (projectId) { calculateProjectEVM(); fetchCostEntries(); } }, [projectId]);
 
   const fetchProjects = async () => {
     try {
-      const res = await axios.get("http://localhost:8000/api/v1/projects/");
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       const p = res.data.projects || [];
       setProjects(p);
       if (p.length > 0) { setProjectId(p[0].id); setSelectedProject(p[0]); }
@@ -89,23 +84,21 @@ export default function EVMPage() {
       // Try to get real snapshots first
       let snapshotData: any[] = [];
       try {
-        const snapRes = await axios.get(`http://localhost:8000/api/v1/construction/evm-snapshots/${projectId}`);
+        const snapRes = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/evm-snapshots/${projectId}`);
         snapshotData = snapRes.data.snapshots || [];
       } catch {}
 
-      const [tasksRes, projectRes] = await Promise.all([
-        axios.get(`http://localhost:8000/api/v1/projects/${projectId}/schedule`),
-        axios.get(`http://localhost:8000/api/v1/projects/${projectId}`),
-      ]);
-
+      const tasksRes = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule`);
       const tasks = tasksRes.data.tasks || [];
-      const project = projectRes.data.project;
+
+      // Use already-normalized project data from the projects list (has correct total_budget / spent_to_date)
+      const project = projects.find(p => p.id === projectId) || selectedProject;
       setSelectedProject(project);
 
       const evmData = calculateEVM(
         tasks,
-        project?.total_budget || 5000000,
-        project?.spent_to_date || 0
+        project?.total_budget ?? 0,
+        project?.spent_to_date ?? 0
       );
       setEvm(evmData);
 
@@ -134,6 +127,39 @@ export default function EVMPage() {
       }
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
+  };
+
+  const fetchCostEntries = async () => {
+    try {
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/cost`);
+      setCostEntries(res.data.cost_entries || []);
+    } catch (err) { console.error(err); }
+  };
+
+  const addCostEntry = async () => {
+    if (!entryForm.amount || isNaN(Number(entryForm.amount))) return;
+    setEntrySubmitting(true);
+    try {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/cost`, {
+        amount: Number(entryForm.amount),
+        description: entryForm.description || null,
+        category: entryForm.category || null,
+        entry_date: entryForm.entry_date || null,
+      });
+      setEntryForm({ amount: "", description: "", category: "", entry_date: "" });
+      setShowEntryForm(false);
+      await fetchCostEntries();
+      await calculateProjectEVM();
+    } catch (err) { console.error(err); }
+    finally { setEntrySubmitting(false); }
+  };
+
+  const deleteCostEntry = async (entryId: string) => {
+    try {
+      await axios.delete(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/cost/${entryId}`);
+      await fetchCostEntries();
+      await calculateProjectEVM();
+    } catch (err) { console.error(err); }
   };
 
   const fmt = (val: number) => {
@@ -425,8 +451,127 @@ export default function EVMPage() {
       ) : (
         <div className="text-center py-20">
           <BarChart3 className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-          <p className="text-muted-foreground">Select a project to calculate EVM metrics</p>
+          {!projectId ? (
+            <p className="text-muted-foreground">Select a project to calculate EVM metrics</p>
+          ) : !selectedProject?.total_budget ? (
+            <p className="text-muted-foreground">No budget set for this project — add a budget to calculate EVM</p>
+          ) : (
+            <p className="text-muted-foreground">No schedule tasks found — add tasks with planned/actual progress to calculate EVM</p>
+          )}
         </div>
+      )}
+
+      {/* Cost Entries */}
+      {projectId && (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-semibold text-foreground">Cost Entries</h3>
+              <p className="text-xs text-muted-foreground">Actual costs recorded — these drive AC and CPI</p>
+            </div>
+            <button onClick={() => setShowEntryForm(v => !v)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl gradient-blue text-white text-sm">
+              <Plus className="w-4 h-4" /> Add Entry
+            </button>
+          </div>
+
+          {showEntryForm && (
+            <div className="mb-4 p-4 rounded-xl border border-border bg-secondary/30 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="col-span-2 md:col-span-1">
+                <label className="text-xs text-muted-foreground mb-1 block">Amount ($) *</label>
+                <input type="number" placeholder="50000" value={entryForm.amount}
+                  onChange={e => setEntryForm(f => ({ ...f, amount: e.target.value }))}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Description</label>
+                <input type="text" placeholder="Concrete pour" value={entryForm.description}
+                  onChange={e => setEntryForm(f => ({ ...f, description: e.target.value }))}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Category</label>
+                <select value={entryForm.category}
+                  onChange={e => setEntryForm(f => ({ ...f, category: e.target.value }))}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none">
+                  <option value="">Select…</option>
+                  {["Labor", "Materials", "Equipment", "Subcontractor", "Overhead", "Other"].map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Date</label>
+                <input type="date" value={entryForm.entry_date}
+                  onChange={e => setEntryForm(f => ({ ...f, entry_date: e.target.value }))}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none" />
+              </div>
+              <div className="col-span-2 md:col-span-4 flex gap-2 justify-end mt-1">
+                <button onClick={() => setShowEntryForm(false)}
+                  className="px-4 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground border border-border">
+                  Cancel
+                </button>
+                <button onClick={addCostEntry} disabled={entrySubmitting || !entryForm.amount}
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg gradient-blue text-white text-sm disabled:opacity-50">
+                  {entrySubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  Save Entry
+                </button>
+              </div>
+            </div>
+          )}
+
+          {costEntries.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">No cost entries yet — add one above to update AC</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-xs text-muted-foreground">
+                    <th className="text-left py-2 pr-4">Date</th>
+                    <th className="text-left py-2 pr-4">Description</th>
+                    <th className="text-left py-2 pr-4">Category</th>
+                    <th className="text-right py-2 pr-4">Amount</th>
+                    <th className="py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {costEntries.map((entry: any) => (
+                    <tr key={entry.id} className="border-b border-border/50 hover:bg-secondary/20">
+                      <td className="py-2 pr-4 text-muted-foreground">
+                        {entry.entry_date ? new Date(entry.entry_date).toLocaleDateString() : "—"}
+                      </td>
+                      <td className="py-2 pr-4 text-foreground">{entry.description || "—"}</td>
+                      <td className="py-2 pr-4">
+                        {entry.category ? (
+                          <span className="px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 text-xs">{entry.category}</span>
+                        ) : "—"}
+                      </td>
+                      <td className="py-2 pr-4 text-right font-medium text-orange-400">
+                        {fmt(Number(entry.amount))}
+                      </td>
+                      <td className="py-2 text-right">
+                        <button onClick={() => deleteCostEntry(entry.id)}
+                          className="p-1 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={3} className="pt-3 text-xs text-muted-foreground">Total AC</td>
+                    <td className="pt-3 text-right font-bold text-orange-400">
+                      {fmt(costEntries.reduce((s, e) => s + Number(e.amount), 0))}
+                    </td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </motion.div>
       )}
 
       <ModuleChat

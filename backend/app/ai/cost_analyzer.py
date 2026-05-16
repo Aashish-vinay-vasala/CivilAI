@@ -1,47 +1,56 @@
 from app.ai.groq_client import analyze_document
 from app.ai.gemini_client import analyze_text
 
-COST_PROMPT = """
-You are an expert construction cost analyst.
-Analyze and provide:
+# Max characters sent to the model — keeps token count well within Groq's context window
+_MAX_CHARS = 12000
+
+COST_PROMPT = """You are an expert construction cost analyst. A cost/budget report has been uploaded below.
+
+IMPORTANT RULES:
+- Base every figure, percentage, and conclusion SOLELY on what is written in the document.
+- Do NOT invent, estimate, or assume any number that is not explicitly stated in the document.
+- If a required piece of data is missing from the document, write "Not found in document" for that item.
+- Quote specific line items, totals, and dates exactly as they appear.
+
+Provide a structured analysis with these four sections:
 
 1. **Cost Overrun Analysis**
-   - Current overrun percentage
-   - Main cost drivers
-   - Risk areas
+   - Total budget vs actual spend (with exact figures from the document)
+   - Overrun percentage (calculate only if both budget and actual are present)
+   - Identified cost drivers listed in the document
 
 2. **Budget Assessment**
-   - Budget utilization
-   - Burn rate analysis
-   - Cash flow forecast
+   - Budget utilization percentage
+   - Burn rate or monthly spend (if stated)
+   - Cash flow position or forecast (if stated)
 
-3. **Material Price Analysis**
-   - Price fluctuations
-   - High risk materials
-   - Procurement recommendations
+3. **Material & Labour Cost Breakdown**
+   - Any material or labour line items mentioned, with their costs
+   - Items flagged as over-budget or at risk
 
 4. **Recommendations**
-   - Cost saving opportunities
-   - Budget reallocation suggestions
-   - Risk mitigation actions
-
-Be specific with numbers and percentages.
+   - Specific actions suggested by or implied by the document data
+   - Risk areas with supporting numbers from the document
 """
 
 def analyze_cost_report(text: str) -> dict:
-    analysis = analyze_document(text, COST_PROMPT)
+    truncated = text[:_MAX_CHARS]
 
-    risk_prompt = """
-    Based on this cost report, return ONLY JSON:
-    {
-        "overrun_percentage": 0,
-        "risk_level": "Low/Medium/High",
-        "budget_utilization": "0%",
-        "cash_flow_status": "Positive/Negative",
-        "top_cost_drivers": ["d1", "d2", "d3"],
-        "savings_potential": "0%"
-    }
-    """
+    analysis = analyze_document(truncated, COST_PROMPT)
+
+    risk_prompt = """You are a construction cost data extractor.
+Read the cost report excerpt below and return ONLY valid JSON (no markdown, no explanation).
+Extract only values that are explicitly stated. Use null for anything not found.
+
+{
+    "overrun_percentage": <number or null>,
+    "risk_level": "<Low|Medium|High based on overrun severity, or null>",
+    "budget_utilization": "<percentage string or null>",
+    "cash_flow_status": "<Positive|Negative|null>",
+    "top_cost_drivers": ["<item1>", "<item2>", "<item3>"],
+    "savings_potential": "<percentage or dollar amount from document, or null>"
+}
+"""
     risk_data = analyze_text(text[:3000], risk_prompt)
 
     return {

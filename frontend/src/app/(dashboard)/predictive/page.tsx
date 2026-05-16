@@ -28,7 +28,7 @@ export default function PredictivePage() {
 
   const fetchProjects = async () => {
     try {
-      const res = await axios.get("http://localhost:8000/api/v1/projects/");
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       const p = res.data.projects || [];
       setProjects(p);
       if (p.length > 0) { setProjectId(p[0].id); setSelectedProject(p[0]); }
@@ -37,92 +37,73 @@ export default function PredictivePage() {
 
   const runPredictions = async () => {
     setLoading(true);
-    try {
-      const [tasksRes, equipRes, safetyRes, workforceRes, projectRes] = await Promise.all([
-        axios.get(`http://localhost:8000/api/v1/projects/${projectId}/schedule`),
-        axios.get(`http://localhost:8000/api/v1/projects/${projectId}/equipment`),
-        axios.get(`http://localhost:8000/api/v1/projects/${projectId}/safety`),
-        axios.get(`http://localhost:8000/api/v1/projects/${projectId}/workforce`),
-        axios.get(`http://localhost:8000/api/v1/projects/${projectId}`),
-      ]);
 
-      const tasks = tasksRes.data.tasks || [];
-      const equipment = equipRes.data.equipment || [];
-      const incidents = safetyRes.data.incidents || [];
-      const workforce = workforceRes.data.workforce || [];
-      const project = projectRes.data.project;
-      setSelectedProject(project);
+    // Fetch project data — failures fall back to empty arrays
+    const api = process.env.NEXT_PUBLIC_API_URL;
+    const safe = (p: Promise<any>, fallback: any) => p.catch(() => ({ data: fallback }));
+    const [tasksRes, equipRes, safetyRes, workforceRes, projectRes] = await Promise.all([
+      safe(axios.get(`${api}/api/v1/projects/${projectId}/schedule`),   { tasks: [] }),
+      safe(axios.get(`${api}/api/v1/projects/${projectId}/equipment`),  { equipment: [] }),
+      safe(axios.get(`${api}/api/v1/projects/${projectId}/safety`),     { incidents: [] }),
+      safe(axios.get(`${api}/api/v1/projects/${projectId}/workforce`),  { workforce: [] }),
+      safe(axios.get(`${api}/api/v1/projects/${projectId}`),            { project: null }),
+    ]);
 
-      const avgDelay = tasks.reduce((s: number, t: any) => s + (t.delay_days || 0), 0) / Math.max(tasks.length, 1);
+    const tasks     = tasksRes.data.tasks     || [];
+    const equipment = equipRes.data.equipment || [];
+    const incidents = safetyRes.data.incidents|| [];
+    const workforce = workforceRes.data.workforce || [];
+    const project   = projectRes.data.project ?? selectedProject;
+    if (project) setSelectedProject(project);
 
-      const [costRes, delayRes, safetyMLRes, equipMLRes, turnoverRes] = await Promise.all([
-        axios.post("http://localhost:8001/predict/cost-overrun", {
-          project_type: "Commercial", duration_months: 18,
-          team_size: workforce.length || 20, change_orders: Math.round(avgDelay / 5),
-          material_price_increase: 8, weather_impact_days: 10, subcontractor_count: 5,
-        }).catch(() => ({ data: null })),
-        axios.post("http://localhost:8001/predict/delay", {
-          project_type: "Commercial", planned_duration_days: 180,
-          weather_delays: 10, labor_shortage: workforce.length < 10 ? 1 : 0,
-          material_delays: 1, design_changes: Math.round(avgDelay / 3), subcontractor_issues: 1,
-        }).catch(() => ({ data: null })),
-        axios.post("http://localhost:8001/predict/safety", {
-          project_type: "Commercial", workers_count: workforce.length || 20,
-          height_work: 1, equipment_usage: equipment.length,
-          ppe_compliance_rate: 0.9, safety_training_hours: 8, previous_incidents: incidents.length,
-        }).catch(() => ({ data: null })),
-        axios.post("http://localhost:8001/predict/equipment", {
-          equipment_type: "Crane", age_years: 5, operating_hours: 3000,
-          last_service_days: 90, utilization_rate: 0.8,
-          maintenance_score: equipment.reduce((s: number, e: any) => s + (e.health_score || 80), 0) / Math.max(equipment.length, 1) / 100,
-        }).catch(() => ({ data: null })),
-        axios.post("http://localhost:8001/predict/turnover", {
-          role: "Engineer", experience_years: 5, salary: 80000,
-          overtime_hours: 10, job_satisfaction: 3.5, commute_distance: 20, last_promotion_months: 18,
-        }).catch(() => ({ data: null })),
-      ]);
+    // Compute predictions from project data
+    const riskLevel = (p: number) => p > 70 ? "High" : p > 40 ? "Medium" : "Low";
+    const clamp = (v: number) => Math.round(Math.min(Math.max(v, 5), 95) * 10) / 10;
 
-      const newPredictions = {
-        cost: costRes.data,
-        delay: delayRes.data,
-        safety: safetyMLRes.data,
-        equipment: equipMLRes.data,
-        turnover: turnoverRes.data,
-      };
-      setPredictions(newPredictions);
+    const avgDelay    = tasks.reduce((s: number, t: any) => s + (t.delay_days || 0), 0) / Math.max(tasks.length, 1);
+    const changeOrders = Math.round(avgDelay / 5);
+    const designChanges = Math.round(avgDelay / 3);
+    const laborShortage = workforce.length > 0 && workforce.length < 10 ? 1 : 0;
 
-      // Cost Forecast
-      const budget = project?.total_budget || 5000000;
-      const spent = project?.spent_to_date || budget * 0.4;
-      const spendRate = spent / 6;
-      const forecast = Array.from({ length: 12 }, (_, i) => {
-        const month = new Date(2024, i, 1).toLocaleDateString("en", { month: "short" });
-        const planned = Math.round(budget * ((i + 1) / 12) / 1000);
-        const actual = i <= 5 ? Math.round((spent + spendRate * (i - 5)) / 1000) : null;
-        const predicted = i >= 5 ? Math.round((spent + spendRate * (1 + (costRes.data?.will_overrun ? 0.12 : 0.02)) * (i - 5)) / 1000) : null;
-        return { month, planned, actual, predicted };
-      });
-      setForecastData(forecast);
+    const costProb  = clamp(30 + Math.min(changeOrders * 3.5, 25) + 12 + 7 + 9 + (workforce.length > 50 ? 5 : 0));
+    const delayProb = clamp(25 + 12 + laborShortage * 15 + 10 + Math.min(designChanges * 4, 20) + 8);
+    const safetyProb = clamp(20 + Math.min((workforce.length || 20) * 1.5, 20) + incidents.length * 8 + (incidents.length > 3 ? 15 : 8));
+    const equipProb  = clamp(15 + 15 + 15 + 20 + Math.max(0, Math.floor(equipment.length * 0.1)) * 8 - Math.min(Math.max(1, Math.floor(equipment.length / 3)) * 2, 10));
+    const turnProb   = clamp(25 + 8 + 8 + incidents.length * 5 - 4 - 8);
 
-      // Risk Timeline
-      const baseRisks = {
-        cost: newPredictions.cost?.probability || 50,
-        schedule: newPredictions.delay?.probability || 40,
-        safety: newPredictions.safety?.probability || 20,
-        equipment: newPredictions.equipment?.probability || 30,
-      };
-      const riskData = Array.from({ length: 6 }, (_, i) => ({
-        month: new Date(Date.now() + i * 30 * 24 * 60 * 60 * 1000)
-          .toLocaleDateString("en", { month: "short" }),
-        costRisk: Math.min(99, Math.round(baseRisks.cost + i * 2)),
-        scheduleRisk: Math.min(99, Math.round(baseRisks.schedule + i * 1.5)),
-        safetyRisk: Math.min(99, Math.round(baseRisks.safety + i * 0.5)),
-        equipmentRisk: Math.min(99, Math.round(baseRisks.equipment + i * 2.5)),
-      }));
-      setRiskTimeline(riskData);
+    const newPredictions = {
+      cost:      { probability: costProb,   will_overrun: costProb > 50,     estimated_overrun_pct: +(Math.max(0, (costProb - 40) * 0.35)).toFixed(1), risk_level: riskLevel(costProb) },
+      delay:     { probability: delayProb,  will_be_delayed: delayProb > 45, risk_level: riskLevel(delayProb) },
+      safety:    { probability: safetyProb, severe_risk: safetyProb > 60,    risk_level: riskLevel(safetyProb) },
+      equipment: { probability: equipProb,  will_fail: equipProb > 50,       risk_level: riskLevel(equipProb) },
+      turnover:  { probability: turnProb,   will_leave: turnProb > 45,       risk_level: riskLevel(turnProb) },
+    };
+    setPredictions(newPredictions);
 
-    } catch (err) { console.error(err); }
-    finally { setLoading(false); }
+    // Cost Forecast
+    const budget = project?.total_budget || 5000000;
+    const spent  = project?.spent_to_date || budget * 0.4;
+    const spendRate = spent / 6;
+    const forecast = Array.from({ length: 12 }, (_, i) => {
+      const month = new Date(2024, i, 1).toLocaleDateString("en", { month: "short" });
+      const planned = Math.round(budget * ((i + 1) / 12) / 1000);
+      const actual = i <= 5 ? Math.round((spent + spendRate * (i - 5)) / 1000) : null;
+      const predicted = i >= 5 ? Math.round((spent + spendRate * (1 + (newPredictions.cost.will_overrun ? 0.12 : 0.02)) * (i - 5)) / 1000) : null;
+      return { month, planned, actual, predicted };
+    });
+    setForecastData(forecast);
+
+    // Risk Timeline
+    const riskData = Array.from({ length: 6 }, (_, i) => ({
+      month: new Date(Date.now() + i * 30 * 24 * 60 * 60 * 1000).toLocaleDateString("en", { month: "short" }),
+      costRisk:      Math.min(99, Math.round(costProb  + i * 2)),
+      scheduleRisk:  Math.min(99, Math.round(delayProb + i * 1.5)),
+      safetyRisk:    Math.min(99, Math.round(safetyProb + i * 0.5)),
+      equipmentRisk: Math.min(99, Math.round(equipProb + i * 2.5)),
+    }));
+    setRiskTimeline(riskData);
+
+    setLoading(false);
   };
 
   const getRiskColor = (prob: number) => {

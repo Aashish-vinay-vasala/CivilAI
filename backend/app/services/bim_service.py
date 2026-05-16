@@ -1,6 +1,15 @@
-import ifcopenshell
-import ifcopenshell.util.element
-import ifcopenshell.geom
+import logging
+
+logger = logging.getLogger(__name__)
+
+try:
+    import ifcopenshell
+    import ifcopenshell.util.element
+    import ifcopenshell.geom
+    HAS_IFC = True
+except ImportError:
+    HAS_IFC = False
+    logger.warning("ifcopenshell not installed — IFC parsing will be unavailable")
 import json
 import os
 import tempfile
@@ -54,8 +63,8 @@ def parse_ifc_geometry(file_bytes: bytes, filename: str) -> dict:
                         "floor": get_element_floor(wall, storey_map),
                         "material": get_element_material(wall),
                     })
-            except:
-                pass
+            except Exception:
+                logger.debug("Skipped wall %s: geometry extraction failed", getattr(wall, "GlobalId", "?"))
 
         # Extract slabs
         for slab in ifc.by_type("IfcSlab"):
@@ -70,8 +79,8 @@ def parse_ifc_geometry(file_bytes: bytes, filename: str) -> dict:
                         "rotation": geom["rotation"],
                         "floor": get_element_floor(slab, storey_map),
                     })
-            except:
-                pass
+            except Exception:
+                logger.debug("Skipped slab %s: geometry extraction failed", getattr(slab, "GlobalId", "?"))
 
         # Extract columns
         for col in ifc.by_type("IfcColumn"):
@@ -86,8 +95,8 @@ def parse_ifc_geometry(file_bytes: bytes, filename: str) -> dict:
                         "rotation": geom["rotation"],
                         "floor": get_element_floor(col, storey_map),
                     })
-            except:
-                pass
+            except Exception:
+                logger.debug("Skipped column %s: geometry extraction failed", getattr(col, "GlobalId", "?"))
 
         # Extract doors
         for door in ifc.by_type("IfcDoor"):
@@ -104,8 +113,8 @@ def parse_ifc_geometry(file_bytes: bytes, filename: str) -> dict:
                         "width": float(door.OverallWidth) if hasattr(door, "OverallWidth") and door.OverallWidth else 0.9,
                         "height": float(door.OverallHeight) if hasattr(door, "OverallHeight") and door.OverallHeight else 2.1,
                     })
-            except:
-                pass
+            except Exception:
+                logger.debug("Skipped door %s: geometry extraction failed", getattr(door, "GlobalId", "?"))
 
         # Extract windows
         for win in ifc.by_type("IfcWindow"):
@@ -122,8 +131,8 @@ def parse_ifc_geometry(file_bytes: bytes, filename: str) -> dict:
                         "width": float(win.OverallWidth) if hasattr(win, "OverallWidth") and win.OverallWidth else 1.2,
                         "height": float(win.OverallHeight) if hasattr(win, "OverallHeight") and win.OverallHeight else 1.2,
                     })
-            except:
-                pass
+            except Exception:
+                logger.debug("Skipped window %s: geometry extraction failed", getattr(win, "GlobalId", "?"))
 
         # Extract spaces
         for space in ifc.by_type("IfcSpace"):
@@ -137,8 +146,8 @@ def parse_ifc_geometry(file_bytes: bytes, filename: str) -> dict:
                     "floor": get_element_floor(space, storey_map),
                     "area": get_space_area(space),
                 })
-            except:
-                pass
+            except Exception:
+                logger.debug("Skipped space %s: geometry extraction failed", getattr(space, "GlobalId", "?"))
 
         # Materials
         materials = set()
@@ -164,8 +173,130 @@ def parse_ifc_geometry(file_bytes: bytes, filename: str) -> dict:
         return {"success": False, "error": str(e), "filename": filename}
 
 
+def _extract_geom_meshes(ifc) -> list:
+    """Extract real triangle meshes via ifcopenshell.geom.create_shape"""
+    type_colors = {
+        "IfcWall": "#334155", "IfcWallStandardCase": "#334155",
+        "IfcSlab": "#1e293b", "IfcColumn": "#475569", "IfcBeam": "#64748b",
+        "IfcDoor": "#f59e0b", "IfcWindow": "#3b82f6",
+        "IfcRoof": "#0f172a", "IfcStair": "#94a3b8",
+    }
+    element_types = [
+        "IfcWall", "IfcWallStandardCase", "IfcSlab",
+        "IfcColumn", "IfcBeam", "IfcDoor", "IfcWindow", "IfcRoof", "IfcStair",
+    ]
+
+    settings = ifcopenshell.geom.settings()
+    try:
+        settings.set(settings.USE_WORLD_COORDS, True)
+    except Exception:
+        pass
+    try:
+        settings.set(settings.WELD_VERTICES, True)
+    except Exception:
+        pass
+
+    meshes = []
+    for element_type in element_types:
+        for element in ifc.by_type(element_type)[:50]:
+            try:
+                shape = ifcopenshell.geom.create_shape(settings, element)
+                geo = shape.geometry
+                verts = list(geo.verts)
+                faces = list(geo.faces)
+                if not verts or not faces:
+                    continue
+                # Reorder [x, z, y] — converts IFC (East, North, Up) → Three.js (East, Up, South)
+                vertices = [
+                    [round(verts[i], 4), round(verts[i + 2], 4), round(verts[i + 1], 4)]
+                    for i in range(0, len(verts), 3)
+                ]
+                floor = 0
+                try:
+                    for rel in element.ContainedInStructure:
+                        storey = rel.RelatingStructure
+                        if storey.is_a("IfcBuildingStorey"):
+                            floor = max(0, int(float(storey.Elevation or 0) / 3500))
+                except Exception:
+                    pass
+                meshes.append({
+                    "type": element_type.replace("IfcWallStandardCase", "IfcWall"),
+                    "id": element.GlobalId,
+                    "name": element.Name or element_type,
+                    "vertices": vertices,
+                    "faces": faces,
+                    "color": type_colors.get(element_type, "#334155"),
+                    "floor": floor,
+                    "transparent": element_type == "IfcWindow",
+                    "opacity": 0.4 if element_type == "IfcWindow" else 1.0,
+                })
+            except Exception:
+                logger.debug("Skipped %s %s: mesh extraction failed", element_type, getattr(element, "GlobalId", "?"))
+                continue
+    return meshes
+
+
+def _box_mesh(px: float, py: float, pz: float, w: float, h: float, d: float):
+    """Build a box (8 verts, 12 triangles) centered on x/z, sitting on y"""
+    hw, hd = max(w, 0.05) / 2, max(d, 0.05) / 2
+    h = max(h, 0.05)
+    v = [
+        [px - hw, py,     pz - hd],
+        [px + hw, py,     pz - hd],
+        [px + hw, py + h, pz - hd],
+        [px - hw, py + h, pz - hd],
+        [px - hw, py,     pz + hd],
+        [px + hw, py,     pz + hd],
+        [px + hw, py + h, pz + hd],
+        [px - hw, py + h, pz + hd],
+    ]
+    f = [0,1,2, 0,2,3, 5,4,7, 5,7,6, 4,0,3, 4,3,7, 1,5,6, 1,6,2, 4,5,1, 4,1,0, 3,2,6, 3,6,7]
+    return v, f
+
+
+def _extract_placement_meshes(ifc) -> list:
+    """Fallback: approximate box meshes from ObjectPlacement when geom fails"""
+    type_colors = {
+        "IfcWall": "#334155", "IfcWallStandardCase": "#334155",
+        "IfcSlab": "#1e293b", "IfcColumn": "#475569", "IfcBeam": "#64748b",
+        "IfcDoor": "#f59e0b", "IfcWindow": "#3b82f6", "IfcRoof": "#0f172a",
+    }
+    storey_map: dict = {}
+    for storey in ifc.by_type("IfcBuildingStorey"):
+        elevation = float(storey.Elevation) if storey.Elevation else 0.0
+        storey_map[storey.GlobalId] = elevation
+
+    meshes = []
+    for element_type in list(type_colors.keys()):
+        for element in ifc.by_type(element_type)[:50]:
+            try:
+                geom = extract_element_geometry(element)
+                if not geom:
+                    continue
+                px, py, pz = geom["position"]
+                w, h, d = geom["dimensions"]
+                verts, faces = _box_mesh(px, py, pz, w, h, d)
+                floor = get_element_floor(element, storey_map)
+                meshes.append({
+                    "type": element_type.replace("IfcWallStandardCase", "IfcWall"),
+                    "id": element.GlobalId,
+                    "name": element.Name or element_type,
+                    "vertices": verts,
+                    "faces": faces,
+                    "color": type_colors.get(element_type, "#334155"),
+                    "floor": floor,
+                    "transparent": element_type == "IfcWindow",
+                    "opacity": 0.4 if element_type == "IfcWindow" else 1.0,
+                })
+            except Exception:
+                continue
+    return meshes
+
+
 def parse_ifc_for_3d(file_bytes: bytes, filename: str) -> dict:
-    """Extract real triangle mesh geometry from IFC for Three.js rendering"""
+    """Extract triangle mesh geometry from IFC for Three.js rendering"""
+    if not HAS_IFC:
+        return {"success": False, "error": "ifcopenshell not installed on server"}
     try:
         with tempfile.NamedTemporaryFile(suffix=".ifc", delete=False) as tmp:
             tmp.write(file_bytes)
@@ -174,76 +305,11 @@ def parse_ifc_for_3d(file_bytes: bytes, filename: str) -> dict:
         ifc = ifcopenshell.open(tmp_path)
         os.unlink(tmp_path)
 
-        settings = ifcopenshell.geom.settings()
-        settings.set(settings.USE_WORLD_COORDS, True)
-        settings.set(settings.WELD_VERTICES, True)
+        # Try full triangle-mesh extraction first; fall back to box approximations
+        meshes = _extract_geom_meshes(ifc)
+        if not meshes:
+            meshes = _extract_placement_meshes(ifc)
 
-        type_colors = {
-            "IfcWall": "#334155",
-            "IfcWallStandardCase": "#334155",
-            "IfcSlab": "#1e293b",
-            "IfcColumn": "#475569",
-            "IfcBeam": "#64748b",
-            "IfcDoor": "#f59e0b",
-            "IfcWindow": "#3b82f6",
-            "IfcRoof": "#0f172a",
-            "IfcStair": "#94a3b8",
-        }
-
-        element_types = [
-            "IfcWall", "IfcWallStandardCase", "IfcSlab",
-            "IfcColumn", "IfcBeam", "IfcDoor", "IfcWindow",
-            "IfcRoof", "IfcStair",
-        ]
-
-        meshes = []
-        for element_type in element_types:
-            elements = ifc.by_type(element_type)
-            for element in elements[:50]:
-                try:
-                    shape = ifcopenshell.geom.create_shape(settings, element)
-                    geo = shape.geometry
-                    verts = list(geo.verts)
-                    faces = list(geo.faces)
-
-                    if not verts or not faces:
-                        continue
-
-                    # Convert vertices - swap Y/Z for Three.js
-                    vertices = []
-                    for i in range(0, len(verts), 3):
-                        vertices.append([
-                            round(verts[i], 4),
-                            round(verts[i + 2], 4),
-                            round(verts[i + 1], 4),
-                        ])
-
-                    # Get floor number
-                    floor = 0
-                    try:
-                        for rel in element.ContainedInStructure:
-                            storey = rel.RelatingStructure
-                            if storey.is_a("IfcBuildingStorey"):
-                                elev = float(storey.Elevation or 0)
-                                floor = max(0, int(elev / 3500))
-                    except:
-                        pass
-
-                    meshes.append({
-                        "type": element_type.replace("IfcWallStandardCase", "IfcWall"),
-                        "id": element.GlobalId,
-                        "name": element.Name or element_type,
-                        "vertices": vertices,
-                        "faces": faces,
-                        "color": type_colors.get(element_type, "#334155"),
-                        "floor": floor,
-                        "transparent": element_type in ["IfcWindow"],
-                        "opacity": 0.4 if element_type == "IfcWindow" else 1.0,
-                    })
-                except:
-                    continue
-
-        # Get storeys
         storeys = []
         for storey in ifc.by_type("IfcBuildingStorey"):
             elevation = float(storey.Elevation or 0)
@@ -302,12 +368,15 @@ def extract_element_geometry(element) -> Optional[dict]:
                     if hasattr(item, "ZDim") and item.ZDim:
                         dimensions[2] = float(item.ZDim)
 
+        # IFC uses (X, Y, Z) = (East, North, Up); Three.js uses (X, Y, Z) = (East, Up, South).
+        # Swap IFC-Z (elevation) into Three.js-Y, and IFC-Y into Three.js-Z with sign flip.
         return {
             "position": [round(x, 3), round(z, 3), round(y, 3)],
             "dimensions": [round(d, 3) for d in dimensions],
             "rotation": round(rotation, 3),
         }
-    except:
+    except Exception:
+        logger.debug("extract_element_geometry failed for element %s", getattr(element, "GlobalId", "?"))
         return None
 
 
@@ -318,8 +387,9 @@ def get_element_floor(element, storey_map: dict) -> int:
             storey = rel.RelatingStructure
             if storey.GlobalId in storey_map:
                 elevation = storey_map[storey.GlobalId]
+                # 3500 mm assumed storey height — works for typical commercial buildings
                 return max(0, int(elevation / 3500))
-    except:
+    except Exception:
         pass
     return 0
 
@@ -330,7 +400,7 @@ def get_element_material(element) -> str:
         mats = ifcopenshell.util.element.get_materials(element)
         if mats:
             return mats[0].Name or "Unknown"
-    except:
+    except Exception:
         pass
     return "Concrete"
 
@@ -345,7 +415,7 @@ def get_space_area(space) -> float:
                     for qty in pset.Quantities:
                         if "Area" in qty.Name:
                             return round(float(qty.AreaValue), 2)
-    except:
+    except Exception:
         pass
     return 0.0
 
@@ -374,8 +444,8 @@ def detect_clashes(file_bytes: bytes) -> dict:
                         "severity": "Medium",
                         "description": f"Wall '{wall.Name}' has no material assigned"
                     })
-            except:
-                pass
+            except Exception:
+                logger.debug("Material check failed for wall %s", getattr(wall, "GlobalId", "?"))
 
         doors = ifc.by_type("IfcDoor")
         windows = ifc.by_type("IfcWindow")
@@ -391,8 +461,8 @@ def detect_clashes(file_bytes: bytes) -> dict:
                         "severity": "Low",
                         "description": f"Column '{col.Name}' has no material assigned"
                     })
-            except:
-                pass
+            except Exception:
+                logger.debug("Material check failed for column %s", getattr(col, "GlobalId", "?"))
 
         return {
             "success": True,

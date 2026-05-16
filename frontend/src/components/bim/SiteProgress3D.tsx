@@ -59,7 +59,7 @@ export default function SiteProgress3D() {
 
   const fetchProjects = async () => {
     try {
-      const res = await axios.get("http://localhost:8000/api/v1/projects/");
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       setProjects(res.data.projects || []);
       if (res.data.projects?.length > 0) {
         setProjectId(res.data.projects[0].id);
@@ -72,7 +72,7 @@ export default function SiteProgress3D() {
   const fetchTasks = async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/projects/${projectId}/schedule`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule`);
       if (res.data.tasks?.length > 0) {
         setTasks(res.data.tasks);
       } else {

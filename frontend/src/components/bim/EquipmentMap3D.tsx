@@ -70,7 +70,7 @@ export default function EquipmentMap3D() {
 
   const fetchProjects = async () => {
     try {
-      const res = await axios.get("http://localhost:8000/api/v1/projects/");
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       setProjects(res.data.projects || []);
       if (res.data.projects?.length > 0) setProjectId(res.data.projects[0].id);
     } catch {
@@ -81,7 +81,7 @@ export default function EquipmentMap3D() {
   const fetchEquipment = async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/projects/${projectId}/equipment`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/equipment`);
       if (res.data.equipment?.length > 0) setEquipment(res.data.equipment);
       else setEquipment(fallbackEquipment);
     } catch {

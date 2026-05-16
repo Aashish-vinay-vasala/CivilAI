@@ -1,0 +1,44 @@
+# Requires: GKE Ingress controller (enabled by default) + cert-manager for TLS
+# Or use GCP-managed SSL cert by annotating with networking.gke.io/managed-certificates
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: civilai-ingress
+  namespace: civilai
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    networking.gke.io/managed-certificates: "civilai-ssl"
+    kubernetes.io/ingress.global-static-ip-name: "civilai-ip"
+spec:
+  rules:
+    - host: civilai.YOUR_DOMAIN.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+    - host: api.civilai.YOUR_DOMAIN.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 80
+---
+# GCP-managed SSL certificate (auto-provisions Let's Encrypt equiv)
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: civilai-ssl
+  namespace: civilai
+spec:
+  domains:
+    - civilai.YOUR_DOMAIN.com
+    - api.civilai.YOUR_DOMAIN.com

@@ -58,7 +58,7 @@ export default function ConstructionPage() {
 
   const fetchProjects = async () => {
     try {
-      const res = await axios.get("http://localhost:8000/api/v1/projects/");
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       const p = res.data.projects || [];
       setProjects(p);
       if (p.length > 0) setProjectId(p[0].id);
@@ -69,22 +69,22 @@ export default function ConstructionPage() {
     setLoading(true);
     try {
       if (activeTab === "punch") {
-        const res = await axios.get(`http://localhost:8000/api/v1/construction/punch-list/${projectId}`);
+        const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/punch-list/${projectId}`);
         setPunchItems(res.data.items || []);
       } else if (activeTab === "rfi") {
-        const res = await axios.get(`http://localhost:8000/api/v1/construction/rfis/${projectId}`);
+        const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/rfis/${projectId}`);
         setRfis(res.data.rfis || []);
       } else if (activeTab === "submittals") {
-        const res = await axios.get(`http://localhost:8000/api/v1/construction/submittals/${projectId}`);
+        const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/submittals/${projectId}`);
         setSubmittals(res.data.submittals || []);
       } else if (activeTab === "daily") {
-        const res = await axios.get(`http://localhost:8000/api/v1/construction/daily-reports/${projectId}`);
+        const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/daily-reports/${projectId}`);
         setDailyReports(res.data.reports || []);
       } else if (activeTab === "meetings") {
-        const res = await axios.get(`http://localhost:8000/api/v1/construction/meetings/${projectId}`);
+        const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/meetings/${projectId}`);
         setMeetings(res.data.meetings || []);
       } else if (activeTab === "costcodes") {
-        const res = await axios.get(`http://localhost:8000/api/v1/construction/cost-codes/${projectId}`);
+        const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/cost-codes/${projectId}`);
         setCostCodes(res.data.cost_codes || []);
       }
     } catch (err) { console.error(err); }
@@ -96,24 +96,24 @@ export default function ConstructionPage() {
     setAiSummary("");
     try {
       if (activeTab === "punch") {
-        await axios.post("http://localhost:8000/api/v1/construction/punch-list", { ...punchForm, project_id: projectId });
+        await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/punch-list`, { ...punchForm, project_id: projectId });
         setPunchForm({ item: "", location: "", assigned_to: "", priority: "medium", due_date: "", description: "", category: "" });
       } else if (activeTab === "rfi") {
-        await axios.post("http://localhost:8000/api/v1/construction/rfis", { ...rfiForm, project_id: projectId });
+        await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/rfis`, { ...rfiForm, project_id: projectId });
         setRfiForm({ subject: "", question: "", submitted_by: "", assigned_to: "", priority: "medium", due_date: "" });
       } else if (activeTab === "submittals") {
-        await axios.post("http://localhost:8000/api/v1/construction/submittals", { ...submittalForm, project_id: projectId });
+        await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/submittals`, { ...submittalForm, project_id: projectId });
         setSubmittalForm({ title: "", type: "Shop Drawing", submitted_by: "", reviewed_by: "", submitted_date: "", description: "" });
       } else if (activeTab === "daily") {
-        const res = await axios.post("http://localhost:8000/api/v1/construction/daily-reports", { ...dailyForm, project_id: projectId, workers_on_site: parseInt(dailyForm.workers_on_site) || 0, temperature: parseFloat(dailyForm.temperature) || null });
+        const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/daily-reports`, { ...dailyForm, project_id: projectId, workers_on_site: parseInt(dailyForm.workers_on_site) || 0, temperature: parseFloat(dailyForm.temperature) || null });
         if (res.data.ai_summary) setAiSummary(res.data.ai_summary);
         setDailyForm({ report_date: new Date().toISOString().split("T")[0], weather: "", temperature: "", workers_on_site: "", work_completed: "", issues: "", materials_used: "", equipment_used: "", created_by: "" });
       } else if (activeTab === "meetings") {
-        const res = await axios.post("http://localhost:8000/api/v1/construction/meetings", { ...meetingForm, project_id: projectId });
+        const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/meetings`, { ...meetingForm, project_id: projectId });
         if (res.data.ai_summary) setAiSummary(res.data.ai_summary);
         setMeetingForm({ meeting_date: "", meeting_type: "Progress Meeting", attendees: "", location: "", agenda: "", discussion: "", action_items: "", created_by: "" });
       } else if (activeTab === "costcodes") {
-        await axios.post("http://localhost:8000/api/v1/construction/cost-codes", { ...costCodeForm, project_id: projectId, budgeted_amount: parseFloat(costCodeForm.budgeted_amount) || 0, actual_amount: parseFloat(costCodeForm.actual_amount) || 0 });
+        await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/cost-codes`, { ...costCodeForm, project_id: projectId, budgeted_amount: parseFloat(costCodeForm.budgeted_amount) || 0, actual_amount: parseFloat(costCodeForm.actual_amount) || 0 });
         setCostCodeForm({ code: "", description: "", category: "", budgeted_amount: "", actual_amount: "", unit: "" });
       }
       toast.success("Saved successfully!");
@@ -127,9 +127,9 @@ export default function ConstructionPage() {
   const handleClose = async (id: string, type: string) => {
     try {
       if (type === "punch") {
-        await axios.patch(`http://localhost:8000/api/v1/construction/punch-list/${id}`, { status: "closed", closed_date: new Date().toISOString().split("T")[0] });
+        await axios.patch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/punch-list/${id}`, { status: "closed", closed_date: new Date().toISOString().split("T")[0] });
       } else if (type === "rfi") {
-        await axios.patch(`http://localhost:8000/api/v1/construction/rfis/${id}`, { status: "closed", responded_date: new Date().toISOString().split("T")[0] });
+        await axios.patch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/rfis/${id}`, { status: "closed", responded_date: new Date().toISOString().split("T")[0] });
       }
       toast.success("Closed!");
       fetchData();

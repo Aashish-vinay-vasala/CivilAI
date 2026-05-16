@@ -33,6 +33,13 @@ import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const ANALYTICS_TABS = [
+  { href: "/analytics", label: "Analytics" },
+  { href: "/anomaly",   label: "Anomaly Detection" },
+  { href: "/mlops",     label: "MLOps" },
+];
 
 const fallbackModels = [
   { name: "Cost Overrun", accuracy: 83, f1: 0.827, auc: 0.938, status: "FINISHED", type: "XGBoost" },
@@ -147,6 +154,7 @@ export default function MLOpsPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={ANALYTICS_TABS} />
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}

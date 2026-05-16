@@ -27,11 +27,11 @@ async def analyze_cost_report_route(
     try:
         file_bytes = await file.read()
         doc = process_document(file_bytes, file.filename)
-        text = doc["extracted_text"]
+        text = (doc["extracted_text"] or "").strip()
         if not text:
             raise HTTPException(
                 status_code=400,
-                detail="Could not extract text"
+                detail="Could not extract text from the uploaded file. Ensure it is a readable PDF, Excel, or Word document."
             )
         result = analyze_cost_report(text)
         return {

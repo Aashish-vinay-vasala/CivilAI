@@ -29,6 +29,13 @@ import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const WORKFORCE_MODULE_TABS = [
+  { href: "/workforce", label: "Workforce" },
+  { href: "/equipment", label: "Equipment" },
+  { href: "/vendors", label: "Vendors" },
+];
 
 const vendors = [
   { name: "BuildCo Ltd", type: "Main Contractor", score: 88, delivery: 92, quality: 85, safety: 95, status: "Preferred" },
@@ -69,7 +76,7 @@ export default function VendorsPage() {
     setResult("");
     try {
       const response = await axios.post(
-        "http://localhost:8000/api/v1/vendors/score",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/vendors/score`,
         form
       );
       setResult(response.data.analysis);
@@ -103,6 +110,7 @@ export default function VendorsPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={WORKFORCE_MODULE_TABS} />
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}

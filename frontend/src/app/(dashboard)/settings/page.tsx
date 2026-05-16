@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import {
-  Settings,
   User,
   Bell,
   Shield,
@@ -13,19 +12,30 @@ import {
   Save,
   Loader2,
   CheckCircle,
+  Users,
+  Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ActivityLog from "@/components/activity/ActivityLog";
+import { useRoleStore, ROLE_LABELS, ROLE_COLORS, UserRole, ROLE_PERMISSIONS } from "@/lib/stores/roleStore";
+import { useActivityStore } from "@/lib/stores/activityStore";
+import dynamic from "next/dynamic";
+
+const ScheduledReportsPage = dynamic(() => import("../scheduled-reports/page"), { ssr: false });
 
 const tabs = [
-  { id: "profile", label: "Profile", icon: User },
-  { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "security", label: "Security", icon: Shield },
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "integrations", label: "Integrations", icon: Database },
-  { id: "api", label: "API Keys", icon: Key },
+  { id: "profile",          label: "Profile",            icon: User },
+  { id: "roles",            label: "Roles",              icon: Users },
+  { id: "notifications",    label: "Notifications",      icon: Bell },
+  { id: "scheduled-reports",label: "Scheduled Reports",  icon: Bell },
+  { id: "activity",         label: "Activity Log",       icon: Activity },
+  { id: "security",         label: "Security",           icon: Shield },
+  { id: "appearance",       label: "Appearance",         icon: Palette },
+  { id: "integrations",     label: "Integrations",       icon: Database },
+  { id: "api",              label: "API Keys",           icon: Key },
 ];
 
 const integrations = [
@@ -37,10 +47,14 @@ const integrations = [
   { name: "QuickBooks", desc: "Accounting", connected: false, color: "bg-gray-500/10 text-gray-400" },
 ];
 
+const ALL_ROLES: UserRole[] = ["admin", "pm", "engineer", "viewer"];
+
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("profile");
   const [saving, setSaving] = useState(false);
   const { theme, setTheme } = useTheme();
+  const { role, setRole } = useRoleStore();
+  const logActivity = useActivityStore((s) => s.log);
   const [profile, setProfile] = useState({
     name: "CivilAI Admin",
     email: "admin@civilai.com",
@@ -48,72 +62,65 @@ export default function SettingsPage() {
     company: "CivilAI Construction",
     phone: "+1 (555) 000-0000",
   });
+  const [notifToggles, setNotifToggles] = useState([true, false, true, false, true, false]);
 
   const handleSave = async () => {
     setSaving(true);
     setTimeout(() => {
       setSaving(false);
       toast.success("Settings saved!");
+      logActivity("Saved settings", "Settings", activeTab);
     }, 1000);
   };
 
   return (
     <div className="space-y-6">
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-3xl font-bold text-foreground">Settings</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Manage your account & preferences
-        </p>
+        <p className="text-muted-foreground text-sm mt-1">Manage your account & preferences</p>
       </motion.div>
 
-      <div className="flex gap-6">
+      <div className="flex flex-col sm:flex-row gap-6">
         {/* Sidebar Tabs */}
-        <motion.div
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="w-48 flex-shrink-0"
-        >
-          <div className="bg-card border border-border rounded-2xl p-2 space-y-1">
+        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="w-full sm:w-48 shrink-0">
+          <div className="bg-card border border-border rounded-2xl p-2 flex sm:flex-col flex-row flex-wrap gap-1">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-colors ${
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-colors whitespace-nowrap ${
                   activeTab === tab.id
                     ? "bg-blue-500/10 text-blue-400 font-medium"
                     : "text-muted-foreground hover:text-foreground hover:bg-secondary"
                 }`}
               >
-                <tab.icon className="w-4 h-4" />
-                {tab.label}
+                <tab.icon className="w-4 h-4 shrink-0" />
+                <span className="hidden sm:inline">{tab.label}</span>
               </button>
             ))}
           </div>
         </motion.div>
 
         {/* Content */}
-        <motion.div
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="flex-1"
-        >
+        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="flex-1 min-w-0">
+
           {/* Profile */}
           {activeTab === "profile" && (
             <div className="bg-card border border-border rounded-2xl p-6 space-y-6">
               <h2 className="font-semibold text-foreground">Profile Settings</h2>
               <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-2xl gradient-blue flex items-center justify-center text-white text-xl font-bold">
+                <div className="w-16 h-16 rounded-2xl gradient-blue flex items-center justify-center text-white text-xl font-bold shrink-0">
                   CA
                 </div>
                 <div>
                   <p className="font-medium text-foreground">{profile.name}</p>
                   <p className="text-sm text-muted-foreground">{profile.role}</p>
+                  <span className={`inline-flex items-center mt-1 text-xs px-2 py-0.5 rounded-full border font-medium ${ROLE_COLORS[role]}`}>
+                    {ROLE_LABELS[role]}
+                  </span>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
                   { label: "Full Name", key: "name" },
                   { label: "Email", key: "email" },
@@ -138,6 +145,46 @@ export default function SettingsPage() {
             </div>
           )}
 
+          {/* Roles */}
+          {activeTab === "roles" && (
+            <div className="bg-card border border-border rounded-2xl p-6 space-y-6">
+              <div>
+                <h2 className="font-semibold text-foreground">User Role</h2>
+                <p className="text-sm text-muted-foreground mt-1">Select your role to configure permissions</p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {ALL_ROLES.map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => { setRole(r); toast.success(`Role changed to ${ROLE_LABELS[r]}`); }}
+                    className={`p-4 rounded-xl border text-left transition-all ${
+                      role === r
+                        ? "border-blue-500 bg-blue-500/5"
+                        : "border-border hover:border-border/80 hover:bg-secondary/50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${ROLE_COLORS[r]}`}>
+                        {ROLE_LABELS[r]}
+                      </span>
+                      {role === r && <CheckCircle className="w-4 h-4 text-blue-400" />}
+                    </div>
+                    <div className="mt-2 space-y-1">
+                      {Object.entries(ROLE_PERMISSIONS[r]).map(([k, v]) => (
+                        <div key={k} className="flex items-center gap-2">
+                          <div className={`w-1.5 h-1.5 rounded-full ${v ? "bg-emerald-400" : "bg-gray-600"}`} />
+                          <span className="text-xs text-muted-foreground capitalize">
+                            {k.replace(/([A-Z])/g, " $1").replace("can ", "")}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Notifications */}
           {activeTab === "notifications" && (
             <div className="bg-card border border-border rounded-2xl p-6 space-y-6">
@@ -157,12 +204,13 @@ export default function SettingsPage() {
                       <p className="text-xs text-muted-foreground mt-0.5">{item.desc}</p>
                     </div>
                     <button
-                      className={`w-10 h-6 rounded-full transition-colors ${
-                        i % 2 === 0 ? "bg-blue-500" : "bg-secondary border border-border"
+                      onClick={() => setNotifToggles((t) => t.map((v, j) => j === i ? !v : v))}
+                      className={`w-10 h-6 rounded-full transition-colors relative ${
+                        notifToggles[i] ? "bg-blue-500" : "bg-secondary border border-border"
                       }`}
                     >
-                      <div className={`w-4 h-4 rounded-full bg-white mx-auto transition-transform ${
-                        i % 2 === 0 ? "translate-x-2" : "-translate-x-2"
+                      <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                        notifToggles[i] ? "translate-x-5" : "translate-x-1"
                       }`} />
                     </button>
                   </div>
@@ -170,6 +218,10 @@ export default function SettingsPage() {
               </div>
             </div>
           )}
+
+          {/* Activity Log */}
+          {activeTab === "scheduled-reports" && <ScheduledReportsPage />}
+          {activeTab === "activity" && <ActivityLog />}
 
           {/* Security */}
           {activeTab === "security" && (
@@ -289,7 +341,7 @@ export default function SettingsPage() {
                   <div key={i} className="p-4 bg-secondary/40 rounded-xl">
                     <p className="text-xs text-muted-foreground mb-2">{key.name}</p>
                     <div className="flex items-center gap-2">
-                      <code className="flex-1 text-sm text-foreground font-mono bg-secondary px-3 py-2 rounded-lg">
+                      <code className="flex-1 text-sm text-foreground font-mono bg-secondary px-3 py-2 rounded-lg truncate">
                         {key.value}
                       </code>
                       <Button variant="outline" size="sm">Edit</Button>
@@ -305,10 +357,7 @@ export default function SettingsPage() {
       <ModuleChat
         context="Settings"
         placeholder="Ask about settings, integrations, API..."
-        pageSummaryData={{
-          activeTab,
-          integrations: integrations.filter(i => i.connected).map(i => i.name),
-        }}
+        pageSummaryData={{ activeTab, integrations: integrations.filter(i => i.connected).map(i => i.name) }}
       />
     </div>
   );

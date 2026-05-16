@@ -1,5 +1,8 @@
+import logging
 from supabase import create_client, Client
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 supabase: Client = create_client(
     settings.SUPABASE_URL,
@@ -38,7 +41,7 @@ def get_projects():
             })
         return normalized
     except Exception as e:
-        print(f"get_projects error: {e}")
+        logger.exception("get_projects failed: %s", e)
         return []
 
 def get_project_by_id(project_id: str):

@@ -10,6 +10,14 @@ import {
 } from "lucide-react";
 import WeatherWidget from "@/components/shared/WeatherWidget";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const SITE_TABS = [
+  { href: "/bim", label: "BIM & CAD" },
+  { href: "/digital-twin", label: "Digital Twin" },
+  { href: "/weather", label: "Weather" },
+  { href: "/green", label: "Green Monitor" },
+];
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LineChart, Line, AreaChart, Area,
@@ -213,6 +221,7 @@ export default function WeatherPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={SITE_TABS} />
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between flex-wrap gap-3">

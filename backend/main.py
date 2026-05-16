@@ -1,17 +1,18 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.api.v1.routes import copilot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction
+from app.api.v1.routes import copilot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction, transcribe, email_notifications, preconstruction, financials
 app = FastAPI(
     title="CivilAI API",
     description="AI-Powered Construction Management Platform",
     version="1.0.0"
 )
 
+_origins = settings.get_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.get_origins(),
-    allow_credentials=True,
+    allow_origins=_origins,
+    allow_credentials="*" not in _origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -130,6 +131,30 @@ app.include_router(
     tags=["BIM & CAD"]
 )
 
+app.include_router(
+    transcribe.router,
+    prefix="/api/v1/transcribe",
+    tags=["Transcription"]
+)
+
+app.include_router(
+    email_notifications.router,
+    prefix="/api/v1/email",
+    tags=["Email Notifications"]
+)
+
+app.include_router(
+    preconstruction.router,
+    prefix="/api/v1/preconstruction",
+    tags=["Pre-Construction"]
+)
+
+app.include_router(
+    financials.router,
+    prefix="/api/v1/financials",
+    tags=["Financial Budget"]
+)
+
 @app.get("/")
 def read_root():
     return {
@@ -148,4 +173,5 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import os
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

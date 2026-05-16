@@ -1,7 +1,12 @@
+import logging
 from supabase import create_client
 from app.config import settings
 import uuid
 import os
+
+logger = logging.getLogger(__name__)
+
+TEXT_TRUNCATION_LIMIT = 5000
 
 supabase = create_client(
     settings.SUPABASE_URL,
@@ -21,6 +26,8 @@ def upload_document(file_bytes: bytes, filename: str, bucket: str = "documents")
         )
 
         url = supabase.storage.from_(bucket).get_public_url(unique_name)
+        if not url:
+            raise ValueError(f"get_public_url returned empty for {unique_name}")
 
         return {
             "success": True,
@@ -37,6 +44,7 @@ def get_document(filename: str, bucket: str = "documents") -> bytes:
         response = supabase.storage.from_(bucket).download(filename)
         return response
     except Exception as e:
+        logger.exception("get_document failed for %s/%s: %s", bucket, filename, e)
         return None
 
 def list_documents(bucket: str = "documents") -> list:
@@ -44,6 +52,7 @@ def list_documents(bucket: str = "documents") -> list:
         response = supabase.storage.from_(bucket).list()
         return response
     except Exception as e:
+        logger.exception("list_documents failed for bucket %s: %s", bucket, e)
         return []
 
 def delete_document(filename: str, bucket: str = "documents") -> bool:
@@ -51,6 +60,7 @@ def delete_document(filename: str, bucket: str = "documents") -> bool:
         supabase.storage.from_(bucket).remove([filename])
         return True
     except Exception as e:
+        logger.exception("delete_document failed for %s/%s: %s", bucket, filename, e)
         return False
 
 def get_content_type(ext: str) -> str:
@@ -82,13 +92,23 @@ def save_document_to_db(
     doc_type: str = "general"
 ) -> dict:
     try:
+        if extracted_text and len(extracted_text) > TEXT_TRUNCATION_LIMIT:
+            logger.warning(
+                "save_document_to_db: extracted_text truncated from %d to %d chars for %s",
+                len(extracted_text), TEXT_TRUNCATION_LIMIT, original_name,
+            )
+        if analysis and len(analysis) > TEXT_TRUNCATION_LIMIT:
+            logger.warning(
+                "save_document_to_db: analysis truncated from %d to %d chars for %s",
+                len(analysis), TEXT_TRUNCATION_LIMIT, original_name,
+            )
         data = {
             "filename": filename,
             "original_name": original_name,
             "bucket": bucket,
             "doc_type": doc_type,
-            "extracted_text": extracted_text[:5000] if extracted_text else "",
-            "analysis": analysis[:5000] if analysis else "",
+            "extracted_text": (extracted_text or "")[:TEXT_TRUNCATION_LIMIT],
+            "analysis": (analysis or "")[:TEXT_TRUNCATION_LIMIT],
             "status": "processed",
         }
         if project_id:

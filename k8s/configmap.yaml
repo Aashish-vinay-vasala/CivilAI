@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: civilai-config
+  namespace: civilai
+data:
+  # Backend
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "info"
+  CORS_ORIGINS: "http://34.172.90.171,http://localhost:3000"
+
+  # Frontend (these are public — not secrets)
+  NEXT_PUBLIC_API_URL: "http://34.172.90.171"

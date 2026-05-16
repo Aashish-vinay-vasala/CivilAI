@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from fastapi import Query
 from app.services.ml_service import (
     predict_cost_overrun,
     predict_delay,
@@ -11,6 +12,8 @@ from app.services.ml_service import (
     get_delay_stats,
     get_workforce_stats,
     get_equipment_stats,
+    get_performance_trend,
+    get_auto_cost_overrun,
 )
 
 router = APIRouter()
@@ -127,5 +130,21 @@ async def workforce_stats():
 async def equipment_stats():
     try:
         return await get_equipment_stats()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/performance-trend")
+async def performance_trend(months: int = Query(default=6, ge=1, le=24)):
+    try:
+        return await get_performance_trend(months)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cost-overrun-auto")
+async def cost_overrun_auto():
+    try:
+        return await get_auto_cost_overrun()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

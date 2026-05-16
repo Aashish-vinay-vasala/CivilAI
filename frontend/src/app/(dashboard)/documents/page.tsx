@@ -27,7 +27,15 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const DOCS_TABS = [
+  { href: "/documents",  label: "Documents" },
+  { href: "/contracts",  label: "Contracts" },
+  { href: "/compliance", label: "Compliance" },
+];
 
 const docTypeData = [
   { name: "Contracts", value: 28, color: "#3b82f6" },
@@ -59,12 +67,26 @@ const quickQuestions = [
 
 const categories = ["All", "Contract", "Safety", "Drawing", "Permit", "Invoice", "BOQ", "General"];
 
+const DOC_TYPE_LABEL: Record<string, string> = {
+  contract:  "Contract",
+  safety:    "Safety",
+  drawing:   "Drawing",
+  blueprint: "Drawing",  // blueprints appear under Drawing tab
+  permit:    "Permit",
+  invoice:   "Invoice",
+  boq:       "BOQ",
+  general:   "General",
+};
+
 interface DocMessage {
   role: "user" | "assistant";
   content: string;
 }
 
+interface RagMessage { role: "user" | "assistant"; content: string; sources?: { name: string; type: string }[] }
+
 export default function DocumentsPage() {
+  const { triggerRefresh } = useDataRefreshStore();
   const [loading, setLoading] = useState(false);
   const [extractedText, setExtractedText] = useState("");
   const [analysis, setAnalysis] = useState("");
@@ -80,6 +102,10 @@ export default function DocumentsPage() {
   const [realDocs, setRealDocs] = useState<any[]>([]);
   const [docsLoading, setDocsLoading] = useState(true);
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  const ragBottomRef = useRef<HTMLDivElement>(null);
+  const [ragMessages, setRagMessages] = useState<RagMessage[]>([]);
+  const [ragInput, setRagInput] = useState("");
+  const [ragLoading, setRagLoading] = useState(false);
 
   useEffect(() => {
     fetchDocs();
@@ -87,7 +113,7 @@ export default function DocumentsPage() {
 
   const fetchDocs = async () => {
     try {
-      const response = await axios.get("http://localhost:8000/api/v1/documents/list");
+      const response = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/documents/list`);
       if (response.data.documents?.length > 0) {
         setRealDocs(response.data.documents);
       }
@@ -109,7 +135,7 @@ export default function DocumentsPage() {
       formData.append("file", file);
       if (prompt) formData.append("prompt", prompt);
       const response = await axios.post(
-        "http://localhost:8000/api/v1/documents/upload",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/documents/upload`,
         formData
       );
       setExtractedText(response.data.extracted_text || "");
@@ -120,7 +146,8 @@ export default function DocumentsPage() {
         content: `✅ I've processed "${file.name}" and saved it to the database! I can see the full content and answer any questions about it. What would you like to know?`,
       }]);
       toast.success("Document processed & saved!");
-      fetchDocs(); // Refresh document list
+      triggerRefresh("documents");
+      fetchDocs();
     } catch {
       toast.error("Failed to process document");
     } finally {
@@ -137,7 +164,7 @@ export default function DocumentsPage() {
     setDocChatLoading(true);
     try {
       const response = await axios.post(
-        "http://localhost:8000/api/v1/copilot/chat",
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/copilot/chat`,
         {
           message: `You are analyzing a construction document. Document content: "${extractedText.slice(0, 3000)}"\n\nUser question: ${msg}\n\nAnswer specifically based on the document content.`,
           chat_history: [],
@@ -156,6 +183,22 @@ export default function DocumentsPage() {
     } finally {
       setDocChatLoading(false);
     }
+  };
+
+  const sendRagMessage = async (text?: string) => {
+    const msg = text || ragInput.trim();
+    if (!msg || ragLoading) return;
+    setRagInput("");
+    const next: RagMessage[] = [...ragMessages, { role: "user", content: msg }];
+    setRagMessages(next);
+    setRagLoading(true);
+    try {
+      const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/documents/ask`, { question: msg });
+      setRagMessages([...next, { role: "assistant", content: res.data.answer, sources: res.data.sources }]);
+      setTimeout(() => ragBottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+    } catch {
+      setRagMessages([...next, { role: "assistant", content: "Error querying documents. Please try again." }]);
+    } finally { setRagLoading(false); }
   };
 
   const getFileIcon = (type: string) => {
@@ -181,9 +224,7 @@ export default function DocumentsPage() {
         status: doc.status || "processed",
         size: "—",
         date: new Date(doc.created_at).toLocaleDateString(),
-        category: doc.doc_type
-          ? doc.doc_type.charAt(0).toUpperCase() + doc.doc_type.slice(1)
-          : "General",
+        category: DOC_TYPE_LABEL[doc.doc_type?.toLowerCase()] ?? "General",
       }))
     : fallbackDocs;
 
@@ -195,6 +236,7 @@ export default function DocumentsPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={DOCS_TABS} />
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-3xl font-bold text-foreground">Document Intelligence</h1>
@@ -448,6 +490,65 @@ export default function DocumentsPage() {
           )}
         </motion.div>
       </div>
+
+      {/* Natural Language Search — RAG across all docs */}
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}
+        className="bg-card border border-border rounded-2xl overflow-hidden">
+        <div className="flex items-center gap-2 px-5 py-3 border-b border-border bg-purple-500/5">
+          <Sparkles className="w-4 h-4 text-purple-400" />
+          <p className="text-sm font-semibold text-foreground">Search All Documents</p>
+          <span className="text-xs text-muted-foreground ml-auto">Ask questions across your entire document library</span>
+        </div>
+        <div className="flex flex-col" style={{ minHeight: ragMessages.length ? 320 : 64 }}>
+          {ragMessages.length > 0 && (
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-72">
+              {ragMessages.map((msg, i) => (
+                <motion.div key={i} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+                  className={`flex gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${msg.role === "assistant" ? "bg-purple-500/20" : "bg-secondary border border-border"}`}>
+                    {msg.role === "assistant" ? <Sparkles className="w-3.5 h-3.5 text-purple-400" /> : <span className="text-xs text-foreground">U</span>}
+                  </div>
+                  <div className="max-w-[80%] space-y-1">
+                    <div className={`rounded-2xl px-3 py-2 text-xs leading-relaxed ${msg.role === "assistant" ? "bg-secondary text-foreground border border-border rounded-tl-none" : "gradient-blue text-white rounded-tr-none"}`}>
+                      {msg.content}
+                    </div>
+                    {msg.sources && msg.sources.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {msg.sources.map((s, j) => (
+                          <span key={j} className="text-xs px-1.5 py-0.5 bg-purple-500/10 text-purple-400 rounded-md">{s.name}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              ))}
+              {ragLoading && (
+                <div className="flex gap-2">
+                  <div className="w-7 h-7 rounded-full bg-purple-500/20 flex items-center justify-center">
+                    <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  </div>
+                  <div className="bg-secondary border border-border rounded-2xl rounded-tl-none px-3 py-2">
+                    <div className="flex gap-1">
+                      {[0, 150, 300].map((d) => <div key={d} className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div ref={ragBottomRef} />
+            </div>
+          )}
+          <div className="p-3 border-t border-border flex gap-2">
+            <input value={ragInput} onChange={(e) => setRagInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && sendRagMessage()}
+              placeholder="e.g. What are the payment terms across all contracts?"
+              className="flex-1 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500" />
+            <button onClick={() => sendRagMessage()} disabled={!ragInput.trim() || ragLoading}
+              className="px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+              {ragLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      </motion.div>
 
       {/* AI Analysis */}
       {analysis && (

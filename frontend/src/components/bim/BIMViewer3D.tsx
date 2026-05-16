@@ -43,6 +43,7 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
   const [realMeshes, setRealMeshes] = useState<any[]>([]);
   const [loadingIFC, setLoadingIFC] = useState(false);
   const [ifcFileName, setIfcFileName] = useState("");
+  const [ifcError, setIfcError] = useState("");
 
   const storeyCount = bimData?.storeys?.length || 4;
   const floorH = 3.5;
@@ -61,10 +62,11 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
   const handleIFCFor3D = async (file: File) => {
     setLoadingIFC(true);
     setIfcFileName(file.name);
+    setIfcError("");
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await fetch("http://localhost:8000/api/v1/bim/parse-3d", {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/bim/parse-3d`, {
         method: "POST",
         body: formData,
       });
@@ -72,12 +74,14 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
       if (data.success && data.meshes && data.meshes.length > 0) {
         setRealMeshes(data.meshes);
         setHasRealGeometry(true);
+        setIfcError("");
       } else {
-        alert("No geometry found in IFC file. Try a different file.");
+        setHasRealGeometry(false);
+        setIfcError(data.error || data.detail || "No geometry found in this IFC file.");
       }
     } catch (e) {
       console.error(e);
-      alert("Failed to parse IFC file.");
+      setIfcError("Could not reach BIM server. Check that the backend is running.");
     } finally {
       setLoadingIFC(false);
     }
@@ -524,21 +528,28 @@ export default function BIMViewer3D({ bimData }: BIMViewer3DProps) {
       </div>
 
       {/* IFC Upload Button */}
-      <div className="flex items-center gap-3 p-3 rounded-xl bg-blue-500/5 border border-blue-500/20">
-        <label className="cursor-pointer">
-          <input type="file" className="hidden" accept=".ifc"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleIFCFor3D(f); }} />
-          <button
-            onClick={(e) => (e.currentTarget.previousElementSibling as HTMLElement)?.click()}
-            className="px-4 py-2 rounded-xl bg-blue-500 text-white text-xs font-medium hover:bg-blue-600 transition-colors"
-          >
-            {loadingIFC ? "⏳ Processing..." : "📁 Load IFC → Real 3D"}
-          </button>
-        </label>
-        {hasRealGeometry ? (
-          <span className="text-xs text-emerald-400">✅ {ifcFileName} — {realMeshes.length} real meshes rendered</span>
-        ) : (
-          <span className="text-xs text-muted-foreground">Upload an IFC file to render real building geometry</span>
+      <div className="flex flex-col gap-2 p-3 rounded-xl bg-blue-500/5 border border-blue-500/20">
+        <div className="flex items-center gap-3">
+          <label className="cursor-pointer">
+            <input type="file" className="hidden" accept=".ifc"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleIFCFor3D(f); }} />
+            <button
+              onClick={(e) => (e.currentTarget.previousElementSibling as HTMLElement)?.click()}
+              className="px-4 py-2 rounded-xl bg-blue-500 text-white text-xs font-medium hover:bg-blue-600 transition-colors"
+            >
+              {loadingIFC ? "⏳ Processing..." : "📁 Load IFC → Real 3D"}
+            </button>
+          </label>
+          {hasRealGeometry ? (
+            <span className="text-xs text-emerald-400">✅ {ifcFileName} — {realMeshes.length} meshes rendered</span>
+          ) : (
+            <span className="text-xs text-muted-foreground">Upload an IFC file to render real building geometry</span>
+          )}
+        </div>
+        {ifcError && (
+          <p className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-1.5 border border-red-500/20">
+            ⚠ {ifcError}
+          </p>
         )}
       </div>
 

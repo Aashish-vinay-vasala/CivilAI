@@ -89,7 +89,7 @@ export default function SchedulingPage() {
 
   const fetchProjects = async () => {
     try {
-      const res = await axios.get("http://localhost:8000/api/v1/projects/");
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       const p = res.data.projects || [];
       setProjects(p);
       if (p.length > 0) setProjectId(p[0].id);
@@ -99,7 +99,7 @@ export default function SchedulingPage() {
   const fetchTasks = async () => {
     setTasksLoading(true);
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/projects/${projectId}/schedule`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule`);
       setTasks(res.data.tasks || []);
     } catch (err) { console.error(err); }
     finally { setTasksLoading(false); }
@@ -122,7 +122,7 @@ export default function SchedulingPage() {
     setSavingTask(taskId);
     try {
       await axios.patch(
-        `http://localhost:8000/api/v1/projects/${projectId}/schedule/${taskId}`,
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule/${taskId}`,
         { actual_progress: editProgress, status: editStatus }
       );
       toast.success("Task updated!");
@@ -141,7 +141,7 @@ export default function SchedulingPage() {
     if (!confirm("Delete this task?")) return;
     setDeletingTask(taskId);
     try {
-      await axios.delete(`http://localhost:8000/api/v1/projects/${projectId}/schedule/${taskId}`);
+      await axios.delete(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule/${taskId}`);
       toast.success("Task deleted!");
       fetchTasks();
     } catch {
@@ -157,7 +157,7 @@ export default function SchedulingPage() {
     }
     try {
       await axios.post(
-        `http://localhost:8000/api/v1/projects/${projectId}/schedule`,
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule`,
         { ...newTask, project_id: projectId }
       );
       toast.success("Task saved to database!");
@@ -179,7 +179,7 @@ export default function SchedulingPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await axios.post("http://localhost:8000/api/v1/schedule/analyze", formData);
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/schedule/analyze`, formData);
       setAnalysis(response.data.analysis);
       toast.success("Schedule analyzed!");
     } catch { toast.error("Failed to analyze"); }
@@ -189,7 +189,7 @@ export default function SchedulingPage() {
   const runWhatIf = async () => {
     setWhatIfLoading(true);
     try {
-      const response = await axios.post("http://localhost:8000/api/v1/schedule/what-if", scenario);
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/schedule/what-if`, scenario);
       setWhatIfResult(response.data.analysis);
     } catch { toast.error("Failed to run analysis"); }
     finally { setWhatIfLoading(false); }

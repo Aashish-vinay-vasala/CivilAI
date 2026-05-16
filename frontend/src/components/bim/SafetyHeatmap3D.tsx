@@ -63,7 +63,7 @@ export default function SafetyHeatmap3D() {
 
   const fetchProjects = async () => {
     try {
-      const res = await axios.get("http://localhost:8000/api/v1/projects/");
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       setProjects(res.data.projects || []);
       if (res.data.projects?.length > 0) setProjectId(res.data.projects[0].id);
     } catch {
@@ -74,7 +74,7 @@ export default function SafetyHeatmap3D() {
   const fetchIncidents = async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/projects/${projectId}/safety`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/safety`);
       if (res.data.incidents?.length > 0) setIncidents(res.data.incidents);
       else setIncidents(fallbackIncidents);
     } catch {

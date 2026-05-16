@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: civilai
+  labels:
+    app: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: us-central1-docker.pkg.dev/gen-lang-client-0881995245/civilai/backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: civilai-secrets
+                  key: GROQ_API_KEY
+            - name: SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: civilai-secrets
+                  key: SUPABASE_URL
+            - name: SUPABASE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: civilai-secrets
+                  key: SUPABASE_KEY
+            - name: RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: civilai-secrets
+                  key: RESEND_API_KEY
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: civilai-config
+                  key: ENVIRONMENT
+            - name: CORS_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: civilai-config
+                  key: CORS_ORIGINS
+            - name: CELERY_BROKER_URL
+              value: "redis://redis:6379/0"
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: civilai-secrets
+                  key: GEMINI_API_KEY
+            - name: SUPABASE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: civilai-secrets
+                  key: SUPABASE_SECRET_KEY
+            - name: HUGGINGFACE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: civilai-secrets
+                  key: HUGGINGFACE_TOKEN
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: civilai-secrets
+                  key: SECRET_KEY
+            - name: ALLOWED_ORIGINS
+              value: "http://34.10.217.226:3000,http://localhost:3000"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "6Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: civilai
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 80
+      targetPort: 8000
+  type: ClusterIP

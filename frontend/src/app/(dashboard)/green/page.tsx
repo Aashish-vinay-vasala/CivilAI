@@ -34,6 +34,14 @@ import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const SITE_TABS = [
+  { href: "/bim", label: "BIM & CAD" },
+  { href: "/digital-twin", label: "Digital Twin" },
+  { href: "/weather", label: "Weather" },
+  { href: "/green", label: "Green Monitor" },
+];
 
 const wasteData = [
   { month: "Jan", concrete: 45, steel: 12, wood: 28, plastic: 8 },
@@ -111,19 +119,19 @@ export default function GreenPage() {
       let response;
       if (type === "waste") {
         response = await axios.post(
-          "http://localhost:8000/api/v1/green/analyze-waste",
+          `${process.env.NEXT_PUBLIC_API_URL}/api/v1/green/analyze-waste`,
           wasteForm
         );
         setResult(response.data.analysis);
       } else if (type === "carbon") {
         response = await axios.post(
-          "http://localhost:8000/api/v1/green/carbon-footprint",
+          `${process.env.NEXT_PUBLIC_API_URL}/api/v1/green/carbon-footprint`,
           carbonForm
         );
         setResult(response.data.analysis);
       } else if (type === "esg") {
         response = await axios.post(
-          "http://localhost:8000/api/v1/green/esg-report",
+          `${process.env.NEXT_PUBLIC_API_URL}/api/v1/green/esg-report`,
           esgForm
         );
         setResult(response.data.report);
@@ -140,6 +148,7 @@ export default function GreenPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={SITE_TABS} />
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
