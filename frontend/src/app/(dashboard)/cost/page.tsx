@@ -28,6 +28,7 @@ import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import { MarkdownText } from "@/lib/renderMarkdown";
 import {
   CHART_TOOLTIP_STYLE,
   CHART_LOOKBACK_MONTHS,
@@ -82,10 +83,27 @@ export default function CostPage() {
   const [costKpis, setCostKpis] = useState<CostKpis | null>(null);
   const [burnChartData, setBurnChartData] = useState<any[]>([]);
   const [cashflowChartData, setCashflowChartData] = useState<any[]>([]);
+  const [allProjects, setAllProjects] = useState<any[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("all");
 
   useEffect(() => {
     fetchRealData();
   }, []);
+
+  const computeKpis = (projects: any[], filterProjectId: string) => {
+    const filtered = filterProjectId === "all" ? projects : projects.filter((p) => p.id === filterProjectId);
+    const totalBudget = filtered.reduce((s, p) => s + (p.total_budget || 0), 0);
+    const spentToDate = filtered.reduce((s, p) => s + (p.spent_to_date || 0), 0);
+    const remaining   = totalBudget - spentToDate;
+    const overrunPct  = totalBudget > 0 ? Math.max(0, ((spentToDate - totalBudget) / totalBudget) * 100) : 0;
+    setCostKpis({ totalBudget, spentToDate, remaining, overrunPct, projectCount: filtered.length });
+    return { totalBudget, spentToDate, filtered };
+  };
+
+  // Recompute KPIs when filter changes without re-fetching everything
+  useEffect(() => {
+    if (allProjects.length > 0) computeKpis(allProjects, selectedProjectId);
+  }, [selectedProjectId, allProjects]);
 
   const fetchRealData = async () => {
     setMlLoading(true);
@@ -122,13 +140,8 @@ export default function CostPage() {
 
       if (projectsRes.status === "fulfilled") {
         const projects: any[] = projectsRes.value.data.projects || [];
-        const totalBudget = projects.reduce((s, p) => s + (p.total_budget || 0), 0);
-        const spentToDate = projects.reduce((s, p) => s + (p.spent_to_date || 0), 0);
-        const remaining = totalBudget - spentToDate;
-        const overrunPct = totalBudget > 0
-          ? Math.max(0, ((spentToDate - totalBudget) / totalBudget) * 100)
-          : 0;
-        setCostKpis({ totalBudget, spentToDate, remaining, overrunPct, projectCount: projects.length });
+        setAllProjects(projects);
+        computeKpis(projects, selectedProjectId);
 
         // Derive real ML inputs from project aggregates
         let totalMonths = 0, count = 0, totalWorkers = 0, totalContracts = 0;
@@ -218,9 +231,9 @@ export default function CostPage() {
     <div className="space-y-0">
       <ModuleTabs tabs={PROJECT_TABS} />
       {tabBar}
-      {subTab === "evm"      && <div className="pt-6"><EVMPage /></div>}
-      {subTab === "payments" && <div className="pt-6"><PaymentsPage /></div>}
-      {subTab === "scenario" && <div className="pt-6"><ScenarioPage /></div>}
+      {subTab === "evm"      && <div className="pt-6"><EVMPage      projectId={selectedProjectId !== "all" ? selectedProjectId : undefined} /></div>}
+      {subTab === "payments" && <div className="pt-6"><PaymentsPage projectId={selectedProjectId !== "all" ? selectedProjectId : undefined} /></div>}
+      {subTab === "scenario" && <div className="pt-6"><ScenarioPage projectId={selectedProjectId !== "all" ? selectedProjectId : undefined} /></div>}
     </div>
   );
 
@@ -231,19 +244,33 @@ export default function CostPage() {
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between"
+        className="flex items-center justify-between flex-wrap gap-3"
       >
         <div>
           <h1 className="text-3xl font-bold text-foreground">Cost & Budget</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            AI-powered cost intelligence & forecasting
+            AI-powered cost intelligence &amp; forecasting
           </p>
         </div>
-        <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.xlsx,.xls,.docx" onChange={handleFileUpload} />
-        <Button className="gradient-blue text-white border-0" onClick={() => fileInputRef.current?.click()}>
-          {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-          Upload Report
-        </Button>
+        <div className="flex items-center gap-2">
+          {allProjects.length > 0 && (
+            <select
+              value={selectedProjectId}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none"
+            >
+              <option value="all">All Projects</option>
+              {allProjects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          )}
+          <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.xlsx,.xls,.docx" onChange={handleFileUpload} />
+          <Button className="gradient-blue text-white border-0" onClick={() => fileInputRef.current?.click()}>
+            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            Upload Report
+          </Button>
+        </div>
       </motion.div>
 
       {/* KPIs */}
@@ -488,7 +515,7 @@ export default function CostPage() {
             <DollarSign className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-foreground">AI Analysis</h3>
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{analysis}</p>
+          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
         </motion.div>
       )}
 

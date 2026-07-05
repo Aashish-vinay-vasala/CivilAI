@@ -266,7 +266,7 @@ export default function WeatherWidget({ location = "Dubai", compact = false }: W
           {[
             { icon: Droplets, label: "Humidity", value: `${weather.humidity}%`, color: "text-blue-400" },
             { icon: Wind, label: "Wind", value: `${weather.wind_speed} km/h`, color: "text-emerald-400" },
-            { icon: Eye, label: "Visibility", value: `${(weather.visibility / 1000).toFixed(1)} km`, color: "text-purple-400" },
+            { icon: Eye, label: "Visibility", value: `${(weather.visibility / 1000).toFixed(1)} km`, color: "text-cyan-400" },
             { icon: Gauge, label: "Pressure", value: `${weather.pressure}`, color: "text-orange-400" },
           ].map((stat, i) => (
             <div key={i} className="bg-black/20 rounded-xl p-2.5 text-center">

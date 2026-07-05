@@ -65,14 +65,22 @@ class PermitUpdate(BaseModel):
 
 @router.post("/analyze")
 async def analyze_compliance_route(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    allowed = {"pdf", "xlsx", "xls", "docx", "doc"}
+    ext = (file.filename.rsplit(".", 1)[-1] if "." in file.filename else "").lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type '.{ext}'. Allowed: pdf, xlsx, docx")
     try:
         file_bytes = await file.read()
         doc = process_document(file_bytes, file.filename)
         text = doc["extracted_text"]
-        if not text:
-            raise HTTPException(status_code=400, detail="Could not extract text")
+        if not text or not text.strip():
+            raise HTTPException(status_code=422, detail="Could not extract text from this file. Try a text-based PDF or DOCX.")
         result = analyze_compliance(text)
-        return {"status": "success", "analysis": result["analysis"], "risk_data": result["risk_data"]}
+        return {"status": "success", "analysis": result["analysis"], "risk_data": result["risk_data"], "extracted_permits": result["extracted_permits"]}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

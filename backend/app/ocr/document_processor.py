@@ -1,11 +1,19 @@
+import io
+import os
+import logging
+import tempfile
 import pymupdf
 import pdfplumber
 import openpyxl
 import docx
 from PIL import Image
-import io
 from app.ai.gemini_client import analyze_image, analyze_text
 from app.ai.groq_client import analyze_document
+
+logger = logging.getLogger("civilai.document_processor")
+
+
+# ── PDF text extraction ────────────────────────────────────────────────────────
 
 def extract_pdf_text(file_bytes: bytes) -> str:
     text = ""
@@ -13,6 +21,70 @@ def extract_pdf_text(file_bytes: bytes) -> str:
         for page in pdf.pages:
             text += page.extract_text() or ""
     return text
+
+
+# ── Camelot PDF table extraction ───────────────────────────────────────────────
+
+def extract_pdf_tables(file_bytes: bytes) -> str:
+    """
+    Extract tables from a PDF using camelot-py (stream mode — no Ghostscript needed).
+    Returns tables serialised as pipe-delimited text, separated by blank lines.
+    Falls back silently if camelot is unavailable or the PDF has no detectable tables.
+    """
+    try:
+        import camelot
+    except ImportError:
+        logger.debug("camelot not installed — skipping table extraction")
+        return ""
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        # Try stream mode first (works without Ghostscript)
+        tables = camelot.read_pdf(tmp_path, flavor="stream", pages="all", suppress_stdout=True)
+
+        # If stream found nothing useful, try lattice (requires Ghostscript — may fail)
+        if not tables or all(t.df.empty for t in tables):
+            try:
+                tables = camelot.read_pdf(tmp_path, flavor="lattice", pages="all", suppress_stdout=True)
+            except Exception:
+                pass
+
+        if not tables:
+            return ""
+
+        blocks: list[str] = []
+        for i, table in enumerate(tables):
+            if table.df.empty:
+                continue
+            accuracy = getattr(table, "accuracy", 0)
+            if accuracy < 30:   # skip very low-confidence extractions
+                continue
+            # Convert DataFrame to pipe-delimited text
+            rows = table.df.values.tolist()
+            lines = [" | ".join(str(cell).strip() for cell in row) for row in rows if any(str(c).strip() for c in row)]
+            if lines:
+                blocks.append(f"[Table {i + 1}]\n" + "\n".join(lines))
+
+        result = "\n\n".join(blocks)
+        logger.info("camelot extracted %d table(s), %d chars", len(blocks), len(result))
+        return result
+
+    except Exception as exc:
+        logger.debug("camelot table extraction failed: %s", exc)
+        return ""
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+# ── Other format extractors ────────────────────────────────────────────────────
 
 def extract_pdf_images(file_bytes: bytes) -> list:
     images = []
@@ -22,49 +94,68 @@ def extract_pdf_images(file_bytes: bytes) -> list:
         images.append(pix.tobytes("png"))
     return images
 
+
 def extract_excel(file_bytes: bytes) -> str:
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     text = ""
     for sheet in wb.sheetnames:
         ws = wb[sheet]
         text += f"Sheet: {sheet}\n"
         for row in ws.iter_rows(values_only=True):
-            text += " | ".join([str(c) for c in row if c]) + "\n"
+            cells = [str(c) for c in row if c is not None and str(c).strip()]
+            if cells:
+                text += " | ".join(cells) + "\n"
     return text
+
 
 def extract_word(file_bytes: bytes) -> str:
     doc = docx.Document(io.BytesIO(file_bytes))
-    return "\n".join([p.text for p in doc.paragraphs])
+    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+# ── Main processor ─────────────────────────────────────────────────────────────
 
 def process_document(file_bytes: bytes, filename: str, prompt: str = None) -> dict:
-    ext = filename.split(".")[-1].lower()
+    ext  = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
     text = ""
-    
+
     if ext == "pdf":
+        # Primary: pdfplumber for text
         text = extract_pdf_text(file_bytes)
+
+        # Enhancement: camelot table extraction — appended to pdfplumber text
+        table_text = extract_pdf_tables(file_bytes)
+        if table_text:
+            separator = "\n\n--- EXTRACTED TABLES ---\n\n"
+            text = (text or "") + separator + table_text
+
+        # Fallback: Gemini vision OCR for scanned (image-only) PDFs
         if not text.strip():
             images = extract_pdf_images(file_bytes)
             if images:
-                text = analyze_image(
-                    images[0],
-                    "Extract all text from this document"
-                )
-    elif ext in ["xlsx", "xls"]:
+                text = analyze_image(images[0], "Extract all text from this document")
+
+    elif ext in ("xlsx", "xls"):
         text = extract_excel(file_bytes)
-    elif ext in ["docx", "doc"]:
+
+    elif ext in ("docx", "doc"):
         text = extract_word(file_bytes)
-    elif ext in ["png", "jpg", "jpeg"]:
-        text = analyze_image(
-            file_bytes,
-            "Extract all text and data from this image"
-        )
-    
+
+    elif ext in ("png", "jpg", "jpeg"):
+        text = analyze_image(file_bytes, "Extract all text and data from this image")
+
+    elif ext == "csv":
+        import csv as _csv
+        decoded = file_bytes.decode("utf-8-sig", errors="replace")
+        reader  = _csv.reader(io.StringIO(decoded))
+        text    = "\n".join(" | ".join(row) for row in reader)
+
     analysis = None
     if prompt and text:
         analysis = analyze_document(text, prompt)
-    
+
     return {
-        "filename": filename,
+        "filename":       filename,
         "extracted_text": text,
-        "analysis": analysis
+        "analysis":       analysis,
     }

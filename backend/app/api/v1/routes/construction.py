@@ -1,9 +1,14 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from typing import Optional
 from supabase import create_client
 from app.config import settings
 from app.ai.groq_client import analyze_document
+from app.ai.construction_analyzer import (
+    extract_punch_items, extract_rfis, extract_submittals,
+    extract_meetings, extract_cost_codes,
+)
+from app.ocr.document_processor import process_document
 import uuid
 import logging
 from datetime import datetime, timedelta, timezone
@@ -26,9 +31,14 @@ class PunchListCreate(BaseModel):
     category: Optional[str] = None
 
 class PunchListUpdate(BaseModel):
-    status: Optional[str] = None
+    item: Optional[str] = None
+    location: Optional[str] = None
     assigned_to: Optional[str] = None
+    status: Optional[str] = None
     priority: Optional[str] = None
+    due_date: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
     closed_date: Optional[str] = None
 
 @router.get("/punch-list/{project_id}")
@@ -65,6 +75,8 @@ def delete_punch_item(item_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
 # ─── RFI ──────────────────────────────────────────────────
 class RFICreate(BaseModel):
     project_id: str
@@ -77,8 +89,14 @@ class RFICreate(BaseModel):
     due_date: Optional[str] = None
 
 class RFIUpdate(BaseModel):
-    response: Optional[str] = None
+    subject: Optional[str] = None
+    question: Optional[str] = None
+    submitted_by: Optional[str] = None
+    assigned_to: Optional[str] = None
     status: Optional[str] = None
+    priority: Optional[str] = None
+    due_date: Optional[str] = None
+    response: Optional[str] = None
     responded_date: Optional[str] = None
 
 @router.get("/rfis/{project_id}")
@@ -118,6 +136,8 @@ def delete_rfi(rfi_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
 # ─── SUBMITTALS ───────────────────────────────────────────
 class SubmittalCreate(BaseModel):
     project_id: str
@@ -130,8 +150,14 @@ class SubmittalCreate(BaseModel):
     description: Optional[str] = None
 
 class SubmittalUpdate(BaseModel):
+    title: Optional[str] = None
+    type: Optional[str] = None
+    submitted_by: Optional[str] = None
+    reviewed_by: Optional[str] = None
     status: Optional[str] = None
+    submitted_date: Optional[str] = None
     review_date: Optional[str] = None
+    description: Optional[str] = None
     revision: Optional[int] = None
 
 @router.get("/submittals/{project_id}")
@@ -158,6 +184,14 @@ def update_submittal(submittal_id: str, submittal: SubmittalUpdate):
     try:
         update_data = {k: v for k, v in submittal.model_dump().items() if v is not None}
         res = supabase.table("submittals").update(update_data).eq("id", submittal_id).execute()
+        return {"status": "success", "submittal": res.data[0] if res.data else {}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/submittals/{submittal_id}")
+def delete_submittal(submittal_id: str):
+    try:
+        supabase.table("submittals").delete().eq("id", submittal_id).execute()
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -213,6 +247,34 @@ def create_daily_report(report: DailyReportCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class DailyReportUpdate(BaseModel):
+    report_date: Optional[str] = None
+    weather: Optional[str] = None
+    temperature: Optional[float] = None
+    workers_on_site: Optional[int] = None
+    work_completed: Optional[str] = None
+    issues: Optional[str] = None
+    materials_used: Optional[str] = None
+    equipment_used: Optional[str] = None
+    created_by: Optional[str] = None
+
+@router.patch("/daily-reports/{report_id}")
+def update_daily_report(report_id: str, report: DailyReportUpdate):
+    try:
+        update_data = {k: v for k, v in report.model_dump().items() if v is not None}
+        res = supabase.table("daily_reports").update(update_data).eq("id", report_id).execute()
+        return {"status": "success", "report": res.data[0] if res.data else {}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/daily-reports/{report_id}")
+def delete_daily_report(report_id: str):
+    try:
+        supabase.table("daily_reports").delete().eq("id", report_id).execute()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ─── MEETING MINUTES ──────────────────────────────────────
 class MeetingCreate(BaseModel):
     project_id: str
@@ -260,6 +322,33 @@ def create_meeting(meeting: MeetingCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class MeetingUpdate(BaseModel):
+    meeting_date: Optional[str] = None
+    meeting_type: Optional[str] = None
+    attendees: Optional[str] = None
+    location: Optional[str] = None
+    agenda: Optional[str] = None
+    discussion: Optional[str] = None
+    action_items: Optional[str] = None
+    created_by: Optional[str] = None
+
+@router.patch("/meetings/{meeting_id}")
+def update_meeting(meeting_id: str, meeting: MeetingUpdate):
+    try:
+        update_data = {k: v for k, v in meeting.model_dump().items() if v is not None}
+        res = supabase.table("meeting_minutes").update(update_data).eq("id", meeting_id).execute()
+        return {"status": "success", "meeting": res.data[0] if res.data else {}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/meetings/{meeting_id}")
+def delete_meeting(meeting_id: str):
+    try:
+        supabase.table("meeting_minutes").delete().eq("id", meeting_id).execute()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ─── COST CODES ───────────────────────────────────────────
 class CostCodeCreate(BaseModel):
     project_id: str
@@ -287,11 +376,57 @@ def create_cost_code(code: CostCodeCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class CostCodeUpdate(BaseModel):
+    code: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    budgeted_amount: Optional[float] = None
+    actual_amount: Optional[float] = None
+    unit: Optional[str] = None
+
 @router.patch("/cost-codes/{code_id}")
-def update_cost_code(code_id: str, actual_amount: float):
+def update_cost_code(code_id: str, data: CostCodeUpdate):
     try:
-        res = supabase.table("cost_codes").update({"actual_amount": actual_amount}).eq("id", code_id).execute()
+        update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+        res = supabase.table("cost_codes").update(update_data).eq("id", code_id).execute()
+        return {"status": "success", "cost_code": res.data[0] if res.data else {}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/cost-codes/{code_id}")
+def delete_cost_code(code_id: str):
+    try:
+        supabase.table("cost_codes").delete().eq("id", code_id).execute()
         return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/extract")
+async def extract_construction_items(
+    file: UploadFile = File(...),
+    type: str = Query(..., description="punch|rfi|submittals|meetings|costcodes"),
+):
+    extractors = {
+        "punch":      extract_punch_items,
+        "rfi":        extract_rfis,
+        "submittals": extract_submittals,
+        "meetings":   extract_meetings,
+        "costcodes":  extract_cost_codes,
+    }
+    extractor = extractors.get(type)
+    if not extractor:
+        raise HTTPException(status_code=400, detail=f"Unknown type: {type}. Must be one of {list(extractors)}")
+    try:
+        file_bytes = await file.read()
+        doc = process_document(file_bytes, file.filename)
+        text = doc["extracted_text"]
+        if not text:
+            raise HTTPException(status_code=400, detail="Could not extract text from file")
+        items = extractor(text)
+        return {"status": "success", "extracted_items": items}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

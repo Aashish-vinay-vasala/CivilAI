@@ -4,9 +4,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   ChevronDown, RefreshCw, MapPin, User, Calendar, DollarSign,
   TrendingUp, Loader2, Building2, Users, Check, Plus, X,
-  Pencil, Check as CheckIcon,
+  Pencil, Check as CheckIcon, Upload, ClipboardList,
+  AlertCircle, Clock3, CheckCircle2, ChevronRight, Box,
 } from "lucide-react";
 import axios from "axios";
+import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useProjectStore, ProjectSummary } from "@/lib/stores/projectStore";
@@ -21,6 +23,15 @@ interface TeamMember {
   email?: string;
   phone?: string;
   trade?: string;
+  status?: string;
+}
+
+interface ExtractedMember {
+  name: string;
+  role: string;
+  trade?: string;
+  email?: string;
+  phone?: string;
   status?: string;
 }
 
@@ -233,15 +244,23 @@ function ProjectDropdown({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.13 }}
-              className="absolute top-full mt-1.5 left-0 z-50 w-full min-w-75 bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
+              className="absolute top-full mt-1.5 left-0 z-50 w-full min-w-75 rounded-xl overflow-hidden"
+              style={{
+                background: "rgba(4, 11, 25, 0.98)",
+                border: "1px solid rgba(0,212,255,0.12)",
+                boxShadow: "0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,212,255,0.05)",
+                backdropFilter: "blur(24px)",
+              }}
             >
               {projects.map((p) => (
                 <button
                   key={p.id}
                   onClick={() => { onChange(p.id); setOpen(false); }}
                   className={cn(
-                    "w-full flex items-center gap-3 px-4 py-3 text-sm hover:bg-muted/50 transition-colors text-left",
-                    p.id === selectedId && "bg-blue-500/10"
+                    "w-full flex items-center gap-3 px-4 py-3 text-sm transition-colors text-left",
+                    p.id === selectedId
+                      ? "bg-cyan-500/10 hover:bg-cyan-500/15"
+                      : "hover:bg-white/5"
                   )}
                 >
                   <div className="flex-1 min-w-0">
@@ -374,6 +393,20 @@ export default function ProjectsPage() {
   const [overview, setOverview]   = useState<Overview | null>(null);
   const [loading, setLoading]     = useState(false);
   const [showAddMember, setShowAddMember] = useState(false);
+  const [extractedMembers, setExtractedMembers] = useState<ExtractedMember[]>([]);
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [addingMember, setAddingMember] = useState<string | null>(null);
+  const memberFileRef = useRef<HTMLInputElement>(null);
+
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [newProjectForm, setNewProjectForm] = useState({
+    name: "", location: "", client: "", budget: "",
+    start_date: "", end_date: "", project_type: "Building",
+  });
+  const [newProjectLoading, setNewProjectLoading] = useState(false);
+  const [newProjectIFC, setNewProjectIFC] = useState<File | null>(null);
+  const [newProjectIFCLoading, setNewProjectIFCLoading] = useState(false);
+  const newProjectIFCRef = useRef<HTMLInputElement>(null);
 
   const API = process.env.NEXT_PUBLIC_API_URL;
 
@@ -417,11 +450,116 @@ export default function ProjectsPage() {
     if (selectedId) fetchTeamAndOverview(selectedId);
   }, [selectedId, fetchTeamAndOverview]);
 
+  const handleMemberFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setUploadLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await axios.post(`${API}/api/v1/workforce/extract-members`, formData);
+      const found: ExtractedMember[] = res.data.extracted_members ?? [];
+      setExtractedMembers(found);
+      if (found.length > 0) {
+        toast.success(`Found ${found.length} team member${found.length !== 1 ? "s" : ""} — review below.`);
+      } else {
+        toast.info("No team members found in the document.");
+      }
+    } catch {
+      toast.error("Failed to extract members from file");
+    } finally {
+      setUploadLoading(false);
+    }
+  };
+
+  const addExtractedMember = async (member: ExtractedMember, idx: number) => {
+    if (!selectedId) { toast.error("No project selected"); return; }
+    setAddingMember(String(idx));
+    try {
+      await axios.post(`${API}/api/v1/workforce/workers`, { ...member, project_id: selectedId });
+      setExtractedMembers((prev) => prev.filter((_, i) => i !== idx));
+      toast.success(`${member.name} added to project team`);
+      fetchTeamAndOverview(selectedId);
+    } catch {
+      toast.error(`Failed to add ${member.name}`);
+    } finally {
+      setAddingMember(null);
+    }
+  };
+
+  const addAllExtractedMembers = async () => {
+    if (!selectedId) { toast.error("No project selected"); return; }
+    setAddingMember("all");
+    let added = 0;
+    for (const member of extractedMembers) {
+      try {
+        await axios.post(`${API}/api/v1/workforce/workers`, { ...member, project_id: selectedId });
+        added++;
+      } catch { /* skip individual failures */ }
+    }
+    setExtractedMembers([]);
+    toast.success(`Added ${added} member${added !== 1 ? "s" : ""} to project team`);
+    if (selectedId) fetchTeamAndOverview(selectedId);
+    setAddingMember(null);
+  };
+
   // Patch a single field on a team member — syncs to Workforce module
   const patchMember = async (memberId: string, field: string, value: string) => {
     await axios.patch(`${API}/api/v1/workforce/workers/${memberId}`, { [field]: value });
     setTeam((prev) => prev.map((m) => m.id === memberId ? { ...m, [field]: value } : m));
     toast.success("Updated");
+  };
+
+  const handleCreateProject = async () => {
+    if (!newProjectForm.name.trim()) { toast.error("Project name is required"); return; }
+    setNewProjectLoading(true);
+    try {
+      const res = await axios.post(`${API}/api/v1/projects/`, {
+        name: newProjectForm.name,
+        location: newProjectForm.location || undefined,
+        client: newProjectForm.client || undefined,
+        budget: newProjectForm.budget ? parseFloat(newProjectForm.budget) : 0,
+        start_date: newProjectForm.start_date || undefined,
+        end_date: newProjectForm.end_date || undefined,
+        project_type: newProjectForm.project_type,
+        status: "active",
+      });
+      const newProject = res.data.project;
+      toast.success(`Project "${newProjectForm.name}" created!`);
+
+      // If IFC was uploaded, parse it and save meshes to localStorage for Digital Twin
+      if (newProjectIFC && newProject?.id) {
+        setNewProjectIFCLoading(true);
+        try {
+          const fd = new FormData();
+          fd.append("file", newProjectIFC);
+          const ifcRes = await axios.post(`${API}/api/v1/bim/parse-3d`, fd);
+          if (ifcRes.data.success && ifcRes.data.meshes?.length > 0) {
+            localStorage.setItem(`dt_ifc_${newProject.id}`, JSON.stringify({
+              meshes: ifcRes.data.meshes,
+              filename: newProjectIFC.name,
+            }));
+            toast.success(`IFC model linked to project!`);
+          }
+        } catch { toast.error("IFC upload failed (project still created)"); }
+        finally { setNewProjectIFCLoading(false); }
+      }
+
+      setShowNewProject(false);
+      setNewProjectForm({ name: "", location: "", client: "", budget: "", start_date: "", end_date: "", project_type: "Building" });
+      setNewProjectIFC(null);
+
+      // Refresh project list
+      const listRes = await axios.get(`${API}/api/v1/projects/`);
+      const p: ProjectSummary[] = listRes.data.projects || [];
+      setProjects(p);
+      if (newProject?.id) setCurrentProjectId(newProject.id);
+    } catch {
+      toast.error("Failed to create project");
+    } finally {
+      setNewProjectLoading(false);
+    }
   };
 
   const fmt = (d?: string) =>
@@ -449,8 +587,103 @@ export default function ProjectsPage() {
           >
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
           </button>
+          <Button
+            className="gradient-blue text-white border-0"
+            onClick={() => setShowNewProject(v => !v)}
+          >
+            <Plus className="w-4 h-4 mr-2" />New Project
+          </Button>
         </div>
       </div>
+
+      <AnimatePresence>
+        {showNewProject && (
+          <motion.div
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            className="bg-card border border-blue-500/30 rounded-2xl p-6"
+          >
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-semibold text-foreground flex items-center gap-2">
+                <Plus className="w-4 h-4 text-blue-400" />New Project
+              </h2>
+              <button onClick={() => setShowNewProject(false)} className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
+              {[
+                { label: "Project Name *", field: "name", placeholder: "e.g. Metro Bridge Phase 2", colSpan: "sm:col-span-2" },
+                { label: "Project Type", field: "project_type", placeholder: "", isSelect: true },
+                { label: "Location", field: "location", placeholder: "City, Country" },
+                { label: "Client", field: "client", placeholder: "Client name" },
+                { label: "Budget ($)", field: "budget", placeholder: "e.g. 5000000", type: "number" },
+                { label: "Start Date", field: "start_date", placeholder: "", type: "date" },
+                { label: "End Date", field: "end_date", placeholder: "", type: "date" },
+              ].map(({ label, field, placeholder, colSpan, isSelect, type }) => (
+                <div key={field} className={colSpan ?? ""}>
+                  <label className="text-xs text-muted-foreground mb-1.5 block">{label}</label>
+                  {isSelect ? (
+                    <select
+                      value={newProjectForm[field as keyof typeof newProjectForm]}
+                      onChange={e => setNewProjectForm(p => ({ ...p, [field]: e.target.value }))}
+                      className="w-full px-3 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {["Building","Metro Bridge","Harbour","Road","Tunnel","Infrastructure","Other"].map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={type ?? "text"}
+                      placeholder={placeholder}
+                      value={newProjectForm[field as keyof typeof newProjectForm]}
+                      onChange={e => setNewProjectForm(p => ({ ...p, [field]: e.target.value }))}
+                      className="w-full px-3 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* IFC Upload */}
+            <div className="mb-5 p-4 rounded-xl bg-secondary/40 border border-border">
+              <p className="text-xs font-medium text-foreground mb-1">IFC Model (optional)</p>
+              <p className="text-xs text-muted-foreground mb-3">Upload an IFC file to auto-load in Digital Twin for this project</p>
+              <input ref={newProjectIFCRef} type="file" className="hidden" accept=".ifc"
+                onChange={e => setNewProjectIFC(e.target.files?.[0] || null)} />
+              {newProjectIFC ? (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
+                  <Box className="w-4 h-4 text-cyan-400" />
+                  <span className="text-xs text-cyan-400 flex-1 truncate">{newProjectIFC.name}</span>
+                  <button onClick={() => setNewProjectIFC(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3.5 h-3.5" /></button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => newProjectIFCRef.current?.click()}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg border border-dashed border-border hover:border-blue-500/50 hover:bg-blue-500/5 transition-colors text-xs text-muted-foreground"
+                >
+                  <Upload className="w-3.5 h-3.5" />Choose .ifc file
+                </button>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                className="gradient-blue text-white border-0"
+                disabled={newProjectLoading || newProjectIFCLoading}
+                onClick={handleCreateProject}
+              >
+                {(newProjectLoading || newProjectIFCLoading) ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+                {newProjectIFCLoading ? "Uploading IFC..." : newProjectLoading ? "Creating..." : "Create Project"}
+              </Button>
+              <Button variant="outline" onClick={() => setShowNewProject(false)}>Cancel</Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {!loading && projects.length === 0 && (
         <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
@@ -496,17 +729,102 @@ export default function ProjectsPage() {
 
           {/* ── Project Team ── */}
           <section className="bg-card border border-border rounded-xl overflow-hidden">
-            <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
+            <div className="flex items-center gap-2 px-5 py-4 border-b border-border flex-wrap">
               <Users className="w-4 h-4 text-blue-400" />
               <h2 className="font-semibold text-foreground">Project Team</h2>
               <span className="text-xs text-muted-foreground ml-1">{team.length} member{team.length !== 1 ? "s" : ""}</span>
-              <button
-                onClick={() => setShowAddMember((v) => !v)}
-                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />Add Member
-              </button>
+              <div className="ml-auto flex items-center gap-2">
+                {/* Hidden file input */}
+                <input
+                  ref={memberFileRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.xlsx,.xls,.docx,.doc,.csv"
+                  onChange={handleMemberFileUpload}
+                />
+                <Button
+                  className="gradient-blue text-white border-0"
+                  disabled={uploadLoading}
+                  onClick={() => memberFileRef.current?.click()}
+                >
+                  {uploadLoading
+                    ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    : <Upload className="w-4 h-4 mr-2" />}
+                  {uploadLoading ? "Extracting…" : "Upload"}
+                </Button>
+                <Button
+                  className="gradient-blue text-white border-0"
+                  onClick={() => setShowAddMember((v) => !v)}
+                >
+                  <Plus className="w-4 h-4 mr-2" />Add Member
+                </Button>
+              </div>
             </div>
+
+            {/* Extracted members review panel */}
+            <AnimatePresence>
+              {extractedMembers.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  className="mx-5 mt-4 border border-emerald-500/30 bg-emerald-500/5 rounded-xl p-4"
+                >
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Team Members Found in Document</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Review and choose which to add</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={addAllExtractedMembers}
+                        disabled={addingMember === "all"}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors disabled:opacity-60"
+                      >
+                        {addingMember === "all"
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <Plus className="w-3 h-3" />}
+                        Add All ({extractedMembers.length})
+                      </button>
+                      <button
+                        onClick={() => setExtractedMembers([])}
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {extractedMembers.map((m, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">{m.name}</p>
+                          <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">{m.role}</span>
+                            {m.trade && <span className="text-xs text-muted-foreground">{m.trade}</span>}
+                            {m.email && <span className="text-xs text-muted-foreground">{m.email}</span>}
+                            {m.phone && <span className="text-xs text-muted-foreground">{m.phone}</span>}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => addExtractedMember(m, idx)}
+                          disabled={addingMember === String(idx) || addingMember === "all"}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors disabled:opacity-60 shrink-0"
+                        >
+                          {addingMember === String(idx)
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : <Plus className="w-3 h-3" />}
+                          Add
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Add member form */}
             <AnimatePresence>
@@ -581,63 +899,116 @@ export default function ProjectsPage() {
           {/* ── Project Overview ── */}
           <section className="bg-card border border-border rounded-xl overflow-hidden">
 
-            {loading && !overview ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-wrap gap-3">
+              <div className="flex items-center gap-2">
+                <ClipboardList className="w-4 h-4 text-cyan-400" />
+                <h2 className="font-semibold text-foreground">Project Overview</h2>
+                <span className="text-xs text-muted-foreground ml-1">live tracking across all modules</span>
               </div>
-            ) : overview ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm" style={{ tableLayout: "fixed" }}>
-                  <colgroup>
-                    <col style={{ width: 130 }} />
-                    <col />
-                    <col style={{ width: 90 }} />
-                  </colgroup>
-                  <thead>
-                    <tr className="bg-muted/30 border-b border-border">
-                      <th className="px-5 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                        Overview
-                      </th>
-                      <th className="px-4 py-3 text-center">
-                        {/* Inline legend exactly like the screenshot */}
-                        <div className="flex items-center justify-center gap-5 text-xs font-semibold">
-                          <span className="flex items-center gap-1.5 text-red-400">
-                            <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "#ef4444" }} />
-                            Overdue
-                          </span>
-                          <span className="flex items-center gap-1.5 text-amber-400">
-                            <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "#f59e0b" }} />
-                            Next 7 Days
-                          </span>
-                          <span className="flex items-center gap-1.5 text-emerald-400">
-                            <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "#22c55e" }} />
-                            &gt;7 Days
-                          </span>
+              {/* Legend pills */}
+              <div className="flex items-center gap-2">
+                {[
+                  { color: "#ef4444", bg: "rgba(239,68,68,0.1)", border: "rgba(239,68,68,0.25)", label: "Overdue" },
+                  { color: "#f59e0b", bg: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.25)", label: "Next 7d" },
+                  { color: "#22c55e", bg: "rgba(34,197,94,0.1)",  border: "rgba(34,197,94,0.25)",  label: ">7 Days" },
+                ].map(({ color, bg, border, label }) => (
+                  <span
+                    key={label}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium"
+                    style={{ background: bg, border: `1px solid ${border}`, color }}
+                  >
+                    <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: color }} />
+                    {label}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {loading && !overview ? (
+              <div className="flex items-center justify-center py-14">
+                <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
+              </div>
+            ) : overview ? (() => {
+              // Compute cross-row totals for the summary strip
+              const totals = OVERVIEW_ROWS.reduce(
+                (acc, { key }) => {
+                  const d = overview[key];
+                  acc.overdue += d.overdue;
+                  acc.next7   += d.next_7;
+                  acc.later   += d.later;
+                  acc.closed  += d.closed;
+                  return acc;
+                },
+                { overdue: 0, next7: 0, later: 0, closed: 0 }
+              );
+
+              return (
+                <>
+                  {/* Summary strip */}
+                  <div className="grid grid-cols-4 divide-x divide-border border-b border-border">
+                    {[
+                      { icon: AlertCircle,   value: totals.overdue, label: "Overdue",    color: "text-red-400",     bg: "rgba(239,68,68,0.06)"    },
+                      { icon: Clock3,        value: totals.next7,   label: "Next 7 Days", color: "text-amber-400",  bg: "rgba(245,158,11,0.06)"   },
+                      { icon: ChevronRight,  value: totals.later,   label: ">7 Days",    color: "text-emerald-400", bg: "rgba(34,197,94,0.06)"    },
+                      { icon: CheckCircle2,  value: totals.closed,  label: "Closed",     color: "text-cyan-400",    bg: "rgba(0,212,255,0.06)"    },
+                    ].map(({ icon: Icon, value, label, color, bg }) => (
+                      <div key={label} className="flex items-center gap-3 px-5 py-3.5" style={{ background: bg }}>
+                        <Icon className={cn("w-4 h-4 shrink-0", color)} />
+                        <div>
+                          <p className={cn("text-lg font-bold tabular-nums leading-none", color)}>{value}</p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5">{label}</p>
                         </div>
-                      </th>
-                      <th className="px-5 py-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                        Total Open
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Rows */}
+                  <div className="divide-y divide-border">
                     {OVERVIEW_ROWS.map(({ key, label }) => {
                       const d = overview[key];
                       const open = d.overdue + d.next_7 + d.later;
                       return (
-                        <tr key={key} className="hover:bg-muted/20 transition-colors">
-                          <td className="px-5 py-3 font-semibold text-foreground whitespace-nowrap text-sm">{label}</td>
-                          <td className="px-4 py-3">
+                        <div
+                          key={key}
+                          className="flex items-center gap-4 px-5 py-3.5 hover:bg-white/2 transition-colors"
+                        >
+                          {/* Label */}
+                          <div className="w-28 shrink-0">
+                            <p className="text-sm font-semibold text-foreground">{label}</p>
+                          </div>
+
+                          {/* Bar */}
+                          <div className="flex-1 min-w-0">
                             <StackedBar data={d} />
-                          </td>
-                          <td className="px-5 py-3 text-right font-bold tabular-nums text-foreground">{open}</td>
-                        </tr>
+                          </div>
+
+                          {/* Counts */}
+                          <div className="flex items-center gap-3 shrink-0">
+                            <div className="text-right">
+                              <p className="text-sm font-bold tabular-nums text-foreground">{open}</p>
+                              <p className="text-[10px] text-muted-foreground">open</p>
+                            </div>
+                            {d.closed > 0 && (
+                              <span
+                                className="text-[11px] px-2 py-0.5 rounded-md font-medium tabular-nums"
+                                style={{
+                                  background: "rgba(34,197,94,0.08)",
+                                  border: "1px solid rgba(34,197,94,0.2)",
+                                  color: "#22c55e",
+                                }}
+                              >
+                                {d.closed} closed
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
+                  </div>
+                </>
+              );
+            })() : null}
           </section>
 
         </motion.div>

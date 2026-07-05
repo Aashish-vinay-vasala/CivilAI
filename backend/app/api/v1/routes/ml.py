@@ -106,30 +106,30 @@ async def material_prices():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/safety-stats")
-async def safety_stats():
+async def safety_stats(project_id: str | None = Query(default=None)):
     try:
-        return await get_safety_stats()
+        return await get_safety_stats(project_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/delay-stats")
-async def delay_stats():
+async def delay_stats(project_id: str | None = Query(default=None)):
     try:
-        return await get_delay_stats()
+        return await get_delay_stats(project_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/workforce-stats")
-async def workforce_stats():
+async def workforce_stats(project_id: str | None = Query(default=None)):
     try:
-        return await get_workforce_stats()
+        return await get_workforce_stats(project_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/equipment-stats")
-async def equipment_stats():
+async def equipment_stats(project_id: str | None = Query(default=None)):
     try:
-        return await get_equipment_stats()
+        return await get_equipment_stats(project_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -143,8 +143,8 @@ async def performance_trend(months: int = Query(default=6, ge=1, le=24)):
 
 
 @router.get("/cost-overrun-auto")
-async def cost_overrun_auto():
+async def cost_overrun_auto(project_id: str | None = Query(default=None)):
     try:
-        return await get_auto_cost_overrun()
+        return await get_auto_cost_overrun(project_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

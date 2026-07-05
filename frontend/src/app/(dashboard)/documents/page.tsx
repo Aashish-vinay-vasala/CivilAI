@@ -30,11 +30,13 @@ import { toast } from "sonner";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import { MarkdownText } from "@/lib/renderMarkdown";
 
 const DOCS_TABS = [
   { href: "/documents",  label: "Documents" },
   { href: "/contracts",  label: "Contracts" },
   { href: "/compliance", label: "Compliance" },
+  { href: "/accounting", label: "Accounting Extract" },
 ];
 
 const docTypeData = [
@@ -201,10 +203,20 @@ export default function DocumentsPage() {
     } finally { setRagLoading(false); }
   };
 
+  const getCategoryAction = (category: string): { href: string; label: string } | null => {
+    switch (category) {
+      case "Invoice":
+      case "BOQ":    return { href: "/accounting", label: "Extract Financials" };
+      case "Safety": return { href: "/safety",     label: "Safety Check" };
+      case "Permit": return { href: "/compliance", label: "Check Compliance" };
+      default:       return null;
+    }
+  };
+
   const getFileIcon = (type: string) => {
     switch (type) {
       case "excel": return <FileSpreadsheet className="w-4 h-4 text-emerald-400" />;
-      case "image": return <FileImage className="w-4 h-4 text-purple-400" />;
+      case "image": return <FileImage className="w-4 h-4 text-cyan-400" />;
       default: return <FileType className="w-4 h-4 text-red-400" />;
     }
   };
@@ -251,7 +263,7 @@ export default function DocumentsPage() {
           { label: "Total Documents", value: realDocs.length > 0 ? realDocs.length.toString() : "248", color: "border-blue-500/20 bg-blue-500/5" },
           { label: "Processed", value: realDocs.length > 0 ? realDocs.filter(d => d.status === "processed").length.toString() : "231", color: "border-emerald-500/20 bg-emerald-500/5" },
           { label: "Pending", value: realDocs.length > 0 ? realDocs.filter(d => d.status === "pending").length.toString() : "12", color: "border-orange-500/20 bg-orange-500/5" },
-          { label: "In Database", value: realDocs.length > 0 ? `${realDocs.length} Live` : "0", color: "border-purple-500/20 bg-purple-500/5" },
+          { label: "In Database", value: realDocs.length > 0 ? `${realDocs.length} Live` : "0", color: "border-cyan-500/20 bg-cyan-500/5" },
         ].map((kpi, i) => (
           <motion.div
             key={i}
@@ -341,7 +353,7 @@ export default function DocumentsPage() {
             <div className="grid grid-cols-2 gap-2">
               {[
                 { label: "Contracts", desc: "Risk analysis, clause review", color: "text-blue-400", bg: "bg-blue-500/10" },
-                { label: "Blueprints", desc: "Drawing analysis, AI vision", color: "text-purple-400", bg: "bg-purple-500/10" },
+                { label: "Blueprints", desc: "Drawing analysis, AI vision", color: "text-cyan-400", bg: "bg-cyan-500/10" },
                 { label: "BOQ", desc: "Cost extraction, price analysis", color: "text-emerald-400", bg: "bg-emerald-500/10" },
                 { label: "Safety Reports", desc: "Risk identification", color: "text-red-400", bg: "bg-red-500/10" },
                 { label: "Permits", desc: "Expiry tracking, compliance", color: "text-orange-400", bg: "bg-orange-500/10" },
@@ -494,8 +506,8 @@ export default function DocumentsPage() {
       {/* Natural Language Search — RAG across all docs */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}
         className="bg-card border border-border rounded-2xl overflow-hidden">
-        <div className="flex items-center gap-2 px-5 py-3 border-b border-border bg-purple-500/5">
-          <Sparkles className="w-4 h-4 text-purple-400" />
+        <div className="flex items-center gap-2 px-5 py-3 border-b border-border bg-cyan-500/5">
+          <Sparkles className="w-4 h-4 text-cyan-400" />
           <p className="text-sm font-semibold text-foreground">Search All Documents</p>
           <span className="text-xs text-muted-foreground ml-auto">Ask questions across your entire document library</span>
         </div>
@@ -505,8 +517,8 @@ export default function DocumentsPage() {
               {ragMessages.map((msg, i) => (
                 <motion.div key={i} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
                   className={`flex gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${msg.role === "assistant" ? "bg-purple-500/20" : "bg-secondary border border-border"}`}>
-                    {msg.role === "assistant" ? <Sparkles className="w-3.5 h-3.5 text-purple-400" /> : <span className="text-xs text-foreground">U</span>}
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${msg.role === "assistant" ? "bg-cyan-500/20" : "bg-secondary border border-border"}`}>
+                    {msg.role === "assistant" ? <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> : <span className="text-xs text-foreground">U</span>}
                   </div>
                   <div className="max-w-[80%] space-y-1">
                     <div className={`rounded-2xl px-3 py-2 text-xs leading-relaxed ${msg.role === "assistant" ? "bg-secondary text-foreground border border-border rounded-tl-none" : "gradient-blue text-white rounded-tr-none"}`}>
@@ -515,7 +527,7 @@ export default function DocumentsPage() {
                     {msg.sources && msg.sources.length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {msg.sources.map((s, j) => (
-                          <span key={j} className="text-xs px-1.5 py-0.5 bg-purple-500/10 text-purple-400 rounded-md">{s.name}</span>
+                          <span key={j} className="text-xs px-1.5 py-0.5 bg-cyan-500/10 text-cyan-400 rounded-md">{s.name}</span>
                         ))}
                       </div>
                     )}
@@ -524,12 +536,12 @@ export default function DocumentsPage() {
               ))}
               {ragLoading && (
                 <div className="flex gap-2">
-                  <div className="w-7 h-7 rounded-full bg-purple-500/20 flex items-center justify-center">
-                    <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  <div className="w-7 h-7 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                    <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
                   </div>
                   <div className="bg-secondary border border-border rounded-2xl rounded-tl-none px-3 py-2">
                     <div className="flex gap-1">
-                      {[0, 150, 300].map((d) => <div key={d} className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
+                      {[0, 150, 300].map((d) => <div key={d} className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
                     </div>
                   </div>
                 </div>
@@ -541,7 +553,7 @@ export default function DocumentsPage() {
             <input value={ragInput} onChange={(e) => setRagInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && sendRagMessage()}
               placeholder="e.g. What are the payment terms across all contracts?"
-              className="flex-1 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-purple-500" />
+              className="flex-1 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
             <button onClick={() => sendRagMessage()} disabled={!ragInput.trim() || ragLoading}
               className="px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2">
               {ragLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
@@ -561,7 +573,7 @@ export default function DocumentsPage() {
             <Sparkles className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-foreground">AI Document Analysis</h3>
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{analysis}</p>
+          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
         </motion.div>
       )}
 
@@ -643,7 +655,20 @@ export default function DocumentsPage() {
                     </div>
                   </div>
                   {getStatusBadge(doc.status)}
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity items-center">
+                    {(() => {
+                      const action = getCategoryAction(doc.category);
+                      return action ? (
+                        <a
+                          href={action.href}
+                          className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors whitespace-nowrap border border-blue-500/20"
+                          title={action.label}
+                        >
+                          {action.label}
+                          <ChevronRight className="w-3 h-3" />
+                        </a>
+                      ) : null;
+                    })()}
                     <Button variant="ghost" size="icon" className="w-7 h-7">
                       <Eye className="w-3.5 h-3.5" />
                     </Button>

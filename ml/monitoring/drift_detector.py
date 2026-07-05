@@ -23,6 +23,29 @@ def interpret_psi(psi):
     if psi < 0.2: return "⚠️ Minor drift", "warning"
     return "🚨 Major drift", "critical"
 
+def check_model_drift(model_name: str, csv_path: str, features: list) -> dict:
+    """Compute real PSI for a model's features and derive an honest status from it."""
+    df = pd.read_csv(csv_path)
+    train = df.sample(frac=0.7, random_state=42)
+    test = df.drop(train.index)
+
+    psis = []
+    for feature in features:
+        psi = calculate_psi(train[feature], test[feature])
+        label, status = interpret_psi(psi)
+        print(f"  {feature}: PSI={psi:.4f} — {label}")
+        psis.append(psi)
+
+    psi_avg = sum(psis) / len(psis)
+    _, overall_status = interpret_psi(psi_avg)
+    return {
+        "status": overall_status,
+        "psi_avg": round(psi_avg, 4),
+        "psi_by_feature": {f: round(p, 4) for f, p in zip(features, psis)},
+        "features_checked": len(features),
+    }
+
+
 def detect_drift():
     print("=" * 60)
     print("CivilAI Data Drift Detection")
@@ -34,90 +57,35 @@ def detect_drift():
         "models": {}
     }
 
-    # Cost overrun drift
     print("\n[1] Cost Overrun Model:")
-    df = pd.read_csv("data/raw/cost_overrun.csv")
-    train = df.sample(frac=0.7, random_state=42)
-    test = df.drop(train.index)
+    report["models"]["cost_overrun"] = check_model_drift(
+        "cost_overrun", "data/raw/cost_overrun.csv",
+        ["change_orders", "material_price_increase", "weather_impact_days"]
+    )
 
-    for feature in ["change_orders", "material_price_increase", "weather_impact_days"]:
-        psi = calculate_psi(train[feature], test[feature])
-        label, status = interpret_psi(psi)
-        print(f"  {feature}: PSI={psi:.4f} — {label}")
-
-    report["models"]["cost_overrun"] = {
-        "status": "stable",
-        "psi_avg": 0.05,
-        "features_checked": 3
-    }
-
-    # Delay drift
     print("\n[2] Delay Prediction Model:")
-    df = pd.read_csv("data/raw/construction_delays.csv")
-    train = df.sample(frac=0.7, random_state=42)
-    test = df.drop(train.index)
+    report["models"]["delay_prediction"] = check_model_drift(
+        "delay_prediction", "data/raw/construction_delays.csv",
+        ["weather_delays", "design_changes", "planned_duration_days"]
+    )
 
-    for feature in ["weather_delays", "design_changes", "planned_duration_days"]:
-        psi = calculate_psi(train[feature], test[feature])
-        label, status = interpret_psi(psi)
-        print(f"  {feature}: PSI={psi:.4f} — {label}")
-
-    report["models"]["delay_prediction"] = {
-        "status": "stable",
-        "psi_avg": 0.04,
-        "features_checked": 3
-    }
-
-    # Safety drift
     print("\n[3] Safety Risk Model:")
-    df = pd.read_csv("data/raw/safety_incidents.csv")
-    train = df.sample(frac=0.7, random_state=42)
-    test = df.drop(train.index)
+    report["models"]["safety_risk"] = check_model_drift(
+        "safety_risk", "data/raw/safety_incidents.csv",
+        ["workers_involved", "risk_score"]
+    )
 
-    for feature in ["workers_involved", "risk_score"]:
-        psi = calculate_psi(train[feature], test[feature])
-        label, status = interpret_psi(psi)
-        print(f"  {feature}: PSI={psi:.4f} — {label}")
-
-    report["models"]["safety_risk"] = {
-        "status": "stable",
-        "psi_avg": 0.03,
-        "features_checked": 2
-    }
-
-    # Workforce drift
     print("\n[4] Workforce Turnover Model:")
-    df = pd.read_csv("data/raw/workforce.csv")
-    train = df.sample(frac=0.7, random_state=42)
-    test = df.drop(train.index)
+    report["models"]["workforce_turnover"] = check_model_drift(
+        "workforce_turnover", "data/raw/workforce.csv",
+        ["salary", "performance_score", "overtime_hours"]
+    )
 
-    for feature in ["salary", "performance_score", "overtime_hours"]:
-        psi = calculate_psi(train[feature], test[feature])
-        label, status = interpret_psi(psi)
-        print(f"  {feature}: PSI={psi:.4f} — {label}")
-
-    report["models"]["workforce_turnover"] = {
-        "status": "stable",
-        "psi_avg": 0.04,
-        "features_checked": 3
-    }
-
-    # Equipment drift
     print("\n[5] Equipment Failure Model:")
-    df = pd.read_csv("data/raw/equipment.csv")
-    train = df.sample(frac=0.7, random_state=42)
-    test = df.drop(train.index)
-
-    for feature in ["age_years", "operating_hours", "last_service_days_ago"]:
-        psi = calculate_psi(train[feature], test[feature])
-        label, status = interpret_psi(psi)
-        print(f"  {feature}: PSI={psi:.4f} — {label}")
-
-    report["models"]["equipment_failure"] = {
-        "status": "stable",
-        "psi_avg": 0.05,
-        "features_checked": 3
-    }
+    report["models"]["equipment_failure"] = check_model_drift(
+        "equipment_failure", "data/raw/equipment.csv",
+        ["age_years", "operating_hours", "last_service_days_ago"]
+    )
 
     # Save report
     report_path = f"monitoring/reports/drift_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"

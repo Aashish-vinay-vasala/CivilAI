@@ -13,6 +13,7 @@ import { useTheme } from "next-themes";
 import { useSupabaseSync } from "@/hooks/useSupabaseSync";
 import CommandPalette, { useCommandPalette } from "@/components/command/CommandPalette";
 import ErrorBoundary from "@/components/layout/ErrorBoundary";
+import FloatingChatWidget from "@/components/shared/FloatingChatWidget";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -98,6 +99,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <OnboardingTour active={tourActive} onComplete={completeTour} />
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
+
+      <FloatingChatWidget />
     </div>
   );
 }

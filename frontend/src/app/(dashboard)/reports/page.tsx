@@ -48,7 +48,7 @@ interface Project {
 
 const reportTypes = [
   { id: "weekly",      title: "Weekly Progress Report", desc: "Auto-generated weekly summary",  icon: TrendingUp, color: "border-blue-500/20 bg-blue-500/5",    iconColor: "text-blue-400" },
-  { id: "stakeholder", title: "Stakeholder Report",      desc: "Client-friendly plain English",  icon: Users,      color: "border-purple-500/20 bg-purple-500/5", iconColor: "text-purple-400" },
+  { id: "stakeholder", title: "Stakeholder Report",      desc: "Client-friendly plain English",  icon: Users,      color: "border-cyan-500/20 bg-cyan-500/5", iconColor: "text-cyan-400" },
   { id: "kpi",         title: "KPI Report",              desc: "Performance metrics & targets",  icon: DollarSign, color: "border-emerald-500/20 bg-emerald-500/5",iconColor: "text-emerald-400" },
   { id: "safety",      title: "Safety Report",           desc: "Incidents & compliance",         icon: Shield,     color: "border-red-500/20 bg-red-500/5",       iconColor: "text-red-400" },
 ];

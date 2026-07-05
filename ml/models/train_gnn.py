@@ -208,6 +208,20 @@ def train_gnn():
         print(f"\n✅ Training complete! Best val loss: {best_val_loss:.4f}")
         print(f"   Model saved to models/saved/gnn_risk_model.pt")
 
+    import json
+    from datetime import datetime, timezone
+    report = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "best_val_loss": round(float(best_val_loss), 5),
+        "final_train_loss": round(float(train_losses[-1]), 5),
+        "epochs": 50,
+        "train_graphs": len(train_data),
+        "val_graphs": len(val_data),
+    }
+    with open("models/saved/gnn_training_report.json", "w") as fh:
+        json.dump(report, fh, indent=2)
+    print("📄 GNN training report saved to models/saved/gnn_training_report.json")
+
     return True
 
 

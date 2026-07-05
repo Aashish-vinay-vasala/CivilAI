@@ -6,7 +6,16 @@ import { FileSpreadsheet, Plus, X, Loader2, Sparkles, Save, Clock, Users, Chevro
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+import { MarkdownText } from "@/lib/renderMarkdown";
 import { supabase } from "@/lib/supabase";
+
+const CONSTRUCTION_MODULE_TABS = [
+  { href: "/construction",   label: "Construction" },
+  { href: "/daily-reports",  label: "Daily Reports" },
+  { href: "/rfis",           label: "RFIs" },
+  { href: "/meetings",       label: "Meetings" },
+];
 import { useAuth } from "@/lib/auth";
 
 interface Meeting {
@@ -89,6 +98,7 @@ Format with: Executive Summary, Key Decisions, Action Items (with owner and due 
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={CONSTRUCTION_MODULE_TABS} />
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Meeting Minutes</h1>
@@ -134,9 +144,9 @@ Format with: Executive Summary, Key Decisions, Action Items (with owner and due 
                     {m.discussion && <div><p className="text-xs text-muted-foreground mb-1">Discussion</p><p className="text-sm text-foreground whitespace-pre-wrap">{m.discussion}</p></div>}
                     {m.action_items && <div><p className="text-xs text-muted-foreground mb-1">Action Items</p><p className="text-sm text-foreground whitespace-pre-wrap">{m.action_items}</p></div>}
                     {m.ai_summary && (
-                      <div className="p-4 bg-purple-500/5 border border-purple-500/20 rounded-xl">
-                        <div className="flex items-center gap-2 mb-2"><Sparkles className="w-3.5 h-3.5 text-purple-400" /><p className="text-xs text-purple-400 font-medium">AI Summary</p></div>
-                        <p className="text-sm text-foreground whitespace-pre-wrap">{m.ai_summary}</p>
+                      <div className="p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
+                        <div className="flex items-center gap-2 mb-2"><Sparkles className="w-3.5 h-3.5 text-cyan-400" /><p className="text-xs text-cyan-400 font-medium">AI Summary</p></div>
+                        <MarkdownText text={m.ai_summary} className="text-sm text-foreground" />
                       </div>
                     )}
                   </div>
@@ -192,13 +202,13 @@ Format with: Executive Summary, Key Decisions, Action Items (with owner and due 
                   <textarea className={inputClass} rows={3} placeholder="Tasks assigned, owners, deadlines…" value={form.action_items} onChange={(e) => setForm((f) => ({ ...f, action_items: e.target.value }))} />
                 </div>
                 {form.ai_summary && (
-                  <div className="p-4 bg-purple-500/5 border border-purple-500/20 rounded-xl">
-                    <div className="flex items-center gap-2 mb-2"><Sparkles className="w-3.5 h-3.5 text-purple-400" /><p className="text-xs text-purple-400 font-medium">AI Summary</p></div>
-                    <p className="text-sm text-foreground whitespace-pre-wrap">{form.ai_summary}</p>
+                  <div className="p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
+                    <div className="flex items-center gap-2 mb-2"><Sparkles className="w-3.5 h-3.5 text-cyan-400" /><p className="text-xs text-cyan-400 font-medium">AI Summary</p></div>
+                    <MarkdownText text={form.ai_summary} className="text-sm text-foreground" />
                   </div>
                 )}
                 <button onClick={generateAISummary} disabled={generating}
-                  className="w-full py-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400 text-sm font-medium hover:bg-purple-500/20 transition-colors flex items-center justify-center gap-2">
+                  className="w-full py-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-sm font-medium hover:bg-cyan-500/20 transition-colors flex items-center justify-center gap-2">
                   {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
                   Generate AI Summary
                 </button>

@@ -21,13 +21,13 @@ import ModuleChat from "@/components/shared/ModuleChat";
 
 const documentTypes = [
   { id: "letter", label: "Professional Letter", icon: FileText, color: "text-blue-400 bg-blue-500/10 border-blue-500/20", desc: "Formal construction letters" },
-  { id: "email", label: "Email Draft", icon: Mail, color: "text-purple-400 bg-purple-500/10 border-purple-500/20", desc: "Professional email drafts" },
+  { id: "email", label: "Email Draft", icon: Mail, color: "text-teal-400 bg-teal-500/10 border-teal-500/20", desc: "Professional email drafts" },
   { id: "notice", label: "Formal Notice", icon: AlertTriangle, color: "text-orange-400 bg-orange-500/10 border-orange-500/20", desc: "Site notices & warnings" },
   { id: "variation", label: "Variation Order", icon: GitBranch, color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20", desc: "Change order documents" },
   { id: "dispute", label: "Dispute Letter", icon: Scale, color: "text-red-400 bg-red-500/10 border-red-500/20", desc: "Legal dispute notices" },
   { id: "blueprint", label: "Blueprint Analysis", icon: Upload, color: "text-cyan-400 bg-cyan-500/10 border-cyan-500/20", desc: "Drawing & plan analysis" },
   { id: "contract", label: "Contract Analysis", icon: FileText, color: "text-yellow-400 bg-yellow-500/10 border-yellow-500/20", desc: "Contract document review" },
-  { id: "boq", label: "BOQ Analysis", icon: FileText, color: "text-pink-400 bg-pink-500/10 border-pink-500/20", desc: "Bill of quantities review" },
+  { id: "boq", label: "BOQ Analysis", icon: FileText, color: "text-amber-400 bg-amber-500/10 border-amber-500/20", desc: "Bill of quantities review" },
 ];
 
 export default function WritingPage() {

@@ -4,11 +4,15 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from xgboost import XGBClassifier, XGBRegressor
-from sklearn.metrics import accuracy_score, r2_score, classification_report
+from sklearn.metrics import accuracy_score, f1_score, r2_score, classification_report
 import joblib
 import os
+import json
+from datetime import datetime, timezone
 
 os.makedirs("models/saved", exist_ok=True)
+
+report = {"timestamp": datetime.now(timezone.utc).isoformat(), "models": {}}
 
 print("=" * 50)
 print("Training CivilAI ML Models")
@@ -29,10 +33,13 @@ y = df["overrun"]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 model = XGBClassifier(n_estimators=100, random_state=42, eval_metric="logloss")
 model.fit(X_train, y_train)
-acc = accuracy_score(y_test, model.predict(X_test))
+preds = model.predict(X_test)
+acc = accuracy_score(y_test, preds)
+f1 = f1_score(y_test, preds)
 print(f"✅ Cost Overrun Model — Accuracy: {acc:.2%}")
 joblib.dump(model, "models/saved/cost_overrun_model.pkl")
 joblib.dump(le, "models/saved/cost_overrun_encoder.pkl")
+report["models"]["cost_overrun"] = {"accuracy": round(float(acc), 4), "f1_score": round(float(f1), 4), "rows": len(df), "model_type": "XGBoost"}
 
 # ─────────────────────────────────────────
 # 2. DELAY PREDICTION
@@ -49,10 +56,13 @@ y = df["delayed"]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 model2 = XGBClassifier(n_estimators=100, random_state=42, eval_metric="logloss")
 model2.fit(X_train, y_train)
-acc2 = accuracy_score(y_test, model2.predict(X_test))
+preds2 = model2.predict(X_test)
+acc2 = accuracy_score(y_test, preds2)
+f1_2 = f1_score(y_test, preds2)
 print(f"✅ Delay Prediction Model — Accuracy: {acc2:.2%}")
 joblib.dump(model2, "models/saved/delay_prediction_model.pkl")
 joblib.dump(le2, "models/saved/delay_prediction_encoder.pkl")
+report["models"]["delay_prediction"] = {"accuracy": round(float(acc2), 4), "f1_score": round(float(f1_2), 4), "rows": len(df), "model_type": "XGBoost"}
 
 # ─────────────────────────────────────────
 # 3. SAFETY RISK PREDICTION
@@ -70,11 +80,14 @@ y = (df["severity"] == "Severe").astype(int)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 model3 = RandomForestClassifier(n_estimators=100, random_state=42)
 model3.fit(X_train, y_train)
-acc3 = accuracy_score(y_test, model3.predict(X_test))
+preds3 = model3.predict(X_test)
+acc3 = accuracy_score(y_test, preds3)
+f1_3 = f1_score(y_test, preds3)
 print(f"✅ Safety Risk Model — Accuracy: {acc3:.2%}")
 joblib.dump(model3, "models/saved/safety_risk_model.pkl")
 joblib.dump(le3, "models/saved/safety_incident_encoder.pkl")
 joblib.dump(le4, "models/saved/safety_zone_encoder.pkl")
+report["models"]["safety_risk"] = {"accuracy": round(float(acc3), 4), "f1_score": round(float(f1_3), 4), "rows": len(df), "model_type": "Random Forest"}
 
 # ─────────────────────────────────────────
 # 4. WORKFORCE TURNOVER PREDICTION
@@ -91,10 +104,13 @@ y = df["left_company"]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 model4 = XGBClassifier(n_estimators=100, random_state=42, eval_metric="logloss")
 model4.fit(X_train, y_train)
-acc4 = accuracy_score(y_test, model4.predict(X_test))
+preds4 = model4.predict(X_test)
+acc4 = accuracy_score(y_test, preds4)
+f1_4 = f1_score(y_test, preds4)
 print(f"✅ Turnover Prediction Model — Accuracy: {acc4:.2%}")
 joblib.dump(model4, "models/saved/turnover_model.pkl")
 joblib.dump(le5, "models/saved/turnover_role_encoder.pkl")
+report["models"]["turnover"] = {"accuracy": round(float(acc4), 4), "f1_score": round(float(f1_4), 4), "rows": len(df), "model_type": "XGBoost"}
 
 # ─────────────────────────────────────────
 # 5. EQUIPMENT FAILURE PREDICTION
@@ -110,10 +126,13 @@ y = df["failed"]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 model5 = RandomForestClassifier(n_estimators=100, random_state=42)
 model5.fit(X_train, y_train)
-acc5 = accuracy_score(y_test, model5.predict(X_test))
+preds5 = model5.predict(X_test)
+acc5 = accuracy_score(y_test, preds5)
+f1_5 = f1_score(y_test, preds5)
 print(f"✅ Equipment Failure Model — Accuracy: {acc5:.2%}")
 joblib.dump(model5, "models/saved/equipment_failure_model.pkl")
 joblib.dump(le6, "models/saved/equipment_type_encoder.pkl")
+report["models"]["equipment_failure"] = {"accuracy": round(float(acc5), 4), "f1_score": round(float(f1_5), 4), "rows": len(df), "model_type": "Random Forest"}
 
 # ─────────────────────────────────────────
 # 6. COST OVERRUN % REGRESSION
@@ -133,6 +152,7 @@ model6.fit(X_train, y_train)
 r2 = r2_score(y_test, model6.predict(X_test))
 print(f"✅ Cost Overrun Regression — R² Score: {r2:.2f}")
 joblib.dump(model6, "models/saved/cost_overrun_regression_model.pkl")
+report["models"]["cost_overrun_regression"] = {"r2_score": round(float(r2), 4), "rows": len(df), "model_type": "XGBoost Regressor"}
 
 print("\n" + "=" * 50)
 print("✅ All 6 ML models trained & saved!")
@@ -140,3 +160,7 @@ print("=" * 50)
 print("\nModels saved in models/saved/:")
 for f in os.listdir("models/saved"):
     print(f"  - {f}")
+
+with open("models/saved/training_report.json", "w") as fh:
+    json.dump(report, fh, indent=2)
+print("\n📄 Training report saved to models/saved/training_report.json")

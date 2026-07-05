@@ -6,85 +6,92 @@ import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings, LayoutDashboard, DollarSign, Users,
-  FileText, Boxes, BarChart3, Bot, Building2, ChevronLeft, ChevronRight,
-  X, Calendar, HardHat, Shield, Brain, ClipboardList, FolderOpen,
+  FileText, Boxes, BarChart3, Bot, Building2,
+  ChevronLeft, ChevronRight, X, Calendar, HardHat,
+  Shield, Brain, ClipboardList, FolderOpen, Pin, PinOff,
+  Zap, HeadphonesIcon, Calculator, Mic, Wand2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useRoleStore, ROLE_LABELS, ROLE_COLORS } from "@/lib/stores/roleStore";
+import { useRoleStore, ROLE_LABELS } from "@/lib/stores/roleStore";
 import { useAuth } from "@/lib/auth";
 import { usePinnedStore } from "@/lib/stores/pinnedStore";
-import { Pin, PinOff } from "lucide-react";
 
-interface NavItem { href: string; icon: React.ElementType; label: string }
+interface NavItem {
+  href: string;
+  icon: React.ElementType;
+  label: string;
+  badge?: string;
+  dot?: "online" | "warning";
+}
 interface NavGroup { label: string; items: NavItem[] }
 
 const navGroups: NavGroup[] = [
   {
-    label: "CORE",
+    label: "Workspace",
     items: [
-      { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
+      { href: "/dashboard",    icon: LayoutDashboard, label: "Dashboard",    dot: "online" },
+      { href: "/projects",     icon: FolderOpen,      label: "Projects" },
+      { href: "/cost",         icon: DollarSign,      label: "Cost & Budget" },
+      { href: "/scheduling",   icon: Calendar,        label: "Scheduling" },
+      { href: "/construction", icon: HardHat,         label: "Construction" },
+      { href: "/workforce",    icon: Users,           label: "Workforce" },
+      { href: "/safety",       icon: Shield,          label: "Safety" },
+      { href: "/documents",    icon: FileText,        label: "Documents" },
+      { href: "/accounting",   icon: Calculator,      label: "Accounting Extract" },
+      { href: "/bim",          icon: Boxes,           label: "Site & BIM" },
     ],
   },
   {
-    label: "PROJECT",
+    label: "Intelligence",
     items: [
-      { href: "/projects",     icon: FolderOpen, label: "Projects" },
-      { href: "/cost",         icon: DollarSign, label: "Cost & Budget" },
-      { href: "/scheduling",   icon: Calendar,   label: "Scheduling" },
-      { href: "/construction", icon: HardHat,    label: "Construction" },
-    ],
-  },
-  {
-    label: "PEOPLE",
-    items: [
-      { href: "/workforce", icon: Users,  label: "Workforce" },
-      { href: "/safety",    icon: Shield, label: "Safety" },
-    ],
-  },
-  {
-    label: "DOCS",
-    items: [
-      { href: "/documents", icon: FileText, label: "Documents" },
-    ],
-  },
-  {
-    label: "SITE",
-    items: [
-      { href: "/bim", icon: Boxes, label: "Site & BIM" },
-    ],
-  },
-  {
-    label: "INTELLIGENCE",
-    items: [
-      { href: "/copilot",    icon: Bot,          label: "AI Copilot" },
-      { href: "/analytics",  icon: BarChart3,    label: "Analytics" },
-      { href: "/predictive", icon: Brain,        label: "Predictive" },
+      { href: "/copilot",  icon: Bot,            label: "AI Copilot",  badge: "AI" },
+      { href: "/agent",    icon: Wand2,          label: "AI Agent",    badge: "NEW" },
+      { href: "/voice",    icon: Mic,            label: "Voice Bot",   badge: "NEW" },
+      { href: "/analytics",  icon: BarChart3,     label: "Analytics" },
+      { href: "/predictive", icon: Brain,         label: "Predictive" },
       { href: "/reports",    icon: ClipboardList, label: "Reports" },
     ],
   },
   {
-    label: "SYSTEM",
+    label: "System",
     items: [
-      { href: "/settings", icon: Settings, label: "Settings" },
+      { href: "/support",  icon: HeadphonesIcon, label: "Support" },
+      { href: "/settings", icon: Settings,        label: "Settings" },
     ],
   },
 ];
 
 const allNavItems = navGroups.flatMap((g) => g.items);
 
-// Maps sub-tab routes back to their parent sidebar entry
 const SUB_ROUTE_MAP: Record<string, string> = {
-  "/digital-twin": "/bim",
-  "/weather":      "/bim",
-  "/green":        "/bim",
-  "/procurement":  "/cost",
-  "/financials":   "/cost",
-  "/equipment":    "/workforce",
-  "/vendors":      "/workforce",
-  "/contracts":    "/documents",
-  "/compliance":   "/documents",
-  "/anomaly":      "/analytics",
-  "/mlops":        "/analytics",
+  "/digital-twin":      "/bim",
+  "/weather":           "/bim",
+  "/green":             "/bim",
+  "/procurement":       "/cost",
+  "/financials":        "/cost",
+  "/payments":          "/cost",
+  "/evm":               "/cost",
+  "/equipment":         "/workforce",
+  "/vendors":           "/workforce",
+  "/team":              "/workforce",
+  "/contracts":         "/documents",
+  "/compliance":        "/documents",
+  "/transcribe":        "/documents",
+  "/writing":           "/documents",
+  "/accounting":        "/documents",
+  "/voice":             "/voice",
+  "/agent":             "/agent",
+  "/anomaly":           "/analytics",
+  "/mlops":             "/analytics",
+  "/gnn":               "/analytics",
+  "/daily-reports":     "/construction",
+  "/rfis":              "/construction",
+  "/meetings":          "/construction",
+  "/qr-tracker":        "/construction",
+  "/pre-construction":  "/projects",
+  "/scenario":          "/projects",
+  "/resource-leveling": "/scheduling",
+  "/scheduled-reports": "/reports",
 };
 
 interface SidebarProps {
@@ -94,7 +101,9 @@ interface SidebarProps {
   setMobileOpen: (v: boolean) => void;
 }
 
-function NavItemRow({ item, pathname, collapsed, isPinned, onPin, onNavClick, hovered, onHover }: {
+function NavItemRow({
+  item, pathname, collapsed, isPinned, onPin, onNavClick, hovered, onHover,
+}: {
   item: NavItem;
   pathname: string;
   collapsed: boolean;
@@ -106,46 +115,107 @@ function NavItemRow({ item, pathname, collapsed, isPinned, onPin, onNavClick, ho
 }) {
   const effectivePathname = SUB_ROUTE_MAP[pathname] ?? pathname;
   const isActive = effectivePathname === item.href;
+
   return (
     <div
       className="relative group"
       onMouseEnter={() => onHover(item.href)}
       onMouseLeave={() => onHover(null)}
     >
+      {/* Glowing left active bar */}
+      {isActive && (
+        <motion.div
+          layoutId="active-bar"
+          className="nav-active-bar"
+          transition={{ type: "spring", stiffness: 380, damping: 30 }}
+        />
+      )}
+
       <Link href={item.href} onClick={onNavClick}>
         <motion.div
-          whileHover={{ x: 3 }}
+          whileHover={{ x: collapsed ? 0 : 3 }}
+          transition={{ type: "spring", stiffness: 400, damping: 30 }}
           className={cn(
-            "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors cursor-pointer",
+            "relative flex items-center gap-3 mx-1 px-3 py-2.5 rounded-xl cursor-pointer transition-colors",
             isActive
-              ? "bg-sidebar-accent text-white"
-              : "text-sidebar-foreground/60 hover:text-white hover:bg-white/5"
+              ? "bg-cyan-500/[0.09] text-white"
+              : "text-white/35 hover:text-white/75 hover:bg-white/[0.035]"
           )}
         >
-          <item.icon className="w-4.5 h-4.5 shrink-0" />
+          {/* Icon */}
+          <item.icon
+            className={cn(
+              "shrink-0 transition-colors",
+              collapsed ? "w-5 h-5" : "w-4 h-4",
+              isActive ? "text-cyan-400" : ""
+            )}
+          />
+
+          {/* Label + badge */}
           {!collapsed && (
-            <motion.span
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-[13px] font-medium whitespace-nowrap flex-1 leading-none"
-            >
-              {item.label}
-            </motion.span>
-          )}
-          {isActive && !collapsed && (
-            <motion.div
-              layoutId="activeIndicator"
-              className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0"
-            />
+            <AnimatePresence initial={false}>
+              <motion.div
+                key="label"
+                initial={{ opacity: 0, x: -4 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -4 }}
+                transition={{ duration: 0.18 }}
+                className="flex items-center gap-2 flex-1 min-w-0"
+              >
+                <span className="text-[13px] font-medium whitespace-nowrap flex-1 leading-none">
+                  {item.label}
+                </span>
+
+                {item.badge && (
+                  <span
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded-md font-display text-[9px] font-bold"
+                    style={{
+                      background: "rgba(0,212,255,0.1)",
+                      border: "1px solid rgba(0,212,255,0.22)",
+                      color: "#00D4FF",
+                    }}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                    {item.badge}
+                  </span>
+                )}
+
+                {item.dot && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full shrink-0"
+                    style={{
+                      background: item.dot === "online" ? "#10B981" : "#F59E0B",
+                      boxShadow: item.dot === "online"
+                        ? "0 0 6px rgba(16,185,129,0.8)"
+                        : "0 0 6px rgba(245,158,11,0.8)",
+                      animation: "dot-ping 2s ease-in-out infinite",
+                    }}
+                  />
+                )}
+              </motion.div>
+            </AnimatePresence>
           )}
         </motion.div>
       </Link>
 
+      {/* Collapsed tooltip */}
+      {collapsed && (
+        <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-white whitespace-nowrap pointer-events-none z-50 opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{
+            background: "rgba(4,11,25,0.95)",
+            border: "1px solid rgba(0,212,255,0.15)",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+          }}>
+          {item.label}
+        </div>
+      )}
+
+      {/* Pin button */}
       {!collapsed && hovered && (
         <button
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPin(); }}
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-sidebar-foreground/30 hover:text-white hover:bg-white/10 transition-colors"
-          title={isPinned ? "Unpin" : "Pin to top"}
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-colors"
+          title={isPinned ? "Unpin" : "Pin"}
         >
           {isPinned ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />}
         </button>
@@ -155,11 +225,7 @@ function NavItemRow({ item, pathname, collapsed, isPinned, onPin, onNavClick, ho
 }
 
 function SidebarContent({
-  collapsed,
-  setCollapsed,
-  onNavClick,
-  showCloseButton,
-  onClose,
+  collapsed, setCollapsed, onNavClick, showCloseButton, onClose,
 }: {
   collapsed: boolean;
   setCollapsed: (v: boolean) => void;
@@ -174,14 +240,11 @@ function SidebarContent({
   const [hoveredHref, setHoveredHref] = useState<string | null>(null);
 
   const pinnedItems = allNavItems.filter((i) => pinned.includes(i.href));
-
   const displayName = user?.user_metadata?.full_name ?? "CivilAI Admin";
   const initials = displayName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
 
   const rowProps = (item: NavItem) => ({
-    item,
-    pathname,
-    collapsed,
+    item, pathname, collapsed,
     isPinned: isPinned(item.href),
     onPin: () => isPinned(item.href) ? unpin(item.href) : pin(item.href),
     onNavClick,
@@ -190,93 +253,151 @@ function SidebarContent({
   });
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative z-10">
 
-      {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-5 border-b border-sidebar-border shrink-0">
-        <div className="w-8 h-8 rounded-lg gradient-blue flex items-center justify-center shrink-0" id="sidebar-nav">
-          <Building2 className="w-4 h-4 text-white" />
+      {/* ── Logo ───────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3 px-4 py-5 shrink-0 border-b border-white/[0.05]" id="sidebar-nav">
+        <div
+          className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 relative"
+          style={{
+            background: "linear-gradient(135deg, rgba(0,212,255,0.18), rgba(0,100,160,0.12))",
+            border: "1px solid rgba(0,212,255,0.28)",
+            boxShadow: "0 0 20px rgba(0,212,255,0.2), inset 0 0 12px rgba(0,212,255,0.06)",
+          }}
+        >
+          <Building2 className="w-4.5 h-4.5 text-cyan-400" />
         </div>
+
         {!collapsed && (
-          <motion.span
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="text-white font-bold text-lg whitespace-nowrap flex-1"
+          <motion.div
+            initial={{ opacity: 0, x: -6 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.2 }}
+            className="flex-1 min-w-0"
           >
-            CivilAI
-          </motion.span>
+            <div className="font-display text-[15px] font-bold leading-none tracking-widest text-white">
+              CIVIL<span className="text-cyan-400 text-glow-cyan">AI</span>
+            </div>
+            <div className="text-[9px] text-white/25 tracking-[0.2em] mt-1 font-mono uppercase">
+              Platform v2.0
+            </div>
+          </motion.div>
         )}
+
         {showCloseButton && (
-          <button onClick={onClose} className="text-sidebar-foreground/60 hover:text-white ml-auto p-1">
+          <button onClick={onClose} className="ml-auto text-white/30 hover:text-white/70 transition-colors p-1">
             <X className="w-4 h-4" />
           </button>
         )}
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
+      {/* ── Nav ────────────────────────────────────────────────────────── */}
+      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5 scrollbar-thin">
 
-        {/* Pinned section */}
+        {/* Pinned */}
         {pinnedItems.length > 0 && (
           <>
             {!collapsed && (
-              <p className="px-3 pt-1 pb-2 text-[11px] font-semibold text-sidebar-foreground/35 uppercase tracking-wider">
+              <p className="px-3 pb-2 pt-1 text-[10px] font-semibold text-white/25 uppercase tracking-[0.15em]">
                 Pinned
               </p>
             )}
-            {pinnedItems.map((item) => (
-              <NavItemRow key={item.href} {...rowProps(item)} />
-            ))}
-            <div className="my-3 border-t border-sidebar-border/40" />
+            {pinnedItems.map((item) => <NavItemRow key={item.href} {...rowProps(item)} />)}
+            <div className="my-2 mx-2 border-t border-white/[0.06]" />
           </>
         )}
 
-        {/* Grouped nav */}
+        {/* Groups */}
         {navGroups.map((group, gi) => {
-          const groupItems = group.items.filter((i) => !pinned.includes(i.href));
-          if (groupItems.length === 0) return null;
+          const items = group.items.filter((i) => !pinned.includes(i.href));
+          if (items.length === 0) return null;
           return (
-            <div key={group.label} className={gi > 0 ? "pt-2" : ""}>
+            <div key={group.label} className={gi > 0 ? "pt-3" : ""}>
               {!collapsed ? (
-                <p className="px-3 pb-1.5 pt-1 text-[13px] font-semibold text-sidebar-foreground/60 select-none">
+                <p className="px-3 pb-1.5 pt-0.5 text-[10px] font-bold text-white/22 uppercase tracking-[0.18em] select-none">
                   {group.label}
                 </p>
               ) : (
-                gi > 0 && <div className="my-2 border-t border-sidebar-border/30 mx-1" />
+                gi > 0 && <div className="my-2 mx-2 border-t border-white/[0.05]" />
               )}
               <div className="space-y-0.5">
-                {groupItems.map((item) => (
-                  <NavItemRow key={item.href} {...rowProps(item)} />
-                ))}
+                {items.map((item) => <NavItemRow key={item.href} {...rowProps(item)} />)}
               </div>
             </div>
           );
         })}
       </nav>
 
-      {/* Collapse toggle — desktop only */}
+      {/* ── Collapse toggle ────────────────────────────────────────────── */}
       {!showCloseButton && (
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="absolute -right-3 top-20 w-6 h-6 rounded-full bg-sidebar-accent border border-sidebar-border flex items-center justify-center text-white hover:bg-blue-600 transition-colors z-10 shadow-md"
+          className="absolute -right-3.5 top-[72px] w-7 h-7 rounded-full flex items-center justify-center z-20 transition-all"
+          style={{
+            background: "rgba(4,11,25,0.9)",
+            border: "1px solid rgba(0,212,255,0.2)",
+            boxShadow: "0 0 12px rgba(0,212,255,0.15)",
+            color: "rgba(0,212,255,0.7)",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 18px rgba(0,212,255,0.4)";
+            (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(0,212,255,0.45)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 12px rgba(0,212,255,0.15)";
+            (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(0,212,255,0.2)";
+          }}
         >
-          {collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronLeft className="w-3 h-3" />}
+          {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
         </button>
       )}
 
-      {/* User profile */}
-      <div className="shrink-0 border-t border-sidebar-border px-3 py-4">
-        <div className="flex items-center gap-3 px-1">
-          <div className="w-8 h-8 rounded-full gradient-blue flex items-center justify-center shrink-0">
-            <span className="text-white text-xs font-bold">{initials}</span>
+      {/* ── User profile ────────────────────────────────────────────────── */}
+      <div className="shrink-0 border-t border-white/[0.05] p-3">
+        <div
+          className="rounded-xl p-2.5 flex items-center gap-2.5"
+          style={{
+            background: "rgba(0,212,255,0.04)",
+            border: "1px solid rgba(0,212,255,0.08)",
+          }}
+        >
+          {/* Avatar with online ring */}
+          <div className="relative shrink-0">
+            <div
+              className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[11px] font-bold"
+              style={{ background: "linear-gradient(135deg, #00D4FF, #1D4ED8)" }}
+            >
+              {initials}
+            </div>
+            <span
+              className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2"
+              style={{
+                background: "#10B981",
+                borderColor: "hsl(var(--sidebar))",
+                boxShadow: "0 0 6px rgba(16,185,129,0.8)",
+              }}
+            />
           </div>
+
           {!collapsed && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="min-w-0">
-              <p className="text-white text-sm font-medium truncate leading-tight">{displayName}</p>
-              <span className={`inline-flex mt-1 text-[10px] px-1.5 py-0.5 rounded font-semibold border ${ROLE_COLORS[role]}`}>
-                {ROLE_LABELS[role]}
-              </span>
+            <motion.div
+              initial={{ opacity: 0, x: -4 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.2 }}
+              className="min-w-0 flex-1"
+            >
+              <p className="text-white text-[12px] font-semibold truncate leading-tight">{displayName}</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <Zap className="w-2.5 h-2.5 text-cyan-500 shrink-0" />
+                <p className="text-white/35 text-[10px] truncate">{ROLE_LABELS[role]}</p>
+              </div>
             </motion.div>
+          )}
+
+          {!collapsed && (
+            <Link href="/settings" className="shrink-0 text-white/20 hover:text-white/55 transition-colors">
+              <Settings className="w-3.5 h-3.5" />
+            </Link>
           )}
         </div>
       </div>
@@ -288,11 +409,16 @@ function SidebarContent({
 export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobileOpen }: SidebarProps) {
   return (
     <>
-      {/* Desktop sidebar */}
+      {/* Desktop */}
       <motion.aside
-        animate={{ width: collapsed ? 68 : 248 }}
-        transition={{ duration: 0.25, ease: "easeInOut" }}
-        className="relative hidden md:flex flex-col h-screen bg-sidebar border-r border-sidebar-border overflow-hidden shrink-0"
+        animate={{ width: collapsed ? 72 : 256 }}
+        transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
+        className="relative hidden md:flex flex-col h-screen shrink-0 overflow-hidden z-20"
+        style={{
+          background: "rgba(2, 7, 18, 0.92)",
+          borderRight: "1px solid rgba(0,212,255,0.08)",
+          backdropFilter: "blur(32px)",
+        }}
       >
         <SidebarContent collapsed={collapsed} setCollapsed={setCollapsed} />
       </motion.aside>
@@ -303,13 +429,17 @@ export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobile
           <>
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/60 z-40 md:hidden"
+              className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 md:hidden"
               onClick={() => setMobileOpen(false)}
             />
             <motion.aside
-              initial={{ x: -270 }} animate={{ x: 0 }} exit={{ x: -270 }}
-              transition={{ type: "spring", damping: 28, stiffness: 220 }}
-              className="fixed left-0 top-0 h-screen w-64 bg-sidebar border-r border-sidebar-border z-50 md:hidden flex flex-col"
+              initial={{ x: -280 }} animate={{ x: 0 }} exit={{ x: -280 }}
+              transition={{ type: "spring", damping: 26, stiffness: 210 }}
+              className="fixed left-0 top-0 h-screen w-64 z-50 md:hidden flex flex-col"
+              style={{
+                background: "rgba(2, 7, 18, 0.96)",
+                borderRight: "1px solid rgba(0,212,255,0.1)",
+              }}
             >
               <SidebarContent
                 collapsed={false}

@@ -10,6 +10,10 @@ import {
   CheckCircle,
   XCircle,
   FileText,
+  ShieldAlert,
+  TrendingUp,
+  Calculator,
+  ChevronRight,
 } from "lucide-react";
 import {
   RadarChart,
@@ -24,11 +28,13 @@ import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import { MarkdownText } from "@/lib/renderMarkdown";
 
 const DOCS_TABS = [
-  { href: "/documents", label: "Documents" },
-  { href: "/contracts", label: "Contracts" },
+  { href: "/documents",  label: "Documents" },
+  { href: "/contracts",  label: "Contracts" },
   { href: "/compliance", label: "Compliance" },
+  { href: "/accounting", label: "Accounting Extract" },
 ];
 
 const clauseRiskData = [
@@ -48,9 +54,19 @@ const recentContracts = [
   { name: "Consulting Agreement", risk: "Low", score: 2.9, status: "Approved", value: "$180K" },
 ];
 
+interface RiskData {
+  risk_score: number;
+  risk_level: "Low" | "Medium" | "High";
+  top_risks: string[];
+  dispute_probability: string;
+}
+
 export default function ContractsPage() {
   const [loading, setLoading] = useState(false);
   const [analysis, setAnalysis] = useState("");
+  const [riskData, setRiskData] = useState<RiskData | null>(null);
+  const [requiresReview, setRequiresReview] = useState(false);
+  const [analysisFilename, setAnalysisFilename] = useState("");
   const [rfiOpen, setRfiOpen] = useState(false);
   const [rfi, setRfi] = useState({ issue: "", project_context: "" });
   const [rfiResult, setRfiResult] = useState("");
@@ -60,6 +76,10 @@ export default function ContractsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     setLoading(true);
+    setAnalysis("");
+    setRiskData(null);
+    setRequiresReview(false);
+    setAnalysisFilename(file.name);
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -67,7 +87,9 @@ export default function ContractsPage() {
         `${process.env.NEXT_PUBLIC_API_URL}/api/v1/contracts/analyze`,
         formData
       );
-      setAnalysis(response.data.analysis);
+      setAnalysis(response.data.analysis || "");
+      if (response.data.risk_data) setRiskData(response.data.risk_data);
+      setRequiresReview(response.data.requires_review || false);
       toast.success("Contract analyzed!");
     } catch {
       toast.error("Failed to analyze contract");
@@ -135,7 +157,23 @@ export default function ContractsPage() {
           { label: "Active Contracts", value: "15", icon: CheckCircle, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400" },
           { label: "High Risk", value: "3", icon: XCircle, color: "border-red-500/20 bg-red-500/5", iconColor: "text-red-400" },
           { label: "Expiring Soon", value: "2", icon: AlertTriangle, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400" },
-          { label: "Avg Risk Score", value: "4.8/10", icon: FileSignature, color: "border-blue-500/20 bg-blue-500/5", iconColor: "text-blue-400" },
+          {
+            label: "Last Risk Score",
+            value: riskData ? `${riskData.risk_score.toFixed(1)}/10` : "—",
+            icon: FileSignature,
+            color: riskData
+              ? riskData.risk_level === "High"
+                ? "border-red-500/20 bg-red-500/5"
+                : riskData.risk_level === "Medium"
+                ? "border-orange-500/20 bg-orange-500/5"
+                : "border-emerald-500/20 bg-emerald-500/5"
+              : "border-blue-500/20 bg-blue-500/5",
+            iconColor: riskData
+              ? riskData.risk_level === "High" ? "text-red-400"
+              : riskData.risk_level === "Medium" ? "text-orange-400"
+              : "text-emerald-400"
+              : "text-blue-400",
+          },
         ].map((kpi, i) => (
           <motion.div
             key={i}
@@ -184,7 +222,7 @@ export default function ContractsPage() {
           </Button>
           {rfiResult && (
             <div className="mt-4 p-4 bg-secondary rounded-xl">
-              <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{rfiResult}</p>
+              <MarkdownText text={rfiResult} className="text-sm text-foreground leading-relaxed" />
             </div>
           )}
         </motion.div>
@@ -276,17 +314,110 @@ export default function ContractsPage() {
         </div>
       </motion.div>
 
-      {analysis && (
+      {(analysis || riskData) && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-blue-500/30 rounded-2xl p-6"
+          className="space-y-4"
         >
-          <div className="flex items-center gap-2 mb-3">
-            <FileSignature className="w-5 h-5 text-blue-400" />
-            <h3 className="font-semibold text-foreground">AI Contract Analysis</h3>
-          </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{analysis}</p>
+          {/* HITL review banner */}
+          {requiresReview && (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-orange-500/10 border border-orange-500/30">
+              <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
+              <p className="text-sm text-orange-300 flex-1">
+                High-risk contract flagged for human review — a project director or admin will review this before approval.
+              </p>
+            </div>
+          )}
+
+          {/* Structured risk panel */}
+          {riskData && (
+            <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="w-5 h-5 text-blue-400" />
+                  <h3 className="font-semibold text-foreground">AI Risk Assessment</h3>
+                  {analysisFilename && (
+                    <span className="text-xs text-muted-foreground truncate max-w-48">{analysisFilename}</span>
+                  )}
+                </div>
+                <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${
+                  riskData.risk_level === "High"
+                    ? "bg-red-500/10 text-red-400 border-red-500/20"
+                    : riskData.risk_level === "Medium"
+                    ? "bg-orange-500/10 text-orange-400 border-orange-500/20"
+                    : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                }`}>
+                  {riskData.risk_level} Risk
+                </span>
+              </div>
+
+              {/* Score + dispute probability */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="rounded-xl bg-secondary/50 p-4">
+                  <p className="text-xs text-muted-foreground mb-1">Risk Score</p>
+                  <p className="text-3xl font-bold text-foreground">{riskData.risk_score.toFixed(1)}<span className="text-base font-normal text-muted-foreground">/10</span></p>
+                  <div className="mt-2 h-1.5 rounded-full bg-secondary overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${riskData.risk_score * 10}%` }}
+                      transition={{ duration: 0.8, ease: "easeOut" }}
+                      className={`h-full rounded-full ${
+                        riskData.risk_score >= 7 ? "bg-red-500"
+                        : riskData.risk_score >= 5 ? "bg-orange-500"
+                        : "bg-emerald-500"
+                      }`}
+                    />
+                  </div>
+                </div>
+                <div className="rounded-xl bg-secondary/50 p-4">
+                  <p className="text-xs text-muted-foreground mb-1">Dispute Probability</p>
+                  <div className="flex items-end gap-1">
+                    <TrendingUp className="w-4 h-4 text-orange-400 mb-1" />
+                    <p className="text-3xl font-bold text-foreground">{riskData.dispute_probability}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Top risks */}
+              {riskData.top_risks.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">Top Risk Factors</p>
+                  <ul className="space-y-1.5">
+                    {riskData.top_risks.map((risk, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-foreground">
+                        <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${
+                          i === 0 ? "bg-red-400" : i === 1 ? "bg-orange-400" : "bg-yellow-400"
+                        }`} />
+                        {risk}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Cross-link to Accounting */}
+              <a
+                href="/accounting"
+                className="flex items-center gap-2 text-xs text-blue-400 hover:text-blue-300 transition-colors pt-1 border-t border-border"
+              >
+                <Calculator className="w-3.5 h-3.5" />
+                Extract financial terms from this contract in Accounting Extract
+                <ChevronRight className="w-3.5 h-3.5 ml-auto" />
+              </a>
+            </div>
+          )}
+
+          {/* Full analysis text */}
+          {analysis && (
+            <div className="bg-card border border-blue-500/20 rounded-2xl p-6">
+              <div className="flex items-center gap-2 mb-3">
+                <FileSignature className="w-5 h-5 text-blue-400" />
+                <h3 className="font-semibold text-foreground">Detailed Analysis</h3>
+              </div>
+              <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
+            </div>
+          )}
         </motion.div>
       )}
 

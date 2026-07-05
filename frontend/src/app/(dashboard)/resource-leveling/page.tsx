@@ -113,7 +113,7 @@ export default function ResourceLevelingPage() {
         </div>
         <div className="flex gap-2">
           <button onClick={getAiOptimization} disabled={optimizing}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400 text-sm font-medium hover:bg-purple-500/20 transition-colors">
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-sm font-medium hover:bg-cyan-500/20 transition-colors">
             {optimizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             AI Optimize
           </button>
@@ -240,9 +240,9 @@ export default function ResourceLevelingPage() {
       {/* AI Suggestion */}
       {aiSuggestion && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-purple-500/20 rounded-2xl p-5">
+          className="bg-card border border-cyan-500/20 rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-3">
-            <Sparkles className="w-4 h-4 text-purple-400" />
+            <Sparkles className="w-4 h-4 text-cyan-400" />
             <p className="text-sm font-semibold text-foreground">AI Resource Optimization</p>
           </div>
           <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">{aiSuggestion}</p>

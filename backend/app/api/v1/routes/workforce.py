@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 from app.ai.workforce_analyzer import (
     analyze_workforce,
+    extract_team_members,
     match_skills,
     predict_turnover,
     generate_onboarding_plan
@@ -176,6 +177,20 @@ async def analyze_workforce_route(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="Could not extract text")
         result = analyze_workforce(text)
         return {"status": "success", "analysis": result["analysis"], "risk_data": result["risk_data"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/extract-members")
+async def extract_members_route(file: UploadFile = File(...)):
+    try:
+        file_bytes = await file.read()
+        doc = process_document(file_bytes, file.filename)
+        text = doc["extracted_text"]
+        if not text:
+            raise HTTPException(status_code=400, detail="Could not extract text from file")
+        members = extract_team_members(text)
+        return {"status": "success", "extracted_members": members}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

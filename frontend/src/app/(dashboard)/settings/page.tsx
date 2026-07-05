@@ -41,7 +41,7 @@ const tabs = [
 const integrations = [
   { name: "Supabase", desc: "Database & Auth", connected: true, color: "bg-emerald-500/10 text-emerald-400" },
   { name: "Groq API", desc: "Primary LLM", connected: true, color: "bg-blue-500/10 text-blue-400" },
-  { name: "Gemini API", desc: "Vision & Backup LLM", connected: true, color: "bg-purple-500/10 text-purple-400" },
+  { name: "Gemini API", desc: "Vision & Backup LLM", connected: true, color: "bg-cyan-500/10 text-cyan-400" },
   { name: "HuggingFace", desc: "Embeddings", connected: true, color: "bg-orange-500/10 text-orange-400" },
   { name: "Procore", desc: "Project Management", connected: false, color: "bg-gray-500/10 text-gray-400" },
   { name: "QuickBooks", desc: "Accounting", connected: false, color: "bg-gray-500/10 text-gray-400" },

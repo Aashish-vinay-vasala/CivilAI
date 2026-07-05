@@ -1,15 +1,18 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
 from collections import defaultdict
 from supabase import create_client
 from app.config import settings
+from app.core.security import protect_route
 from app.ai.payment_analyzer import (
     analyze_payments,
     generate_payment_reminder,
     forecast_cashflow,
+    extract_invoices,
 )
+from app.ocr.document_processor import process_document
 from app.constants import (
     MONTH_NAMES,
     INVOICE_STATUSES,
@@ -19,6 +22,7 @@ from app.constants import (
 
 router = APIRouter()
 supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SECRET_KEY)
+_finance_roles = ("project_director", "admin")
 
 class PaymentData(BaseModel):
     project_name: str
@@ -44,8 +48,22 @@ class CashflowData(BaseModel):
     expected_payments: list = []
     planned_expenses: list = []
 
+@router.post("/extract-invoices")
+async def extract_invoices_route(file: UploadFile = File(...)):
+    try:
+        file_bytes = await file.read()
+        doc = process_document(file_bytes, file.filename)
+        text = doc["extracted_text"]
+        if not text:
+            raise HTTPException(status_code=400, detail="Could not extract text from file")
+        invoices = extract_invoices(text)
+        return {"status": "success", "extracted_invoices": invoices}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/analyze")
-async def analyze_payments_route(data: PaymentData):
+async def analyze_payments_route(data: PaymentData, _user=Depends(protect_route(*_finance_roles))):
     try:
         result = analyze_payments(data.model_dump())
         return {"status": "success", "analysis": result}
@@ -53,7 +71,7 @@ async def analyze_payments_route(data: PaymentData):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/reminder")
-async def payment_reminder(data: ReminderData):
+async def payment_reminder(data: ReminderData, _user=Depends(protect_route(*_finance_roles))):
     try:
         result = generate_payment_reminder(data.model_dump())
         return {"status": "success", "reminder": result}
@@ -61,7 +79,7 @@ async def payment_reminder(data: ReminderData):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/forecast")
-async def cashflow_forecast(data: CashflowData):
+async def cashflow_forecast(data: CashflowData, _user=Depends(protect_route(*_finance_roles))):
     try:
         result = forecast_cashflow(data.model_dump())
         return {"status": "success", "forecast": result}
@@ -79,7 +97,7 @@ class NewInvoice(BaseModel):
     project_id: Optional[str] = None
 
 @router.post("/invoices")
-def create_invoice(data: NewInvoice):
+def create_invoice(data: NewInvoice, _user=Depends(protect_route(*_finance_roles))):
     try:
         payload = {
             "invoice_number": data.invoice_number,
@@ -97,7 +115,7 @@ def create_invoice(data: NewInvoice):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/invoices")
-def get_invoices(project_id: Optional[str] = Query(None)):
+def get_invoices(project_id: Optional[str] = Query(None), _user=Depends(protect_route(*_finance_roles))):
     try:
         q = supabase.table("invoices").select("*").order("due_date", desc=True)
         if project_id:
@@ -180,7 +198,7 @@ class UpdateInvoice(BaseModel):
     description: Optional[str] = None
 
 @router.patch("/invoices/{invoice_id}")
-def update_invoice(invoice_id: str, data: UpdateInvoice):
+def update_invoice(invoice_id: str, data: UpdateInvoice, _user=Depends(protect_route(*_finance_roles))):
     try:
         payload = {k: v for k, v in data.model_dump().items() if v is not None}
         if not payload:
@@ -193,7 +211,7 @@ def update_invoice(invoice_id: str, data: UpdateInvoice):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/invoices/{invoice_id}")
-def delete_invoice(invoice_id: str):
+def delete_invoice(invoice_id: str, _user=Depends(protect_route(*_finance_roles))):
     try:
         supabase.table("invoices").delete().eq("id", invoice_id).execute()
         return {"status": "success"}

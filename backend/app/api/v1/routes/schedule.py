@@ -51,7 +51,8 @@ async def analyze_schedule_route(
         return {
             "status": "success",
             "analysis": result["analysis"],
-            "risk_data": result["risk_data"]
+            "risk_data": result["risk_data"],
+            "extracted_tasks": result.get("extracted_tasks", []),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -314,7 +314,7 @@ export default function WeatherPage() {
                 {[
                   { icon: Droplets, label: "Humidity", value: `${weather.humidity}%`, color: "text-blue-400" },
                   { icon: Wind, label: "Wind", value: `${weather.wind_speed} km/h`, color: "text-emerald-400" },
-                  { icon: Cloud, label: "Pressure", value: `${weather.pressure} hPa`, color: "text-purple-400" },
+                  { icon: Cloud, label: "Pressure", value: `${weather.pressure} hPa`, color: "text-cyan-400" },
                   { icon: Sun, label: "Visibility", value: `${(weather.visibility / 1000).toFixed(1)} km`, color: "text-yellow-400" },
                 ].map((stat, i) => (
                   <div key={i} className="bg-black/20 rounded-xl p-3">
@@ -517,7 +517,7 @@ export default function WeatherPage() {
                 { icon: "💨", title: "Wind Protocol", desc: "> 25 km/h: Monitor. > 38 km/h: Restrict cranes. > 54 km/h: Suspend all elevated work.", color: "bg-orange-500/10 border-orange-500/20" },
                 { icon: "☀️", title: "Heat Protocol", desc: "> 35°C: 15-min breaks every hour. > 40°C: Early start 5AM, stop at noon. Mandatory hydration stations.", color: "bg-yellow-500/10 border-yellow-500/20" },
                 { icon: "❄️", title: "Cold Protocol", desc: "< 5°C: Heat concrete mixing water. < 0°C: Frost protection blankets. < -10°C: Suspend wet work.", color: "bg-sky-500/10 border-sky-500/20" },
-                { icon: "⛈️", title: "Lightning Protocol", desc: "30-30 rule: If thunder within 30s of lightning — stop. Wait 30 min after last thunder before resuming.", color: "bg-purple-500/10 border-purple-500/20" },
+                { icon: "⛈️", title: "Lightning Protocol", desc: "30-30 rule: If thunder within 30s of lightning — stop. Wait 30 min after last thunder before resuming.", color: "bg-cyan-500/10 border-cyan-500/20" },
                 { icon: "🌫️", title: "Visibility Protocol", desc: "< 500m: Suspend mobile crane movement. < 100m: Emergency lighting required. Use spotters.", color: "bg-slate-500/10 border-slate-500/20" },
               ].map((tip, i) => (
                 <div key={i} className={`flex items-start gap-3 p-4 rounded-xl border ${tip.color}`}>

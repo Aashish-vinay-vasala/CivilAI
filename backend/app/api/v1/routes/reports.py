@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
+from app.core.guardrails import guard_text, MAX_TRANSCRIPT_LENGTH
 from app.ai.report_generator import (
     generate_weekly_report,
     generate_stakeholder_report,
@@ -95,17 +96,13 @@ async def risk_report(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/meeting-summary")
-async def meeting_summary(
-    request: MeetingRequest
-):
+async def meeting_summary(request: MeetingRequest):
     try:
-        summary = generate_meeting_summary(
-            request.transcript
-        )
-        return {
-            "status": "success",
-            "summary": summary
-        }
+        request.transcript, _ = guard_text(request.transcript, max_length=MAX_TRANSCRIPT_LENGTH)
+        summary = generate_meeting_summary(request.transcript)
+        return {"status": "success", "summary": summary}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

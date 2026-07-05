@@ -54,9 +54,9 @@ const calculateEVM = (tasks: any[], budget: number, spent: number): EVMData | nu
   return { bac, pv, ev, ac, sv, cv, spi, cpi, eac, etc, vac, tcpi, percent_complete: avgActual };
 };
 
-export default function EVMPage() {
+export default function EVMPage({ projectId: initialProjectId }: { projectId?: string } = {}) {
   const [projects, setProjects] = useState<any[]>([]);
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(initialProjectId || "");
   const [evm, setEvm] = useState<EVMData | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedProject, setSelectedProject] = useState<any>(null);
@@ -66,6 +66,14 @@ export default function EVMPage() {
   const [entryForm, setEntryForm] = useState({ amount: "", description: "", category: "", entry_date: "" });
   const [entrySubmitting, setEntrySubmitting] = useState(false);
 
+  // Sync when parent passes a different project
+  useEffect(() => {
+    if (initialProjectId && initialProjectId !== projectId) {
+      setProjectId(initialProjectId);
+      setSelectedProject(projects.find((p) => p.id === initialProjectId) ?? null);
+    }
+  }, [initialProjectId]);
+
   useEffect(() => { fetchProjects(); }, []);
   useEffect(() => { if (projectId) { calculateProjectEVM(); fetchCostEntries(); } }, [projectId]);
 
@@ -74,7 +82,11 @@ export default function EVMPage() {
       const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       const p = res.data.projects || [];
       setProjects(p);
-      if (p.length > 0) { setProjectId(p[0].id); setSelectedProject(p[0]); }
+      if (p.length > 0) {
+        const target = initialProjectId ? p.find((x: any) => x.id === initialProjectId) ?? p[0] : p[0];
+        setProjectId(target.id);
+        setSelectedProject(target);
+      }
     } catch (err) { console.error(err); }
   };
 
@@ -110,7 +122,7 @@ export default function EVMPage() {
           ev: Math.round(s.ev / 1000),
           ac: Math.round(s.ac / 1000),
         })));
-      } else {
+      } else if (evmData) {
         // Generate from EVM data
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         const currentMonth = new Date().getMonth();
@@ -278,7 +290,7 @@ export default function EVMPage() {
               { label: "Planned Value (PV)", value: fmt(evm.pv), sub: "Budgeted cost of work scheduled", icon: Calendar, color: "border-blue-500/20 bg-blue-500/5", iconColor: "text-blue-400", valColor: "text-blue-400" },
               { label: "Earned Value (EV)", value: fmt(evm.ev), sub: "Budgeted cost of work performed", icon: CheckCircle, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400", valColor: "text-emerald-400" },
               { label: "Actual Cost (AC)", value: fmt(evm.ac), sub: "Actual cost incurred to date", icon: DollarSign, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400", valColor: "text-orange-400" },
-              { label: "Budget at Completion", value: fmt(evm.bac), sub: "Total approved budget", icon: BarChart3, color: "border-purple-500/20 bg-purple-500/5", iconColor: "text-purple-400", valColor: "text-purple-400" },
+              { label: "Budget at Completion", value: fmt(evm.bac), sub: "Total approved budget", icon: BarChart3, color: "border-cyan-500/20 bg-cyan-500/5", iconColor: "text-cyan-400", valColor: "text-cyan-400" },
             ].map((kpi, i) => (
               <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.1 }} whileHover={{ y: -2 }}

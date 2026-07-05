@@ -127,7 +127,7 @@ export default function VendorsPage() {
           { label: "Total Vendors", value: "24", trend: "up", change: "+3", color: "border-blue-500/20 bg-blue-500/5" },
           { label: "Preferred", value: "8", trend: "up", change: "+1", color: "border-emerald-500/20 bg-emerald-500/5" },
           { label: "Under Review", value: "3", trend: "down", change: "-1", color: "border-orange-500/20 bg-orange-500/5" },
-          { label: "Avg Score", value: "79/100", trend: "up", change: "+2.1", color: "border-purple-500/20 bg-purple-500/5" },
+          { label: "Avg Score", value: "79/100", trend: "up", change: "+2.1", color: "border-cyan-500/20 bg-cyan-500/5" },
         ].map((kpi, i) => (
           <motion.div
             key={i}

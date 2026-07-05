@@ -9,7 +9,11 @@ import {
   TrendingUp,
   TrendingDown,
   Package,
-  AlertTriangle,
+  Plus,
+  Trash2,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 import {
   AreaChart,
@@ -27,6 +31,9 @@ import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import { MarkdownText } from "@/lib/renderMarkdown";
+
+type PoItem = { name: string; quantity: number; unit: string; price: number };
 
 const PROJECT_TABS = [
   { href: "/cost",        label: "Cost & Budget" },
@@ -68,10 +75,16 @@ export default function ProcurementPage() {
     project_name: "",
     delivery_date: "",
     payment_terms: "30 days",
-    items: [],
     supplier_address: "",
     special_instructions: "",
   });
+  const [items, setItems] = useState<PoItem[]>([
+    { name: "Material", quantity: 100, unit: "tons", price: 500 },
+  ]);
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editItem, setEditItem] = useState<PoItem>({ name: "", quantity: 0, unit: "", price: 0 });
+  const [newItem, setNewItem] = useState<PoItem>({ name: "", quantity: 0, unit: "", price: 0 });
+  const [addingItem, setAddingItem] = useState(false);
   const [poResult, setPoResult] = useState("");
   const [poLoading, setPoLoading] = useState(false);
 
@@ -100,7 +113,7 @@ export default function ProcurementPage() {
     try {
       const response = await axios.post(
         `${process.env.NEXT_PUBLIC_API_URL}/api/v1/procurement/purchase-order`,
-        { ...po, items: [{ name: "Material", quantity: 100, unit: "tons", price: 500 }] }
+        { ...po, items }
       );
       setPoResult(response.data.purchase_order);
       toast.success("Purchase order generated!");
@@ -109,6 +122,20 @@ export default function ProcurementPage() {
     } finally {
       setPoLoading(false);
     }
+  };
+
+  const startEdit = (i: number) => { setEditingIdx(i); setEditItem({ ...items[i] }); };
+  const saveEdit = () => {
+    if (editingIdx === null) return;
+    setItems(items.map((item, i) => (i === editingIdx ? editItem : item)));
+    setEditingIdx(null);
+  };
+  const deleteItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
+  const addItem = () => {
+    if (!newItem.name.trim()) return;
+    setItems([...items, { ...newItem }]);
+    setNewItem({ name: "", quantity: 0, unit: "", price: 0 });
+    setAddingItem(false);
   };
 
   const getStatusBadge = (status: string) => {
@@ -154,7 +181,7 @@ export default function ProcurementPage() {
           { label: "Active POs", value: "42", trend: "up", change: "+5", color: "border-blue-500/20 bg-blue-500/5" },
           { label: "Pending Delivery", value: "8", trend: "down", change: "-2", color: "border-orange-500/20 bg-orange-500/5" },
           { label: "Cost Savings", value: "$128K", trend: "up", change: "+12%", color: "border-emerald-500/20 bg-emerald-500/5" },
-          { label: "Supplier Rating", value: "4.2/5", trend: "up", change: "+0.3", color: "border-purple-500/20 bg-purple-500/5" },
+          { label: "Supplier Rating", value: "4.2/5", trend: "up", change: "+0.3", color: "border-cyan-500/20 bg-cyan-500/5" },
         ].map((kpi, i) => (
           <motion.div
             key={i}
@@ -203,13 +230,97 @@ export default function ProcurementPage() {
               className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          <Button onClick={generatePO} disabled={poLoading} className="gradient-blue text-white border-0">
+
+          {/* Line Items */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-foreground">Line Items</p>
+              <Button size="sm" variant="outline" onClick={() => setAddingItem(true)}>
+                <Plus className="w-3.5 h-3.5 mr-1" /> Add Item
+              </Button>
+            </div>
+            <div className="rounded-xl border border-border overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-secondary/60">
+                  <tr>
+                    {["Item", "Qty", "Unit", "Unit Price ($)", ""].map((h) => (
+                      <th key={h} className="px-3 py-2 text-left text-muted-foreground font-medium">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item, i) =>
+                    editingIdx === i ? (
+                      <tr key={i} className="border-t border-border bg-blue-500/5">
+                        {(["name", "quantity", "unit", "price"] as const).map((field) => (
+                          <td key={field} className="px-2 py-1.5">
+                            <input
+                              type={field === "quantity" || field === "price" ? "number" : "text"}
+                              value={editItem[field]}
+                              onChange={(e) =>
+                                setEditItem({ ...editItem, [field]: field === "quantity" || field === "price" ? +e.target.value : e.target.value })
+                              }
+                              className="w-full px-2 py-1 bg-secondary border border-blue-500/50 rounded-lg text-foreground focus:outline-none"
+                            />
+                          </td>
+                        ))}
+                        <td className="px-2 py-1.5">
+                          <div className="flex gap-1">
+                            <button onClick={saveEdit} className="p-1 rounded-lg hover:bg-emerald-500/20 text-emerald-400"><Check className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => setEditingIdx(null)} className="p-1 rounded-lg hover:bg-red-500/20 text-red-400"><X className="w-3.5 h-3.5" /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={i} className="border-t border-border hover:bg-secondary/40 transition-colors">
+                        <td className="px-3 py-2 text-foreground">{item.name}</td>
+                        <td className="px-3 py-2 text-foreground">{item.quantity}</td>
+                        <td className="px-3 py-2 text-foreground">{item.unit}</td>
+                        <td className="px-3 py-2 text-foreground">${item.price.toLocaleString()}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex gap-1">
+                            <button onClick={() => startEdit(i)} className="p-1 rounded-lg hover:bg-blue-500/20 text-blue-400"><Pencil className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => deleteItem(i)} className="p-1 rounded-lg hover:bg-red-500/20 text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  )}
+                  {addingItem && (
+                    <tr className="border-t border-border bg-emerald-500/5">
+                      {(["name", "quantity", "unit", "price"] as const).map((field) => (
+                        <td key={field} className="px-2 py-1.5">
+                          <input
+                            type={field === "quantity" || field === "price" ? "number" : "text"}
+                            placeholder={field}
+                            value={newItem[field]}
+                            onChange={(e) =>
+                              setNewItem({ ...newItem, [field]: field === "quantity" || field === "price" ? +e.target.value : e.target.value })
+                            }
+                            className="w-full px-2 py-1 bg-secondary border border-emerald-500/50 rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none"
+                          />
+                        </td>
+                      ))}
+                      <td className="px-2 py-1.5">
+                        <div className="flex gap-1">
+                          <button onClick={addItem} className="p-1 rounded-lg hover:bg-emerald-500/20 text-emerald-400"><Check className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => setAddingItem(false)} className="p-1 rounded-lg hover:bg-red-500/20 text-red-400"><X className="w-3.5 h-3.5" /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <Button onClick={generatePO} disabled={poLoading || items.length === 0} className="gradient-blue text-white border-0">
             {poLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Package className="w-4 h-4 mr-2" />}
             Generate PO
           </Button>
           {poResult && (
             <div className="mt-4 p-4 bg-secondary rounded-xl">
-              <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{poResult}</p>
+              <MarkdownText text={poResult} className="text-sm text-foreground leading-relaxed" />
             </div>
           )}
         </motion.div>
@@ -340,7 +451,7 @@ export default function ProcurementPage() {
             <ShoppingCart className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-foreground">AI Analysis</h3>
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{analysis}</p>
+          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
         </motion.div>
       )}
 

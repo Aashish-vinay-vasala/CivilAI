@@ -19,7 +19,7 @@ export const DUMMY_ACCOUNTS = [
     email: "admin@civilai.com",
     password: "Admin@2024",
     avatar: "JW",
-    color: "bg-purple-500",
+    color: "bg-cyan-500",
   },
   {
     id: "a1b2c3d4-0001-0000-0000-000000000003",

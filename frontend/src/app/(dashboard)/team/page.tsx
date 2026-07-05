@@ -7,6 +7,14 @@ import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
 import { ROLE_LABELS, ROLE_COLORS, UserRole } from "@/lib/stores/roleStore";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const WORKFORCE_MODULE_TABS = [
+  { href: "/workforce", label: "Workforce" },
+  { href: "/team",      label: "Team" },
+  { href: "/equipment", label: "Equipment" },
+  { href: "/vendors",   label: "Vendors" },
+];
 
 interface TeamMember {
   id: string;
@@ -70,6 +78,7 @@ export default function TeamPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={WORKFORCE_MODULE_TABS} />
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Team Management</h1>

@@ -16,6 +16,7 @@ import axios from "axios";
 import { toast } from "sonner";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 import ModuleChat from "@/components/shared/ModuleChat";
+import { MarkdownText } from "@/lib/renderMarkdown";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -110,6 +111,10 @@ export default function SafetyPage() {
   const [statsLoading, setStatsLoading] = useState(true);
   const [mlLoading, setMlLoading]       = useState(true);
   const [uploadLoading, setUploadLoading] = useState(false);
+  const [extractedIncidents, setExtractedIncidents] = useState<any[]>([]);
+  const [extractLoading, setExtractLoading]         = useState(false);
+  const [addingExtracted, setAddingExtracted]       = useState<string | null>(null);
+  const extractFileRef = useRef<HTMLInputElement>(null);
   const [savingId, setSavingId]           = useState<string | null>(null);
   const [deletingId, setDeletingId]       = useState<string | null>(null);
   const [reportingId, setReportingId]     = useState<string | null>(null);
@@ -255,6 +260,45 @@ export default function SafetyPage() {
     }
   };
 
+  const handleExtractUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setExtractLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await axios.post(`${API}/api/v1/safety/extract-incidents`, fd);
+      const found = res.data.extracted_incidents ?? [];
+      setExtractedIncidents(found);
+      toast.success(found.length > 0 ? `Found ${found.length} incident(s) — review below.` : "No incidents found in document.");
+    } catch { toast.error("Failed to extract incidents from file"); }
+    finally { setExtractLoading(false); }
+  };
+
+  const addExtractedIncident = async (inc: any, idx: number) => {
+    setAddingExtracted(String(idx));
+    try {
+      await axios.post(`${API}/api/v1/safety/incidents`, inc);
+      setExtractedIncidents(prev => prev.filter((_, i) => i !== idx));
+      toast.success(`Incident added`);
+      fetchAll();
+    } catch { toast.error("Failed to add incident"); }
+    finally { setAddingExtracted(null); }
+  };
+
+  const addAllExtractedIncidents = async () => {
+    setAddingExtracted("all");
+    let added = 0;
+    for (const inc of extractedIncidents) {
+      try { await axios.post(`${API}/api/v1/safety/incidents`, inc); added++; } catch { /* skip */ }
+    }
+    setExtractedIncidents([]);
+    toast.success(`Added ${added} incident(s)`);
+    fetchAll();
+    setAddingExtracted(null);
+  };
+
   // ── Derived data ──────────────────────────────────────────────────────────────
 
   const filtered = incidents.filter(inc => {
@@ -359,12 +403,22 @@ export default function SafetyPage() {
           <input ref={fileInputRef} type="file" className="hidden"
             accept=".pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg"
             onChange={handleFileUpload} />
-          <Button className="gradient-blue text-white border-0" disabled={uploadLoading}
+          <Button variant="outline" disabled={uploadLoading}
             onClick={() => fileInputRef.current?.click()}>
             {uploadLoading
               ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               : <Upload className="w-4 h-4 mr-2" />}
-            Upload Audit
+            Analyze Audit
+          </Button>
+          <input ref={extractFileRef} type="file" className="hidden"
+            accept=".pdf,.xlsx,.xls,.docx,.doc,.csv"
+            onChange={handleExtractUpload} />
+          <Button className="gradient-blue text-white border-0" disabled={extractLoading}
+            onClick={() => extractFileRef.current?.click()}>
+            {extractLoading
+              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              : <Upload className="w-4 h-4 mr-2" />}
+            Upload
           </Button>
         </div>
       </motion.div>
@@ -549,6 +603,44 @@ export default function SafetyPage() {
         )}
       </AnimatePresence>
 
+      {/* Extracted Incidents Review Panel */}
+      <AnimatePresence>
+        {extractedIncidents.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold text-foreground">Extracted Incidents</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">{extractedIncidents.length} incident(s) found — select which to add</p>
+              </div>
+              <Button size="sm" className="gradient-blue text-white border-0"
+                disabled={addingExtracted === "all"} onClick={addAllExtractedIncidents}>
+                {addingExtracted === "all" ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                Add All
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {extractedIncidents.map((inc: any, idx: number) => (
+                <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
+                  <AlertTriangle className={`w-4 h-4 shrink-0 ${inc.severity === "high" ? "text-red-400" : inc.severity === "medium" ? "text-orange-400" : "text-emerald-400"}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{inc.type}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {[inc.severity, inc.status, inc.zone || inc.location, inc.date].filter(Boolean).join(" · ")}
+                    </p>
+                    {inc.description && <p className="text-xs text-muted-foreground truncate mt-0.5">{inc.description}</p>}
+                  </div>
+                  <Button size="sm" variant="outline" disabled={addingExtracted === String(idx)}
+                    onClick={() => addExtractedIncident(inc, idx)}>
+                    {addingExtracted === String(idx) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Incidents Table */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
         className="bg-card border border-border rounded-2xl overflow-hidden">
@@ -724,9 +816,7 @@ export default function SafetyPage() {
                                   <X className="w-3.5 h-3.5" />
                                 </button>
                               </div>
-                              <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
-                                {aiReport.text}
-                              </p>
+                              <MarkdownText text={aiReport.text} className="text-xs text-muted-foreground leading-relaxed" />
                             </div>
                           </div>
                         </td>
@@ -873,7 +963,7 @@ export default function SafetyPage() {
               <X className="w-4 h-4" />
             </button>
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{analysis}</p>
+          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
         </motion.div>
       )}
 

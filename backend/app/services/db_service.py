@@ -13,31 +13,56 @@ def get_projects():
     try:
         response = supabase.table("projects").select("*").execute()
         projects = response.data or []
-        
-        # Normalize fields for frontend
+
+        # Fetch all tasks, cost entries, and invoices in three bulk queries
+        # to avoid N+1 queries per project
+        all_tasks  = supabase.table("schedule_tasks").select("project_id,actual_progress").execute().data or []
+        all_costs  = supabase.table("cost_entries").select("project_id,amount").execute().data or []
+        try:
+            all_invs = supabase.table("invoices").select("project_id,amount,status").execute().data or []
+        except Exception:
+            all_invs = []
+
+        # Group by project_id
+        tasks_by_proj:    dict = {}
+        costs_by_proj:    dict = {}
+        committed_by_proj: dict = {}
+
+        for t in all_tasks:
+            pid = t.get("project_id")
+            tasks_by_proj.setdefault(pid, []).append(t)
+
+        for c in all_costs:
+            pid = c.get("project_id")
+            costs_by_proj.setdefault(pid, 0)
+            costs_by_proj[pid] += float(c.get("amount", 0))
+
+        for inv in all_invs:
+            pid = inv.get("project_id")
+            if inv.get("status") in ("pending", "approved", "received"):
+                committed_by_proj.setdefault(pid, 0)
+                committed_by_proj[pid] += float(inv.get("amount", 0))
+
         normalized = []
         for p in projects:
-            # Calculate progress from tasks
-            tasks_res = supabase.table("schedule_tasks").select("actual_progress").eq("project_id", p["id"]).execute()
-            tasks = tasks_res.data or []
+            pid = p["id"]
+            tasks        = tasks_by_proj.get(pid, [])
             avg_progress = round(sum(t.get("actual_progress", 0) for t in tasks) / len(tasks)) if tasks else 0
-
-            # Calculate spent from cost entries
-            cost_res = supabase.table("cost_entries").select("amount").eq("project_id", p["id"]).execute()
-            costs = cost_res.data or []
-            total_spent = sum(float(c.get("amount", 0)) for c in costs)
+            total_spent  = costs_by_proj.get(pid, 0.0)
+            committed    = committed_by_proj.get(pid, 0.0)
 
             normalized.append({
-                "id": p["id"],
-                "name": p.get("name", "Unknown"),
-                "location": p.get("location", ""),
-                "status": p.get("status", "active"),
-                "client": p.get("client", ""),
-                "total_budget": float(p.get("budget", 0)),
-                "spent_to_date": total_spent,
+                "id":                  pid,
+                "name":                p.get("name", "Unknown"),
+                "location":            p.get("location", ""),
+                "status":              p.get("status", "active"),
+                "client":              p.get("client", ""),
+                "total_budget":        float(p.get("budget", 0)),
+                "spent_to_date":       total_spent,
+                "committed_amount":    committed,
                 "progress_percentage": avg_progress,
-                "start_date": p.get("start_date", ""),
-                "end_date": p.get("end_date", ""),
+                "start_date":          p.get("start_date", ""),
+                "end_date":            p.get("end_date", ""),
             })
         return normalized
     except Exception as e:

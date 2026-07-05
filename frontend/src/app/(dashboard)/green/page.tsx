@@ -168,7 +168,7 @@ export default function GreenPage() {
           { label: "ESG Score", value: "72/100", trend: "up", change: "+3", color: "border-emerald-500/20 bg-emerald-500/5" },
           { label: "Carbon Emissions", value: "88 tCO2", trend: "down", change: "-12%", color: "border-blue-500/20 bg-blue-500/5" },
           { label: "Waste Recycled", value: "35%", trend: "up", change: "+5%", color: "border-orange-500/20 bg-orange-500/5" },
-          { label: "Energy Efficiency", value: "72%", trend: "up", change: "+2%", color: "border-purple-500/20 bg-purple-500/5" },
+          { label: "Energy Efficiency", value: "72%", trend: "up", change: "+2%", color: "border-cyan-500/20 bg-cyan-500/5" },
         ].map((kpi, i) => (
           <motion.div
             key={i}

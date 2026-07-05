@@ -177,10 +177,10 @@ ${text}`,
       {/* Structured Minutes */}
       {(structuring || minutes) && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-purple-500/20 rounded-2xl p-5">
+          className="bg-card border border-cyan-500/20 rounded-2xl p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-purple-400" />
+              <Sparkles className="w-4 h-4 text-cyan-400" />
               <p className="text-sm font-semibold text-foreground">AI Meeting Minutes</p>
             </div>
             {minutes && (

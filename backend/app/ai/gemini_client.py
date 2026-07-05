@@ -14,11 +14,19 @@ def get_client():
 def analyze_image(image_data: bytes, prompt: str) -> str:
     try:
         client = get_client()
-        image = PIL.Image.open(io.BytesIO(image_data))
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=[prompt, image]
-        )
+        # PDF detected by magic bytes — pass as native PDF part (no PIL conversion)
+        if image_data[:4] == b'%PDF':
+            from google.genai import types as genai_types
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[prompt, genai_types.Part.from_bytes(data=image_data, mime_type="application/pdf")]
+            )
+        else:
+            image = PIL.Image.open(io.BytesIO(image_data))
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[prompt, image]
+            )
         return response.text
     except Exception as e:
         return f"Image analysis unavailable: {str(e)}"

@@ -1,6 +1,9 @@
+import logging
+
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel
 from app.ocr.document_processor import process_document
+from app.core.guardrails import guard_text
 from app.services.storage_service import (
     upload_document,
     save_document_to_db,
@@ -8,8 +11,11 @@ from app.services.storage_service import (
     list_documents,
 )
 from app.ai.groq_client import client as groq_client
+from app.ai.accounting_extractor import extract_accounting_data
+from app.ai.llama_rag import rag_answer
 from typing import Optional
 
+logger = logging.getLogger("civilai.documents")
 router = APIRouter()
 
 # Keyword maps checked against filename + first 2000 chars of extracted text.
@@ -59,35 +65,33 @@ async def upload_document_route(
     project_id: Optional[str] = Form(None),
 ):
     try:
-        print(f"📁 Received file: {file.filename}")
+        if prompt:
+            try:
+                prompt, _ = guard_text(prompt)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
         file_bytes = await file.read()
-        print(f"📦 File size: {len(file_bytes)} bytes")
-        filename = file.filename or "document"
+        filename   = file.filename or "document"
+        ext        = filename.split(".")[-1].lower()
 
-        ext = filename.split(".")[-1].lower()
+        logger.info("upload | file=%s | size=%d bytes", filename, len(file_bytes))
 
-        # Process document first so we can use the text for classification
-        print("🔄 Processing document...")
-        doc = process_document(file_bytes, filename, prompt)
+        doc            = process_document(file_bytes, filename, prompt)
         extracted_text = doc.get("extracted_text", "")
-        analysis = doc.get("analysis", "")
-        print(f"✅ Extracted {len(extracted_text)} chars")
+        analysis       = doc.get("analysis", "")
 
-        # Classify document type using filename + extracted text keywords
+        logger.info("upload | extracted=%d chars", len(extracted_text))
+
         doc_type = _detect_doc_type(filename, ext, extracted_text[:2000])
         if doc_type == "general" and extracted_text.strip():
-            # Keyword detection was inconclusive — ask the LLM
             doc_type = _ai_classify(filename, extracted_text)
         bucket = "blueprints" if doc_type == "blueprint" else "documents"
-        print(f"📂 Doc type: {doc_type}, bucket: {bucket}")
 
-        # Upload to storage
-        print("☁️ Uploading to Supabase Storage...")
+        logger.info("upload | doc_type=%s | bucket=%s", doc_type, bucket)
+
         storage_result = upload_document(file_bytes, filename, bucket)
-        print(f"Storage result: {storage_result}")
 
-        # Save to DB
-        print("💾 Saving to database...")
         db_result = save_document_to_db(
             filename=storage_result.get("filename", filename),
             original_name=filename,
@@ -97,21 +101,20 @@ async def upload_document_route(
             project_id=project_id,
             doc_type=doc_type,
         )
-        print(f"DB result: {db_result}")
 
         return {
-            "status": "success",
-            "filename": filename,
+            "status":       "success",
+            "filename":     filename,
             "extracted_text": extracted_text,
-            "analysis": analysis,
-            "storage": storage_result,
-            "saved_to_db": db_result.get("success", False),
+            "analysis":     analysis,
+            "storage":      storage_result,
+            "saved_to_db":  db_result.get("success", False),
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback
-        print(f"❌ ERROR: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("upload failed for %s: %s", file.filename, e)
+        raise HTTPException(status_code=500, detail="Document upload failed")
 
 @router.get("/list")
 def list_documents_route(project_id: Optional[str] = None):
@@ -138,49 +141,128 @@ class AskPayload(BaseModel):
 
 @router.post("/ask")
 async def ask_documents(payload: AskPayload):
-    """RAG: answer a question using extracted text from uploaded documents."""
+    """RAG: answer a question using LlamaIndex over extracted document text."""
     try:
+        try:
+            question, _ = guard_text(payload.question, use_llamaguard=True)
+        except ValueError as e:
+            return {"answer": str(e), "sources": []}
+
         docs = get_documents_from_db(payload.project_id)
         if not docs:
             return {"answer": "No documents found. Please upload documents first.", "sources": []}
 
-        # Filter by doc_ids if provided
         if payload.doc_ids:
             docs = [d for d in docs if d.get("id") in payload.doc_ids]
 
-        # Build context — concatenate extracted_text up to ~12k chars
-        context_parts = []
+        texts   = []
         sources = []
-        total_chars = 0
         for doc in docs:
             text = doc.get("extracted_text", "").strip()
             if not text:
                 continue
-            chunk = f"--- Document: {doc.get('original_name', 'unknown')} ---\n{text[:2000]}"
-            total_chars += len(chunk)
-            context_parts.append(chunk)
+            # Prefix each chunk with the document name so LlamaIndex can cite it
+            texts.append(f"Document: {doc.get('original_name', 'unknown')}\n{text}")
             sources.append({"id": doc.get("id"), "name": doc.get("original_name"), "type": doc.get("doc_type")})
-            if total_chars > 12000:
-                break
 
-        if not context_parts:
+        if not texts:
             return {"answer": "No text content found in documents.", "sources": []}
 
-        context = "\n\n".join(context_parts)
+        # ── LlamaIndex RAG (Groq LLM + HuggingFace embeddings) ──────────────────
+        result = await rag_answer(texts, question)
+
+        if "not available" not in result["answer"].lower():
+            return {"answer": result["answer"], "sources": sources[:5], "engine": result["engine"]}
+
+        # ── Fallback: direct Groq if LlamaIndex is unavailable ──────────────────
+        context = "\n\n".join(
+            f"--- {sources[i]['name']} ---\n{t[:2000]}"
+            for i, t in enumerate(texts)
+        )[:12000]
         system_prompt = (
-            "You are a construction document analyst. Answer the user's question using ONLY the provided document context. "
-            "Be specific, cite document names when relevant, and if the answer isn't in the context say so clearly."
+            "You are a construction document analyst. Answer the user's question using ONLY the provided "
+            "document context. Be specific, cite document names when relevant, and say so clearly if the "
+            "answer isn't in the context."
         )
-        response = groq_client.chat.completions.create(
+        resp = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Documents:\n{context}\n\nQuestion: {payload.question}"},
+                {"role": "user",   "content": f"Documents:\n{context}\n\nQuestion: {question}"},
             ],
             max_tokens=1024,
             temperature=0.3,
         )
-        answer = response.choices[0].message.content or "No answer generated."
-        return {"answer": answer, "sources": sources[:5]}
+        answer = resp.choices[0].message.content or "No answer generated."
+        return {"answer": answer, "sources": sources[:5], "engine": "groq-direct"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/extract-accounting")
+async def extract_accounting_route(
+    file:       UploadFile = File(...),
+    project_id: Optional[str] = Form(None),
+):
+    """
+    Upload any financial document (invoice, BOQ, P&L, contract, PO, etc.)
+    and receive structured accounting data:
+    - Document classification and key figures
+    - All monetary amounts and percentages extracted by regex
+    - AI-structured fields (line items, totals, parties, dates)
+    - Anomaly detection (math errors, duplicate amounts, overruns)
+    - Cross-module DB enrichment when project_id is supplied
+    - Accounting glossary terms found with definitions
+    """
+    allowed_exts = {"pdf", "xlsx", "xls", "docx", "doc", "png", "jpg", "jpeg", "csv", "txt"}
+    filename = file.filename or "document"
+    ext = filename.rsplit(".", 1)[-1].lower()
+
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '.{ext}'. Allowed: {', '.join(sorted(allowed_exts))}",
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    if ext == "csv":
+        try:
+            import io
+            import csv as _csv
+            text   = file_bytes.decode("utf-8-sig", errors="replace")
+            reader = _csv.reader(io.StringIO(text))
+            extracted_text = "\n".join(" | ".join(row) for row in reader)
+        except Exception as e:
+            logger.error("CSV parse failed for %s: %s", filename, e)
+            raise HTTPException(status_code=400, detail="CSV parse failed")
+    elif ext == "txt":
+        extracted_text = file_bytes.decode("utf-8", errors="replace")
+    else:
+        try:
+            doc            = process_document(file_bytes, filename)
+            extracted_text = doc.get("extracted_text", "")
+        except Exception as e:
+            logger.error("document processing failed for %s: %s", filename, e)
+            raise HTTPException(status_code=500, detail="Document processing failed")
+
+    if not extracted_text or not extracted_text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Could not extract text from this file. Try a text-based PDF or DOCX.",
+        )
+
+    try:
+        result = extract_accounting_data(
+            text=extracted_text,
+            filename=filename,
+            file_bytes=file_bytes,
+            project_id=project_id,
+        )
+    except Exception as e:
+        logger.error("accounting extraction failed for %s: %s", filename, e)
+        raise HTTPException(status_code=500, detail="Accounting extraction failed")
+
+    return {"status": "success", "filename": filename, **result}

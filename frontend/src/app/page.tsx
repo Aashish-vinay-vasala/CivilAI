@@ -25,7 +25,7 @@ const features = [
   { icon: DollarSign, title: "Cost Intelligence", desc: "AI predicts overruns before they happen", color: "text-blue-400 bg-blue-500/10" },
   { icon: Calendar, title: "Delay Prediction", desc: "Smart scheduling with ML models", color: "text-orange-400 bg-orange-500/10" },
   { icon: Shield, title: "Safety Monitor", desc: "Real-time risk scoring & OSHA reporting", color: "text-red-400 bg-red-500/10" },
-  { icon: FileText, title: "Document AI", desc: "OCR + VLM for any document format", color: "text-purple-400 bg-purple-500/10" },
+  { icon: FileText, title: "Document AI", desc: "OCR + VLM for any document format", color: "text-amber-400 bg-amber-500/10" },
   { icon: Users, title: "Workforce Engine", desc: "Skills matching & turnover prediction", color: "text-emerald-400 bg-emerald-500/10" },
   { icon: Bot, title: "AI Copilot", desc: "Chat with your project data live", color: "text-cyan-400 bg-cyan-500/10" },
 ];
@@ -39,7 +39,7 @@ const stats = [
 
 const roleColors: Record<string, string> = {
   "Project Director": "text-blue-400 bg-blue-500/10 border-blue-500/20",
-  "Project Admin": "text-purple-400 bg-purple-500/10 border-purple-500/20",
+  "Project Admin": "text-cyan-400 bg-cyan-500/10 border-cyan-500/20",
   "Contractor": "text-orange-400 bg-orange-500/10 border-orange-500/20",
   "Site Engineer": "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
 };

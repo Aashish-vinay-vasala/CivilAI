@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { motion } from "framer-motion";
 
 const furnitureTypes = [
-  { id: "desk", label: "Desk", w: 1.6, h: 0.75, d: 0.8, color: 0x8b5cf6 },
+  { id: "desk", label: "Desk", w: 1.6, h: 0.75, d: 0.8, color: 0x14b8a6 },
   { id: "chair", label: "Chair", w: 0.6, h: 0.9, d: 0.6, color: 0x3b82f6 },
   { id: "table", label: "Table", w: 1.8, h: 0.75, d: 0.9, color: 0x10b981 },
   { id: "sofa", label: "Sofa", w: 2.2, h: 0.85, d: 0.9, color: 0xf59e0b },
@@ -85,14 +85,21 @@ export default function SpacePlanning3D() {
       stateRef.current.isDragging = false;
       stateRef.current.prevX = e.clientX;
       stateRef.current.prevY = e.clientY;
+      canvas.style.cursor = "grabbing";
     };
     const onMouseMove = (e: MouseEvent) => {
-      if (Math.abs(e.clientX - stateRef.current.prevX) > 3) stateRef.current.isDragging = true;
+      const dx = Math.abs(e.clientX - stateRef.current.prevX);
+      const dy = Math.abs(e.clientY - stateRef.current.prevY);
+      if (dx > 3 || dy > 3) stateRef.current.isDragging = true;
       if (!stateRef.current.isDragging) return;
       stateRef.current.angle -= (e.clientX - stateRef.current.prevX) * 0.008;
       stateRef.current.targetY = Math.max(5, Math.min(50, stateRef.current.targetY - (e.clientY - stateRef.current.prevY) * 0.1));
       stateRef.current.prevX = e.clientX;
       stateRef.current.prevY = e.clientY;
+    };
+    const onMouseUp = () => {
+      stateRef.current.isDragging = false;
+      canvas.style.cursor = "grab";
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -113,6 +120,8 @@ export default function SpacePlanning3D() {
     canvas.style.cursor = "grab";
     canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("mousemove", onMouseMove);
+    canvas.addEventListener("mouseup", onMouseUp);
+    canvas.addEventListener("mouseleave", onMouseUp);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("click", onClick);
 
@@ -140,6 +149,8 @@ export default function SpacePlanning3D() {
       cancelAnimationFrame(frameRef.current);
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("mousemove", onMouseMove);
+      canvas.removeEventListener("mouseup", onMouseUp);
+      canvas.removeEventListener("mouseleave", onMouseUp);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("click", onClick);
       window.removeEventListener("resize", handleResize);
@@ -302,7 +313,7 @@ export default function SpacePlanning3D() {
             <>
               <button
                 onClick={rotateFurniture}
-                className="px-3 py-1.5 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 text-xs font-medium"
+                className="px-3 py-1.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 text-xs font-medium"
               >
                 ↻ Rotate
               </button>

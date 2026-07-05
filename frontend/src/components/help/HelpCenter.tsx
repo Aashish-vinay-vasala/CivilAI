@@ -84,7 +84,7 @@ const HELP_SECTIONS: HelpSection[] = [
   {
     icon: FileText,
     title: "Documents & OCR",
-    color: "text-purple-400 bg-purple-500/10",
+    color: "text-teal-400 bg-teal-500/10",
     articles: [
       {
         title: "Uploading documents",

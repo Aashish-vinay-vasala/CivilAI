@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
+from app.core.guardrails import guard_text
 from app.ai.writing_assistant import (
     generate_letter,
     generate_email,
@@ -62,32 +63,44 @@ class BlueprintQuery(BaseModel):
 @router.post("/letter")
 async def create_letter(request: LetterRequest):
     try:
+        request.key_points, _ = guard_text(request.key_points)
         result = generate_letter(request.model_dump())
         return {"status": "success", "letter": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/email")
 async def create_email(request: EmailRequest):
     try:
+        request.key_points, _ = guard_text(request.key_points)
         result = generate_email(request.model_dump())
         return {"status": "success", "email": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/notice")
 async def create_notice(request: NoticeRequest):
     try:
+        request.details, _ = guard_text(request.details)
         result = generate_notice(request.model_dump())
         return {"status": "success", "notice": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/variation-order")
 async def create_variation_order(request: VariationOrderRequest):
     try:
+        request.description, _ = guard_text(request.description)
         result = generate_variation_order(request.model_dump())
         return {"status": "success", "variation_order": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -132,8 +145,12 @@ async def analyze_boq_route(file: UploadFile = File(...)):
 @router.post("/dispute-letter")
 async def create_dispute_letter(request: DisputeRequest):
     try:
+        request.our_position, _ = guard_text(request.our_position)
+        request.evidence, _ = guard_text(request.evidence)
         result = generate_dispute_letter(request.model_dump())
         return {"status": "success", "letter": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     

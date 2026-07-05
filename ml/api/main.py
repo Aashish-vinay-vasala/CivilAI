@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
@@ -7,7 +7,19 @@ import pandas as pd
 import os
 import time
 import sys
+import json
+import shutil
+import subprocess
+from io import BytesIO
 from datetime import datetime
+
+# Windows can default stdout/stderr to a non-UTF-8 codepage (e.g. cp1252) when
+# not attached to a UTF-8 console, which crashes on the emoji in these print()
+# calls and takes the whole API down before any route (incl. /gnn/*) can load.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 sys.path.append(".")
 from monitoring.prediction_logger import log_prediction
 
@@ -24,42 +36,50 @@ app.add_middleware(
 models = {}
 encoders = {}
 
-try:
-    models["cost_overrun"] = joblib.load("models/saved/cost_overrun_model.pkl")
-    models["cost_regression"] = joblib.load("models/saved/cost_overrun_regression_model.pkl")
-    encoders["cost"] = joblib.load("models/saved/cost_overrun_encoder.pkl")
-    print("✅ Cost models loaded")
-except Exception as e:
-    print(f"❌ Cost models: {e}")
 
-try:
-    models["delay"] = joblib.load("models/saved/delay_prediction_model.pkl")
-    encoders["delay"] = joblib.load("models/saved/delay_prediction_encoder.pkl")
-    print("✅ Delay model loaded")
-except Exception as e:
-    print(f"❌ Delay model: {e}")
+def load_models():
+    """(Re)load every trained model + encoder from disk into the module-level dicts.
+    Called at startup, and again after a retrain so predictions use fresh weights
+    without needing a server restart."""
+    try:
+        models["cost_overrun"] = joblib.load("models/saved/cost_overrun_model.pkl")
+        models["cost_regression"] = joblib.load("models/saved/cost_overrun_regression_model.pkl")
+        encoders["cost"] = joblib.load("models/saved/cost_overrun_encoder.pkl")
+        print("✅ Cost models loaded")
+    except Exception as e:
+        print(f"❌ Cost models: {e}")
 
-try:
-    models["safety"] = joblib.load("models/saved/safety_risk_model.pkl")
-    encoders["safety_incident"] = joblib.load("models/saved/safety_incident_encoder.pkl")
-    encoders["safety_zone"] = joblib.load("models/saved/safety_zone_encoder.pkl")
-    print("✅ Safety model loaded")
-except Exception as e:
-    print(f"❌ Safety model: {e}")
+    try:
+        models["delay"] = joblib.load("models/saved/delay_prediction_model.pkl")
+        encoders["delay"] = joblib.load("models/saved/delay_prediction_encoder.pkl")
+        print("✅ Delay model loaded")
+    except Exception as e:
+        print(f"❌ Delay model: {e}")
 
-try:
-    models["turnover"] = joblib.load("models/saved/turnover_model.pkl")
-    encoders["turnover_role"] = joblib.load("models/saved/turnover_role_encoder.pkl")
-    print("✅ Turnover model loaded")
-except Exception as e:
-    print(f"❌ Turnover model: {e}")
+    try:
+        models["safety"] = joblib.load("models/saved/safety_risk_model.pkl")
+        encoders["safety_incident"] = joblib.load("models/saved/safety_incident_encoder.pkl")
+        encoders["safety_zone"] = joblib.load("models/saved/safety_zone_encoder.pkl")
+        print("✅ Safety model loaded")
+    except Exception as e:
+        print(f"❌ Safety model: {e}")
 
-try:
-    models["equipment"] = joblib.load("models/saved/equipment_failure_model.pkl")
-    encoders["equipment_type"] = joblib.load("models/saved/equipment_type_encoder.pkl")
-    print("✅ Equipment model loaded")
-except Exception as e:
-    print(f"❌ Equipment model: {e}")
+    try:
+        models["turnover"] = joblib.load("models/saved/turnover_model.pkl")
+        encoders["turnover_role"] = joblib.load("models/saved/turnover_role_encoder.pkl")
+        print("✅ Turnover model loaded")
+    except Exception as e:
+        print(f"❌ Turnover model: {e}")
+
+    try:
+        models["equipment"] = joblib.load("models/saved/equipment_failure_model.pkl")
+        encoders["equipment_type"] = joblib.load("models/saved/equipment_type_encoder.pkl")
+        print("✅ Equipment model loaded")
+    except Exception as e:
+        print(f"❌ Equipment model: {e}")
+
+
+load_models()
 
 
 @app.get("/")
@@ -398,4 +418,150 @@ def gnn_test():
         return run_gnn_risk_analysis(test_data)
     except Exception as e:
         return {"error": str(e)}
-    
+
+
+# ── Training data upload ──
+
+DATASET_SCHEMAS = {
+    "cost_overrun": {
+        "file": "cost_overrun.csv",
+        "required_columns": ["project_type", "duration_months", "team_size", "change_orders",
+                              "material_price_increase", "weather_impact_days", "subcontractor_count",
+                              "overrun", "overrun_pct"],
+    },
+    "construction_delays": {
+        "file": "construction_delays.csv",
+        "required_columns": ["project_type", "planned_duration_days", "weather_delays", "labor_shortage",
+                              "material_delays", "design_changes", "subcontractor_issues", "delayed"],
+    },
+    "safety_incidents": {
+        "file": "safety_incidents.csv",
+        "required_columns": ["incident_type", "severity", "zone", "workers_involved", "ppe_worn",
+                              "training_completed", "near_miss", "month"],
+    },
+    "workforce": {
+        "file": "workforce.csv",
+        "required_columns": ["role", "experience_years", "salary", "performance_score",
+                              "safety_violations", "training_hours", "overtime_hours", "tenure_months", "left_company"],
+    },
+    "equipment": {
+        "file": "equipment.csv",
+        "required_columns": ["equipment_type", "age_years", "operating_hours", "maintenance_count",
+                              "last_service_days_ago", "breakdowns", "health_score", "failed"],
+    },
+}
+
+
+@app.get("/data/summary")
+def data_summary():
+    """Row counts + columns for every training dataset, for the Training Data UI."""
+    summary = {}
+    for name, schema in DATASET_SCHEMAS.items():
+        path = f"data/raw/{schema['file']}"
+        try:
+            df = pd.read_csv(path)
+            summary[name] = {
+                "exists": True,
+                "rows": len(df),
+                "columns": list(df.columns),
+                "required_columns": schema["required_columns"],
+            }
+        except Exception:
+            summary[name] = {
+                "exists": False,
+                "rows": 0,
+                "columns": [],
+                "required_columns": schema["required_columns"],
+            }
+    return summary
+
+
+@app.post("/data/upload/{dataset}")
+async def upload_dataset(dataset: str, file: UploadFile = File(...)):
+    """Replace a training dataset with a user-supplied CSV. Validates required columns
+    are present before overwriting anything; the previous file is kept as a .backup copy."""
+    if dataset not in DATASET_SCHEMAS:
+        raise HTTPException(status_code=404, detail=f"Unknown dataset '{dataset}'. Valid options: {list(DATASET_SCHEMAS.keys())}")
+    schema = DATASET_SCHEMAS[dataset]
+
+    try:
+        contents = await file.read()
+        df = pd.read_csv(BytesIO(contents))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse CSV: {e}")
+
+    missing = [c for c in schema["required_columns"] if c not in df.columns]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing required columns: {missing}. Required: {schema['required_columns']}")
+    if len(df) < 20:
+        raise HTTPException(status_code=400, detail=f"Only {len(df)} rows — need at least 20 for a meaningful train/test split.")
+
+    os.makedirs("data/raw", exist_ok=True)
+    dest = f"data/raw/{schema['file']}"
+    if os.path.exists(dest):
+        shutil.copy(dest, f"data/raw/.backup_{schema['file']}")
+    df.to_csv(dest, index=False)
+
+    return {"success": True, "dataset": dataset, "rows": len(df), "columns": list(df.columns)}
+
+
+# ── Retraining ──
+
+@app.post("/train/all")
+def train_all_models():
+    """Retrain all 6 sklearn/XGBoost models from whatever's currently in data/raw/,
+    hot-reload them into this running server, and return before/after metrics."""
+    report_path = "models/saved/training_report.json"
+    before = None
+    if os.path.exists(report_path):
+        with open(report_path) as f:
+            before = json.load(f)
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "models/train_all.py"],
+            capture_output=True, text=True, timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Training timed out after 180s"}
+
+    if result.returncode != 0:
+        return {"success": False, "error": result.stderr[-3000:], "log_tail": result.stdout[-2000:]}
+
+    after = None
+    if os.path.exists(report_path):
+        with open(report_path) as f:
+            after = json.load(f)
+
+    load_models()  # hot-reload so /predict/* immediately uses the new weights
+
+    return {"success": True, "before": before, "after": after, "log_tail": result.stdout[-2000:]}
+
+
+@app.post("/train/gnn")
+def train_gnn_model():
+    """Retrain the GNN risk model from synthetic graphs, save the checkpoint,
+    and return before/after validation loss."""
+    report_path = "models/saved/gnn_training_report.json"
+    before = None
+    if os.path.exists(report_path):
+        with open(report_path) as f:
+            before = json.load(f)
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "models/train_gnn.py"],
+            capture_output=True, text=True, timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Training timed out after 180s"}
+
+    if result.returncode != 0:
+        return {"success": False, "error": result.stderr[-3000:], "log_tail": result.stdout[-2000:]}
+
+    after = None
+    if os.path.exists(report_path):
+        with open(report_path) as f:
+            after = json.load(f)
+
+    return {"success": True, "before": before, "after": after, "log_tail": result.stdout[-2000:]}

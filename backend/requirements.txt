@@ -11,6 +11,8 @@ attrs==26.1.0
 bcrypt==5.0.0
 billiard==4.2.4
 build==1.4.3
+camelot-py==2.0.0
+gTTS==2.5.3
 cachetools==6.2.6
 celery==5.6.3
 certifi==2026.2.25
@@ -59,6 +61,8 @@ huggingface_hub==1.10.1
 humanize==4.15.0
 hyperframe==6.1.0
 idna==3.11
+instructor==1.15.3
+invoice2data==1.0.0
 importlib_metadata==8.7.1
 importlib_resources==6.5.2
 iniconfig==2.3.0
@@ -106,6 +110,7 @@ orjson==3.11.8
 ormsgpack==1.12.2
 overrides==7.7.0
 packaging==26.0
+price-parser==0.5.1
 passlib==1.7.4
 pdfminer.six==20251230
 pdfplumber==0.11.9
@@ -198,3 +203,26 @@ xxhash==3.6.0
 yarl==1.23.0
 zipp==3.23.0
 zstandard==0.25.0
+
+# ── Better RAG pipeline ────────────────────────────────────────────────────────
+llama-index-core             # LlamaIndex core (free, open-source)
+llama-index-llms-groq        # Groq LLM provider for LlamaIndex
+llama-index-embeddings-huggingface  # HuggingFace embeddings (uses sentence-transformers)
+
+# ── Type-safe agent framework ──────────────────────────────────────────────────
+pydantic-ai                  # PydanticAI agent framework (free, open-source)
+
+# ── Long-term memory ───────────────────────────────────────────────────────────
+mem0ai                       # mem0 semantic long-term memory (free tier + open-source)
+zep-python                   # Zep persistent memory with search (self-hosted, free)
+
+# ── Evaluation frameworks ──────────────────────────────────────────────────────
+ragas                        # RAG evaluation — faithfulness, relevancy, precision (free)
+deepeval                     # LLM evaluation suite (free, open-source)
+
+# ── Advanced voice: VAD, diarization, wake word ────────────────────────────────
+webrtcvad-wheels             # Google WebRTC VAD — lightweight speech/silence detection
+silero-vad                   # ML-based VAD — more accurate on noisy inputs (PyTorch)
+pyannote.audio               # State-of-the-art speaker diarization (HuggingFace models)
+av                           # PyAV — bundles FFmpeg for format-agnostic audio decoding (WAV/WebM/MP4/M4A)
+openwakeword                 # Fully free wake word detection — no account or API key needed

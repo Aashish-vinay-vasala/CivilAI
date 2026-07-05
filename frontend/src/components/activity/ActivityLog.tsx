@@ -15,7 +15,7 @@ const MODULE_COLORS: Record<string, string> = {
   Dashboard: "bg-blue-500/10 text-blue-400",
   "Cost & Budget": "bg-orange-500/10 text-orange-400",
   Safety: "bg-red-500/10 text-red-400",
-  Documents: "bg-purple-500/10 text-purple-400",
+  Documents: "bg-teal-500/10 text-teal-400",
   Reports: "bg-emerald-500/10 text-emerald-400",
   Scheduling: "bg-cyan-500/10 text-cyan-400",
   Workforce: "bg-yellow-500/10 text-yellow-400",

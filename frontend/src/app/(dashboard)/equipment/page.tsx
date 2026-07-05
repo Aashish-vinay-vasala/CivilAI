@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 
 const QRTrackerPage = dynamic(() => import("../qr-tracker/page"), { ssr: false });
@@ -9,7 +9,7 @@ const EQUIPMENT_TABS = [
   { id: "overview", label: "Overview" },
   { id: "qr",       label: "QR Tracker" },
 ];
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Wrench,
   Upload,
@@ -36,16 +36,17 @@ import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import { MarkdownText } from "@/lib/renderMarkdown";
 
 const WORKFORCE_MODULE_TABS = [
   { href: "/workforce", label: "Workforce" },
+  { href: "/team",      label: "Team" },
   { href: "/equipment", label: "Equipment" },
   { href: "/vendors", label: "Vendors" },
 ];
 
 const emptyEquipment = {
   name: "", equipment_code: "", equipment_type: "",
-  age_years: 0, operating_hours: 0,
   health_score: 80, status: "Operational", next_service: "",
 };
 
@@ -77,6 +78,11 @@ export default function EquipmentPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newEquipment, setNewEquipment] = useState({ ...emptyEquipment });
+  // Extract from upload
+  const [extractedEquipment, setExtractedEquipment] = useState<any[]>([]);
+  const [extractLoading, setExtractLoading] = useState(false);
+  const [addingExtracted, setAddingExtracted] = useState<string | null>(null);
+  const extractFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchEquipmentData();
@@ -157,8 +163,8 @@ export default function EquipmentPage() {
       setShowAdd(false);
       setNewEquipment({ ...emptyEquipment });
       fetchEquipmentList();
-    } catch {
-      toast.error("Failed to add equipment");
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? "Failed to add equipment");
     } finally {
       setAdding(false);
     }
@@ -173,6 +179,45 @@ export default function EquipmentPage() {
     } catch {
       toast.error("Failed to delete equipment");
     }
+  };
+
+  const handleExtractUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setExtractLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/equipment/extract-items`, formData);
+      const found = res.data.extracted_items ?? [];
+      setExtractedEquipment(found);
+      toast.success(found.length > 0 ? `Found ${found.length} item(s) — review below.` : "No equipment found in document.");
+    } catch { toast.error("Failed to extract equipment from file"); }
+    finally { setExtractLoading(false); }
+  };
+
+  const addExtractedItem = async (eq: any, idx: number) => {
+    setAddingExtracted(String(idx));
+    try {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/equipment/`, eq);
+      setExtractedEquipment(prev => prev.filter((_, i) => i !== idx));
+      toast.success(`${eq.name} added`);
+      fetchEquipmentList();
+    } catch { toast.error(`Failed to add ${eq.name}`); }
+    finally { setAddingExtracted(null); }
+  };
+
+  const addAllExtractedItems = async () => {
+    setAddingExtracted("all");
+    let added = 0;
+    for (const eq of extractedEquipment) {
+      try { await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/equipment/`, eq); added++; } catch { /* skip */ }
+    }
+    setExtractedEquipment([]);
+    toast.success(`Added ${added} item(s)`);
+    fetchEquipmentList();
+    setAddingExtracted(null);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -294,14 +339,6 @@ export default function EquipmentPage() {
               <input className={inputClass} placeholder="Next service date (e.g. Jul 15)"
                 value={newEquipment.next_service}
                 onChange={(e) => setNewEquipment(p => ({ ...p, next_service: e.target.value }))} />
-              <div className="grid grid-cols-2 gap-3">
-                <input className={inputClass} type="number" placeholder="Age (years)"
-                  value={newEquipment.age_years}
-                  onChange={(e) => setNewEquipment(p => ({ ...p, age_years: parseFloat(e.target.value) || 0 }))} />
-                <input className={inputClass} type="number" placeholder="Operating hours"
-                  value={newEquipment.operating_hours}
-                  onChange={(e) => setNewEquipment(p => ({ ...p, operating_hours: parseFloat(e.target.value) || 0 }))} />
-              </div>
             </div>
             <div className="flex gap-3 mt-5">
               <button onClick={() => setShowAdd(false)}
@@ -333,13 +370,11 @@ export default function EquipmentPage() {
             <Activity className="w-4 h-4 mr-2 text-blue-400" />
             Predict Failure
           </Button>
-          <label className="cursor-pointer">
-            <input type="file" className="hidden" accept=".pdf,.xlsx,.docx" onChange={handleFileUpload} />
-            <Button className="gradient-blue text-white border-0">
-              {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-              Upload Data
-            </Button>
-          </label>
+          <input ref={extractFileRef} type="file" className="hidden" accept=".pdf,.xlsx,.xls,.docx,.doc,.csv" onChange={handleExtractUpload} />
+          <Button className="gradient-blue text-white border-0" disabled={extractLoading} onClick={() => extractFileRef.current?.click()}>
+            {extractLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            Upload
+          </Button>
         </div>
       </motion.div>
 
@@ -428,6 +463,44 @@ export default function EquipmentPage() {
           )}
         </motion.div>
       )}
+
+      {/* Extracted Equipment Review Panel */}
+      <AnimatePresence>
+        {extractedEquipment.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold text-foreground">Extracted Equipment</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">{extractedEquipment.length} item(s) found — select which to add</p>
+              </div>
+              <Button size="sm" className="gradient-blue text-white border-0"
+                disabled={addingExtracted === "all"} onClick={addAllExtractedItems}>
+                {addingExtracted === "all" ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                Add All
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {extractedEquipment.map((eq: any, idx: number) => (
+                <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
+                  <Wrench className="w-4 h-4 text-blue-400 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{eq.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {[eq.equipment_type, eq.equipment_code, eq.status].filter(Boolean).join(" · ")}
+                      {eq.health_score != null && ` · Health: ${eq.health_score}%`}
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" disabled={addingExtracted === String(idx)}
+                    onClick={() => addExtractedItem(eq, idx)}>
+                    {addingExtracted === String(idx) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Equipment Register */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
@@ -573,7 +646,7 @@ export default function EquipmentPage() {
             <Wrench className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-foreground">AI Analysis</h3>
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{analysis}</p>
+          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
         </motion.div>
       )}
 

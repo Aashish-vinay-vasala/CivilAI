@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ClipboardList, MessageSquare, FileCheck, FileText,
   Users, Plus, X, Loader2, CheckCircle, AlertTriangle,
   Clock, Search, Edit2, Save, Trash2, Sparkles,
-  DollarSign, BarChart3,
+  DollarSign, BarChart3, Upload,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
@@ -19,7 +20,7 @@ import {
 const tabs = [
   { id: "punch", label: "Punch List", icon: ClipboardList, color: "text-red-400" },
   { id: "rfi", label: "RFI Tracker", icon: MessageSquare, color: "text-blue-400" },
-  { id: "submittals", label: "Submittals", icon: FileCheck, color: "text-purple-400" },
+  { id: "submittals", label: "Submittals", icon: FileCheck, color: "text-cyan-400" },
   { id: "daily", label: "Daily Reports", icon: FileText, color: "text-emerald-400" },
   { id: "meetings", label: "Meetings", icon: Users, color: "text-orange-400" },
   { id: "costcodes", label: "Cost Codes", icon: DollarSign, color: "text-yellow-400" },
@@ -53,8 +54,150 @@ export default function ConstructionPage() {
   const [search, setSearch] = useState("");
   const [aiSummary, setAiSummary] = useState("");
 
+  // Edit / delete state
+  const [editItem, setEditItem] = useState<any | null>(null); // item being edited + _tab
+  const [editLoading, setEditLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const [extractedItems, setExtractedItems] = useState<any[]>([]);
+  const [extractLoading, setExtractLoading] = useState(false);
+  const [addingExtracted, setAddingExtracted] = useState<string | null>(null);
+  const extractFileRef = useRef<HTMLInputElement>(null);
+
+  const CREATE_ENDPOINTS: Record<string, string> = {
+    punch: "punch-list",
+    rfi: "rfis",
+    submittals: "submittals",
+    meetings: "meetings",
+    costcodes: "cost-codes",
+  };
+
+  const handleExtractUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !projectId) return;
+    e.target.value = "";
+    if (activeTab === "daily") { toast.error("Upload extraction is not available for Daily Reports"); return; }
+    setExtractLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/extract?type=${activeTab}`, fd
+      );
+      const found = res.data.extracted_items ?? [];
+      setExtractedItems(found);
+      toast.success(found.length > 0 ? `Found ${found.length} item(s) — review below.` : "No items found in document.");
+    } catch { toast.error("Failed to extract from file"); }
+    finally { setExtractLoading(false); }
+  };
+
+  const addExtractedItem = async (item: any, idx: number) => {
+    setAddingExtracted(String(idx));
+    const endpoint = CREATE_ENDPOINTS[activeTab];
+    try {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/${endpoint}`, {
+        ...item,
+        project_id: projectId,
+        ...(activeTab === "costcodes" ? {
+          budgeted_amount: parseFloat(item.budgeted_amount) || 0,
+          actual_amount: parseFloat(item.actual_amount) || 0,
+        } : {}),
+      });
+      setExtractedItems(prev => prev.filter((_, i) => i !== idx));
+      toast.success("Item added");
+      fetchData();
+    } catch { toast.error("Failed to add item"); }
+    finally { setAddingExtracted(null); }
+  };
+
+  const addAllExtractedItems = async () => {
+    setAddingExtracted("all");
+    const endpoint = CREATE_ENDPOINTS[activeTab];
+    let added = 0;
+    for (const item of extractedItems) {
+      try {
+        await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/${endpoint}`, {
+          ...item,
+          project_id: projectId,
+          ...(activeTab === "costcodes" ? {
+            budgeted_amount: parseFloat(item.budgeted_amount) || 0,
+            actual_amount: parseFloat(item.actual_amount) || 0,
+          } : {}),
+        });
+        added++;
+      } catch { /* skip */ }
+    }
+    setExtractedItems([]);
+    toast.success(`Added ${added} item(s)`);
+    fetchData();
+    setAddingExtracted(null);
+  };
+
+  const PATCH_ENDPOINTS: Record<string, string> = {
+    punch: "punch-list",
+    rfi: "rfis",
+    submittals: "submittals",
+    daily: "daily-reports",
+    meetings: "meetings",
+    costcodes: "cost-codes",
+  };
+
+  const openEdit = (item: any, tab: string) => {
+    setEditItem({ ...item, _tab: tab });
+    if (tab === "punch") setPunchForm({ item: item.item || "", location: item.location || "", assigned_to: item.assigned_to || "", priority: item.priority || "medium", due_date: item.due_date || "", description: item.description || "", category: item.category || "" });
+    if (tab === "rfi") setRfiForm({ subject: item.subject || "", question: item.question || "", submitted_by: item.submitted_by || "", assigned_to: item.assigned_to || "", priority: item.priority || "medium", due_date: item.due_date || "" });
+    if (tab === "submittals") setSubmittalForm({ title: item.title || "", type: item.type || "Shop Drawing", submitted_by: item.submitted_by || "", reviewed_by: item.reviewed_by || "", submitted_date: item.submitted_date || "", description: item.description || "" });
+    if (tab === "daily") setDailyForm({ report_date: item.report_date || "", weather: item.weather || "", temperature: item.temperature?.toString() || "", workers_on_site: item.workers_on_site?.toString() || "", work_completed: item.work_completed || "", issues: item.issues || "", materials_used: item.materials_used || "", equipment_used: item.equipment_used || "", created_by: item.created_by || "" });
+    if (tab === "meetings") setMeetingForm({ meeting_date: item.meeting_date || "", meeting_type: item.meeting_type || "Progress Meeting", attendees: item.attendees || "", location: item.location || "", agenda: item.agenda || "", discussion: item.discussion || "", action_items: item.action_items || "", created_by: item.created_by || "" });
+    if (tab === "costcodes") setCostCodeForm({ code: item.code || "", description: item.description || "", category: item.category || "", budgeted_amount: item.budgeted_amount?.toString() || "", actual_amount: item.actual_amount?.toString() || "", unit: item.unit || "" });
+    setShowAdd(true);
+    setAiSummary("");
+  };
+
+  const closeForm = () => {
+    setShowAdd(false);
+    setEditItem(null);
+    setAiSummary("");
+  };
+
+  const handleUpdate = async () => {
+    if (!editItem) return;
+    setEditLoading(true);
+    const tab = editItem._tab;
+    const endpoint = PATCH_ENDPOINTS[tab];
+    let payload: any = {};
+    if (tab === "punch") payload = { ...punchForm };
+    if (tab === "rfi") payload = { ...rfiForm };
+    if (tab === "submittals") payload = { ...submittalForm };
+    if (tab === "daily") payload = { ...dailyForm, workers_on_site: parseInt(dailyForm.workers_on_site) || 0, temperature: parseFloat(dailyForm.temperature) || undefined };
+    if (tab === "meetings") payload = { ...meetingForm };
+    if (tab === "costcodes") payload = { ...costCodeForm, budgeted_amount: parseFloat(costCodeForm.budgeted_amount) || 0, actual_amount: parseFloat(costCodeForm.actual_amount) || 0 };
+    try {
+      await axios.patch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/${endpoint}/${editItem.id}`, payload);
+      toast.success("Updated successfully!");
+      closeForm();
+      fetchData();
+    } catch { toast.error("Failed to update"); }
+    finally { setEditLoading(false); }
+  };
+
+  const handleDelete = async (id: string, tab: string) => {
+    if (!confirm("Delete this item? This cannot be undone.")) return;
+    setDeletingId(id);
+    const endpoint = PATCH_ENDPOINTS[tab];
+    try {
+      await axios.delete(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/${endpoint}/${id}`);
+      toast.success("Deleted");
+      fetchData();
+    } catch { toast.error("Failed to delete"); }
+    finally { setDeletingId(null); }
+  };
+
   useEffect(() => { fetchProjects(); }, []);
-  useEffect(() => { if (projectId) fetchData(); }, [projectId, activeTab]);
+  useEffect(() => {
+    setExtractedItems([]);
+    if (projectId) fetchData();
+  }, [projectId, activeTab]);
 
   const fetchProjects = async () => {
     try {
@@ -187,6 +330,17 @@ export default function ConstructionPage() {
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           )}
+          {activeTab !== "daily" && (
+            <>
+              <input ref={extractFileRef} type="file" className="hidden"
+                accept=".pdf,.xlsx,.xls,.docx,.doc,.csv" onChange={handleExtractUpload} />
+              <Button className="gradient-blue text-white border-0" disabled={extractLoading || !projectId}
+                onClick={() => extractFileRef.current?.click()}>
+                {extractLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                Upload
+              </Button>
+            </>
+          )}
           <button onClick={() => { setShowAdd(true); setAiSummary(""); }}
             className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium">
             <Plus className="w-4 h-4" />
@@ -200,7 +354,7 @@ export default function ConstructionPage() {
         {[
           { label: "Open Punch Items", value: openPunch.toString(), icon: ClipboardList, color: "border-red-500/20 bg-red-500/5", iconColor: "text-red-400" },
           { label: "Open RFIs", value: openRfi.toString(), icon: MessageSquare, color: "border-blue-500/20 bg-blue-500/5", iconColor: "text-blue-400" },
-          { label: "Pending Submittals", value: pendingSubmittals.toString(), icon: FileCheck, color: "border-purple-500/20 bg-purple-500/5", iconColor: "text-purple-400" },
+          { label: "Pending Submittals", value: pendingSubmittals.toString(), icon: FileCheck, color: "border-cyan-500/20 bg-cyan-500/5", iconColor: "text-cyan-400" },
           { label: "Cost Codes", value: totalCostCodes.toString(), icon: DollarSign, color: "border-yellow-500/20 bg-yellow-500/5", iconColor: "text-yellow-400" },
         ].map((kpi, i) => (
           <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
@@ -230,16 +384,16 @@ export default function ConstructionPage() {
         ))}
       </div>
 
-      {/* Add Form */}
+      {/* Add / Edit Form */}
       <AnimatePresence>
         {showAdd && (
           <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-            className="bg-card border border-blue-500/30 rounded-2xl p-6">
+            className={`bg-card border rounded-2xl p-6 ${editItem ? "border-orange-500/30" : "border-blue-500/30"}`}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-foreground">
-                Add {tabs.find(t => t.id === activeTab)?.label}
+                {editItem ? "Edit" : "Add"} {tabs.find(t => t.id === activeTab)?.label}
               </h3>
-              <button onClick={() => setShowAdd(false)}>
+              <button onClick={closeForm}>
                 <X className="w-4 h-4 text-muted-foreground" />
               </button>
             </div>
@@ -522,15 +676,111 @@ export default function ConstructionPage() {
             )}
 
             <div className="flex gap-3 mt-4">
-              <button onClick={() => setShowAdd(false)}
+              <button onClick={closeForm}
                 className="px-4 py-2 rounded-xl bg-secondary text-muted-foreground text-sm hover:text-foreground">
                 Cancel
               </button>
-              <button onClick={handleAdd} disabled={loading}
-                className="px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium flex items-center gap-2">
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                Save
-              </button>
+              {editItem ? (
+                <button onClick={handleUpdate} disabled={editLoading}
+                  className="px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium flex items-center gap-2">
+                  {editLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save Changes
+                </button>
+              ) : (
+                <button onClick={handleAdd} disabled={loading}
+                  className="px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium flex items-center gap-2">
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  Save
+                </button>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Extracted Items Review Panel */}
+      <AnimatePresence>
+        {extractedItems.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold text-foreground">
+                  Extracted {tabs.find(t => t.id === activeTab)?.label}
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {extractedItems.length} item(s) found — select which to add
+                </p>
+              </div>
+              <Button size="sm" className="gradient-blue text-white border-0"
+                disabled={addingExtracted === "all"} onClick={addAllExtractedItems}>
+                {addingExtracted === "all"
+                  ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                Add All
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {extractedItems.map((item: any, idx: number) => (
+                <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
+                  {activeTab === "punch" && <ClipboardList className="w-4 h-4 text-red-400 shrink-0" />}
+                  {activeTab === "rfi" && <MessageSquare className="w-4 h-4 text-blue-400 shrink-0" />}
+                  {activeTab === "submittals" && <FileCheck className="w-4 h-4 text-cyan-400 shrink-0" />}
+                  {activeTab === "meetings" && <Users className="w-4 h-4 text-orange-400 shrink-0" />}
+                  {activeTab === "costcodes" && <DollarSign className="w-4 h-4 text-yellow-400 shrink-0" />}
+                  <div className="flex-1 min-w-0">
+                    {activeTab === "punch" && (
+                      <>
+                        <p className="text-sm font-medium text-foreground truncate">{item.item}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {[item.location, item.assigned_to, item.priority, item.category].filter(Boolean).join(" · ")}
+                        </p>
+                      </>
+                    )}
+                    {activeTab === "rfi" && (
+                      <>
+                        <p className="text-sm font-medium text-foreground truncate">{item.subject}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {[item.submitted_by && `From: ${item.submitted_by}`, item.assigned_to && `To: ${item.assigned_to}`, item.priority].filter(Boolean).join(" · ")}
+                        </p>
+                      </>
+                    )}
+                    {activeTab === "submittals" && (
+                      <>
+                        <p className="text-sm font-medium text-foreground truncate">{item.title}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {[item.type, item.submitted_by, item.submitted_date].filter(Boolean).join(" · ")}
+                        </p>
+                      </>
+                    )}
+                    {activeTab === "meetings" && (
+                      <>
+                        <p className="text-sm font-medium text-foreground truncate">
+                          {item.meeting_type} — {item.meeting_date}
+                        </p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {[item.attendees, item.location].filter(Boolean).join(" · ")}
+                        </p>
+                      </>
+                    )}
+                    {activeTab === "costcodes" && (
+                      <>
+                        <p className="text-sm font-medium text-foreground">
+                          <span className="font-mono text-yellow-400 mr-2">{item.code}</span>
+                          {item.description}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {[item.category, item.budgeted_amount && `Budget: $${Number(item.budgeted_amount).toLocaleString()}`].filter(Boolean).join(" · ")}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                  <Button size="sm" variant="outline" disabled={addingExtracted === String(idx)}
+                    onClick={() => addExtractedItem(item, idx)}>
+                    {addingExtracted === String(idx) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                  </Button>
+                </div>
+              ))}
             </div>
           </motion.div>
         )}
@@ -557,18 +807,18 @@ export default function ConstructionPage() {
             {activeTab === "punch" && (
               <div className="space-y-2">
                 <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-muted-foreground font-medium border-b border-border mb-2">
-                  <span className="col-span-4">Item</span>
+                  <span className="col-span-3">Item</span>
                   <span className="col-span-2">Location</span>
                   <span className="col-span-2">Assigned</span>
                   <span className="col-span-1">Priority</span>
                   <span className="col-span-2">Status</span>
-                  <span className="col-span-1">Action</span>
+                  <span className="col-span-2">Actions</span>
                 </div>
                 {punchItems.filter(i => !search || i.item?.toLowerCase().includes(search.toLowerCase())).map((item, i) => (
                   <motion.div key={item.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: i * 0.04 }}
-                    className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors">
-                    <div className="col-span-4">
+                    className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors group">
+                    <div className="col-span-3">
                       <p className="text-sm font-medium text-foreground">{item.item}</p>
                       {item.description && <p className="text-xs text-muted-foreground truncate">{item.description}</p>}
                     </div>
@@ -580,12 +830,23 @@ export default function ConstructionPage() {
                     <span className={`col-span-2 text-xs px-2 py-1 rounded-full border w-fit ${getStatusColor(item.status)}`}>
                       {item.status}
                     </span>
-                    {item.status !== "closed" && (
-                      <button onClick={() => handleClose(item.id, "punch")}
-                        className="col-span-1 p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors w-fit">
-                        <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                    <div className="col-span-2 flex items-center gap-1">
+                      {item.status !== "closed" && (
+                        <button onClick={() => handleClose(item.id, "punch")} title="Mark closed"
+                          className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors">
+                          <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                        </button>
+                      )}
+                      <button onClick={() => openEdit(item, "punch")} title="Edit"
+                        className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                        <Edit2 className="w-3.5 h-3.5" />
                       </button>
-                    )}
+                      <button onClick={() => handleDelete(item.id, "punch")} title="Delete"
+                        disabled={deletingId === item.id}
+                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                        {deletingId === item.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </motion.div>
                 ))}
                 {punchItems.length === 0 && (
@@ -602,18 +863,19 @@ export default function ConstructionPage() {
               <div className="space-y-2">
                 <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-muted-foreground font-medium border-b border-border mb-2">
                   <span className="col-span-1">No.</span>
-                  <span className="col-span-4">Subject</span>
+                  <span className="col-span-3">Subject</span>
                   <span className="col-span-2">Submitted By</span>
                   <span className="col-span-2">Assigned To</span>
                   <span className="col-span-1">Priority</span>
-                  <span className="col-span-2">Status</span>
+                  <span className="col-span-1">Status</span>
+                  <span className="col-span-2">Actions</span>
                 </div>
                 {rfis.filter(r => !search || r.subject?.toLowerCase().includes(search.toLowerCase())).map((rfi, i) => (
                   <motion.div key={rfi.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: i * 0.04 }}
-                    className="grid grid-cols-12 gap-2 items-start px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors">
+                    className="grid grid-cols-12 gap-2 items-start px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors group">
                     <span className="col-span-1 text-xs text-muted-foreground">{rfi.rfi_number}</span>
-                    <div className="col-span-4">
+                    <div className="col-span-3">
                       <p className="text-sm font-medium text-foreground">{rfi.subject}</p>
                       {rfi.question && <p className="text-xs text-muted-foreground truncate mt-0.5">{rfi.question}</p>}
                       {rfi.response && (
@@ -625,7 +887,24 @@ export default function ConstructionPage() {
                     <p className="col-span-2 text-xs text-muted-foreground">{rfi.submitted_by || "—"}</p>
                     <p className="col-span-2 text-xs text-foreground">{rfi.assigned_to || "—"}</p>
                     <span className={`col-span-1 text-xs font-medium ${getPriorityColor(rfi.priority)}`}>{rfi.priority}</span>
-                    <span className={`col-span-2 text-xs px-2 py-1 rounded-full border w-fit ${getStatusColor(rfi.status)}`}>{rfi.status}</span>
+                    <span className={`col-span-1 text-xs px-2 py-1 rounded-full border w-fit ${getStatusColor(rfi.status)}`}>{rfi.status}</span>
+                    <div className="col-span-2 flex items-center gap-1">
+                      {rfi.status !== "closed" && (
+                        <button onClick={() => handleClose(rfi.id, "rfi")} title="Mark closed"
+                          className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors">
+                          <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                        </button>
+                      )}
+                      <button onClick={() => openEdit(rfi, "rfi")} title="Edit"
+                        className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => handleDelete(rfi.id, "rfi")} title="Delete"
+                        disabled={deletingId === rfi.id}
+                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                        {deletingId === rfi.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </motion.div>
                 ))}
                 {rfis.length === 0 && (
@@ -644,25 +923,37 @@ export default function ConstructionPage() {
                   <span className="col-span-1">No.</span>
                   <span className="col-span-3">Title</span>
                   <span className="col-span-2">Type</span>
-                  <span className="col-span-2">Submitted By</span>
-                  <span className="col-span-2">Reviewed By</span>
+                  <span className="col-span-1">Submitted By</span>
+                  <span className="col-span-1">Reviewed By</span>
                   <span className="col-span-2">Status</span>
+                  <span className="col-span-2">Actions</span>
                 </div>
                 {submittals.filter(s => !search || s.title?.toLowerCase().includes(search.toLowerCase())).map((sub, i) => (
                   <motion.div key={sub.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: i * 0.04 }}
-                    className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors">
+                    className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors group">
                     <span className="col-span-1 text-xs text-muted-foreground">{sub.submittal_number}</span>
                     <div className="col-span-3">
                       <p className="text-sm font-medium text-foreground">{sub.title}</p>
                       {sub.description && <p className="text-xs text-muted-foreground truncate">{sub.description}</p>}
                     </div>
-                    <span className="col-span-2 text-xs px-2 py-0.5 rounded-md bg-secondary text-muted-foreground">{sub.type}</span>
-                    <p className="col-span-2 text-xs text-muted-foreground">{sub.submitted_by || "—"}</p>
-                    <p className="col-span-2 text-xs text-foreground">{sub.reviewed_by || "—"}</p>
+                    <span className="col-span-2 text-xs px-2 py-0.5 rounded-md bg-secondary text-muted-foreground truncate">{sub.type}</span>
+                    <p className="col-span-1 text-xs text-muted-foreground truncate">{sub.submitted_by || "—"}</p>
+                    <p className="col-span-1 text-xs text-foreground truncate">{sub.reviewed_by || "—"}</p>
                     <span className={`col-span-2 text-xs px-2 py-1 rounded-full border w-fit ${getStatusColor(sub.status)}`}>
                       {sub.status?.replace("_", " ")}
                     </span>
+                    <div className="col-span-2 flex items-center gap-1">
+                      <button onClick={() => openEdit(sub, "submittals")} title="Edit"
+                        className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => handleDelete(sub.id, "submittals")} title="Delete"
+                        disabled={deletingId === sub.id}
+                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                        {deletingId === sub.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </motion.div>
                 ))}
                 {submittals.length === 0 && (
@@ -691,7 +982,18 @@ export default function ConstructionPage() {
                           👷 {report.workers_on_site} workers
                         </span>
                       </div>
-                      <span className="text-xs text-muted-foreground">{report.created_by}</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs text-muted-foreground mr-2">{report.created_by}</span>
+                        <button onClick={() => openEdit(report, "daily")} title="Edit"
+                          className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => handleDelete(report.id, "daily")} title="Delete"
+                          disabled={deletingId === report.id}
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                          {deletingId === report.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
                     </div>
                     {report.work_completed && (
                       <p className="text-xs text-foreground mb-1"><span className="text-muted-foreground">✅ Work: </span>{report.work_completed}</p>
@@ -729,7 +1031,18 @@ export default function ConstructionPage() {
                           {meeting.meeting_type}
                         </span>
                       </div>
-                      <span className="text-xs text-muted-foreground">{meeting.location}</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs text-muted-foreground mr-2">{meeting.location}</span>
+                        <button onClick={() => openEdit(meeting, "meetings")} title="Edit"
+                          className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => handleDelete(meeting.id, "meetings")} title="Delete"
+                          disabled={deletingId === meeting.id}
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                          {deletingId === meeting.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
                     </div>
                     <p className="text-xs text-muted-foreground mb-1">👥 {meeting.attendees}</p>
                     {meeting.agenda && <p className="text-xs text-foreground mb-1"><span className="text-muted-foreground">📋 Agenda: </span>{meeting.agenda}</p>}
@@ -763,22 +1076,33 @@ export default function ConstructionPage() {
                   <span className="col-span-2">Category</span>
                   <span className="col-span-2">Budgeted</span>
                   <span className="col-span-2">Actual</span>
-                  <span className="col-span-2">Variance</span>
+                  <span className="col-span-1">Variance</span>
+                  <span className="col-span-1">Actions</span>
                 </div>
                 {costCodes.filter(c => !search || c.description?.toLowerCase().includes(search.toLowerCase())).map((code, i) => {
                   const variance = code.budgeted_amount - code.actual_amount;
                   return (
                     <motion.div key={code.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: i * 0.04 }}
-                      className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors">
+                      className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors group">
                       <span className="col-span-1 text-xs font-mono text-blue-400">{code.code}</span>
                       <p className="col-span-3 text-sm font-medium text-foreground">{code.description}</p>
                       <span className="col-span-2 text-xs px-2 py-0.5 rounded-md bg-secondary text-muted-foreground">{code.category || "—"}</span>
                       <p className="col-span-2 text-xs text-foreground">${(code.budgeted_amount / 1000).toFixed(0)}K</p>
                       <p className="col-span-2 text-xs text-foreground">${(code.actual_amount / 1000).toFixed(0)}K</p>
-                      <p className={`col-span-2 text-xs font-medium ${variance >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      <p className={`col-span-1 text-xs font-medium ${variance >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                         {variance >= 0 ? "+" : ""}${(variance / 1000).toFixed(0)}K
                       </p>
+                      <div className="col-span-1 flex items-center gap-1">
+                        <button onClick={() => openEdit(code, "costcodes")} title="Edit"
+                          className="p-1 rounded text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors">
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => handleDelete(code.id, "costcodes")} title="Delete"
+                          className="p-1 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                          {deletingId === code.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
                     </motion.div>
                   );
                 })}

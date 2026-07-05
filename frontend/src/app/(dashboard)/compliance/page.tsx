@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
 import {
   ClipboardCheck,
@@ -14,6 +14,9 @@ import {
   Plus,
   Trash2,
   RefreshCw,
+  Pencil,
+  X,
+  Save,
 } from "lucide-react";
 import {
   RadarChart,
@@ -33,11 +36,13 @@ import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import { MarkdownText } from "@/lib/renderMarkdown";
 
 const DOCS_TABS = [
-  { href: "/documents", label: "Documents" },
-  { href: "/contracts", label: "Contracts" },
+  { href: "/documents",  label: "Documents" },
+  { href: "/contracts",  label: "Contracts" },
   { href: "/compliance", label: "Compliance" },
+  { href: "/accounting", label: "Accounting Extract" },
 ];
 
 const PERMIT_TYPES = [
@@ -97,6 +102,8 @@ export default function CompliancePage() {
   const [permits, setPermits] = useState<Permit[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // AI analysis
   const [loading, setLoading] = useState(false);
   const [analysis, setAnalysis] = useState("");
@@ -122,6 +129,15 @@ export default function CompliancePage() {
   // Delete
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Inline edit
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Partial<Permit>>({});
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  // Extracted permits from upload
+  const [extractedPermits, setExtractedPermits] = useState<Permit[]>([]);
+  const [addingExtracted, setAddingExtracted] = useState<string | null>(null);
+
   const fetchAll = useCallback(async () => {
     setDataLoading(true);
     try {
@@ -143,7 +159,9 @@ export default function CompliancePage() {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = "";
     setLoading(true);
+    setExtractedPermits([]);
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -152,11 +170,45 @@ export default function CompliancePage() {
         formData
       );
       setAnalysis(response.data.analysis);
-      toast.success("Compliance report analyzed!");
-    } catch {
-      toast.error("Failed to analyze");
+      const found: Permit[] = response.data.extracted_permits ?? [];
+      setExtractedPermits(found);
+      toast.success(`Analyzed! ${found.length > 0 ? `Found ${found.length} permit(s) — review below.` : "No permits extracted."}`);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? "Failed to analyze");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveEdit = async (id: string) => {
+    setSavingId(id);
+    try {
+      await axios.put(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/compliance/permits/${id}`, editForm);
+      toast.success("Permit updated");
+      setEditId(null);
+      setEditForm({});
+      fetchAll();
+    } catch {
+      toast.error("Failed to update permit");
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const addExtractedPermit = async (permit: Permit, idx: number) => {
+    setAddingExtracted(String(idx));
+    try {
+      const payload = { ...permit };
+      if (!payload.expiry_date) delete payload.expiry_date;
+      if (!payload.issued_by) delete payload.issued_by;
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/compliance/permits`, payload);
+      toast.success(`"${permit.name}" added to register`);
+      setExtractedPermits(prev => prev.filter((_, i) => i !== idx));
+      fetchAll();
+    } catch {
+      toast.error("Failed to add permit");
+    } finally {
+      setAddingExtracted(null);
     }
   };
 
@@ -274,13 +326,11 @@ export default function CompliancePage() {
             <FileText className="w-4 h-4 mr-2 text-blue-400" />
             Generate Application
           </Button>
-          <label className="cursor-pointer">
-            <input type="file" className="hidden" accept=".pdf,.xlsx,.docx" onChange={handleFileUpload} />
-            <Button className="gradient-blue text-white border-0">
-              {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-              Upload Report
-            </Button>
-          </label>
+          <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.xlsx,.docx" onChange={handleFileUpload} />
+          <Button className="gradient-blue text-white border-0" disabled={loading} onClick={() => fileInputRef.current?.click()}>
+            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            Upload Report
+          </Button>
         </div>
       </motion.div>
 
@@ -407,7 +457,7 @@ export default function CompliancePage() {
           </Button>
           {permitResult && (
             <div className="mt-4 p-4 bg-secondary rounded-xl">
-              <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{permitResult}</p>
+              <MarkdownText text={permitResult} className="text-sm text-foreground leading-relaxed" />
             </div>
           )}
         </motion.div>
@@ -511,58 +561,149 @@ export default function CompliancePage() {
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.05 }}
-                className="flex items-center gap-4 p-4 rounded-xl bg-secondary/40 hover:bg-secondary/70 transition-colors group"
+                className="rounded-xl bg-secondary/40 hover:bg-secondary/70 transition-colors group"
               >
-                {getStatusIcon(permit.status)}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-foreground font-medium truncate">{permit.name}</p>
-                  <p className="text-xs text-muted-foreground">{permit.type}</p>
-                </div>
-                <span className="text-xs text-muted-foreground hidden sm:block">
-                  {permit.expiry_date ? `Expiry: ${permit.expiry_date}` : "No expiry"}
-                </span>
-                {/* Status changer */}
-                <select
-                  value={permit.status}
-                  onChange={(e) => updateStatus(permit, e.target.value)}
-                  className={`text-xs px-2.5 py-1 rounded-full border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500 ${
-                    permit.status === "Approved"
-                      ? "bg-emerald-500/10 text-emerald-400"
-                      : permit.status === "Rejected"
-                      ? "bg-red-500/10 text-red-400"
-                      : "bg-orange-500/10 text-orange-400"
-                  }`}
-                >
-                  <option>Pending</option>
-                  <option>Approved</option>
-                  <option>Rejected</option>
-                </select>
-                <span className={`text-xs px-2 py-0.5 rounded-full hidden sm:block ${
-                  permit.risk_level === "high"
-                    ? "bg-red-500/10 text-red-400"
-                    : permit.risk_level === "medium"
-                    ? "bg-orange-500/10 text-orange-400"
-                    : "bg-emerald-500/10 text-emerald-400"
-                }`}>
-                  {permit.risk_level}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="w-7 h-7 opacity-0 group-hover:opacity-100 transition-opacity text-red-400 hover:text-red-300"
-                  onClick={() => permit.id && deletePermit(permit.id)}
-                  disabled={deletingId === permit.id}
-                >
-                  {deletingId === permit.id
-                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    : <Trash2 className="w-3.5 h-3.5" />
-                  }
-                </Button>
+                {editId === permit.id ? (
+                  /* ── Inline edit row ── */
+                  <div className="p-4 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <input
+                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={editForm.name ?? permit.name}
+                        onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))}
+                        placeholder="Permit name"
+                      />
+                      <select
+                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={editForm.type ?? permit.type}
+                        onChange={e => setEditForm(p => ({ ...p, type: e.target.value }))}
+                      >
+                        {PERMIT_TYPES.map(t => <option key={t}>{t}</option>)}
+                      </select>
+                      <select
+                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={editForm.status ?? permit.status}
+                        onChange={e => setEditForm(p => ({ ...p, status: e.target.value }))}
+                      >
+                        {["Pending", "Approved", "Rejected"].map(s => <option key={s}>{s}</option>)}
+                      </select>
+                      <select
+                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={editForm.risk_level ?? permit.risk_level}
+                        onChange={e => setEditForm(p => ({ ...p, risk_level: e.target.value }))}
+                      >
+                        {RISK_LEVELS.map(r => <option key={r}>{r}</option>)}
+                      </select>
+                      <input
+                        type="date"
+                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={editForm.expiry_date ?? permit.expiry_date ?? ""}
+                        onChange={e => setEditForm(p => ({ ...p, expiry_date: e.target.value }))}
+                      />
+                      <input
+                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={editForm.issued_by ?? permit.issued_by ?? ""}
+                        onChange={e => setEditForm(p => ({ ...p, issued_by: e.target.value }))}
+                        placeholder="Issued by"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" className="gradient-blue text-white border-0 h-7 px-3 text-xs"
+                        onClick={() => permit.id && saveEdit(permit.id)} disabled={savingId === permit.id}>
+                        {savingId === permit.id ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Save className="w-3 h-3 mr-1" />}
+                        Save
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-7 px-3 text-xs"
+                        onClick={() => { setEditId(null); setEditForm({}); }}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  /* ── Normal row ── */
+                  <div className="flex items-center gap-4 p-4">
+                    {getStatusIcon(permit.status)}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-foreground font-medium truncate">{permit.name}</p>
+                      <p className="text-xs text-muted-foreground">{permit.type}{permit.issued_by ? ` · ${permit.issued_by}` : ""}</p>
+                    </div>
+                    <span className="text-xs text-muted-foreground hidden sm:block">
+                      {permit.expiry_date ? `Expiry: ${permit.expiry_date}` : "No expiry"}
+                    </span>
+                    <select
+                      value={permit.status}
+                      onChange={(e) => updateStatus(permit, e.target.value)}
+                      className={`text-xs px-2.5 py-1 rounded-full border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                        permit.status === "Approved" ? "bg-emerald-500/10 text-emerald-400"
+                        : permit.status === "Rejected" ? "bg-red-500/10 text-red-400"
+                        : "bg-orange-500/10 text-orange-400"
+                      }`}
+                    >
+                      <option>Pending</option>
+                      <option>Approved</option>
+                      <option>Rejected</option>
+                    </select>
+                    <span className={`text-xs px-2 py-0.5 rounded-full hidden sm:block ${
+                      permit.risk_level === "high" ? "bg-red-500/10 text-red-400"
+                      : permit.risk_level === "medium" ? "bg-orange-500/10 text-orange-400"
+                      : "bg-emerald-500/10 text-emerald-400"
+                    }`}>
+                      {permit.risk_level}
+                    </span>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button variant="ghost" size="icon" className="w-7 h-7 text-muted-foreground hover:text-blue-400"
+                        onClick={() => { setEditId(permit.id!); setEditForm({ name: permit.name, type: permit.type, status: permit.status, risk_level: permit.risk_level, expiry_date: permit.expiry_date ?? "", issued_by: permit.issued_by ?? "" }); }}>
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="w-7 h-7 text-red-400 hover:text-red-300"
+                        onClick={() => permit.id && deletePermit(permit.id)} disabled={deletingId === permit.id}>
+                        {deletingId === permit.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </motion.div>
             ))}
           </div>
         )}
       </motion.div>
+
+      {/* Extracted permits from upload */}
+      {extractedPermits.length > 0 && (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-emerald-500/30 rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-semibold text-foreground">Permits Found in Document</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Review and add to your permit register</p>
+            </div>
+            <button onClick={() => setExtractedPermits([])} className="text-muted-foreground hover:text-foreground">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="space-y-2">
+            {extractedPermits.map((p, idx) => (
+              <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
+                {getStatusIcon(p.status)}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate">{p.name}</p>
+                  <p className="text-xs text-muted-foreground">{p.type}{p.expiry_date ? ` · Expires ${p.expiry_date}` : ""}{p.issued_by ? ` · ${p.issued_by}` : ""}</p>
+                </div>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                  p.status === "Approved" ? "bg-emerald-500/10 text-emerald-400"
+                  : p.status === "Rejected" ? "bg-red-500/10 text-red-400"
+                  : "bg-orange-500/10 text-orange-400"
+                }`}>{p.status}</span>
+                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white border-0 h-7 px-3 text-xs"
+                  onClick={() => addExtractedPermit(p, idx)} disabled={addingExtracted === String(idx)}>
+                  {addingExtracted === String(idx) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3 mr-1" />}
+                  Add
+                </Button>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
 
       {/* AI Analysis result */}
       {analysis && (
@@ -575,7 +716,7 @@ export default function CompliancePage() {
             <ClipboardCheck className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-foreground">AI Compliance Analysis</h3>
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{analysis}</p>
+          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
         </motion.div>
       )}
 

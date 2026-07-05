@@ -9,7 +9,15 @@ import {
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
 import { supabase } from "@/lib/supabase";
+
+const CONSTRUCTION_MODULE_TABS = [
+  { href: "/construction",   label: "Construction" },
+  { href: "/daily-reports",  label: "Daily Reports" },
+  { href: "/rfis",           label: "RFIs" },
+  { href: "/meetings",       label: "Meetings" },
+];
 
 interface DailyReport {
   id: string;
@@ -187,6 +195,7 @@ Write a structured report: Summary, Work Completed, Resources Used, Safety Notes
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={CONSTRUCTION_MODULE_TABS} />
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground">Daily Site Reports</h1>
@@ -219,7 +228,7 @@ Write a structured report: Summary, Work Completed, Resources Used, Safety Notes
                 <div className="flex items-center gap-3 mt-0.5 flex-wrap">
                   {r.weather && <span className="flex items-center gap-1 text-xs text-muted-foreground"><CloudSun className="w-3 h-3" />{r.weather}</span>}
                   {r.manpower ? <span className="flex items-center gap-1 text-xs text-muted-foreground"><Users className="w-3 h-3" />{r.manpower} workers</span> : null}
-                  {r.ai_report && <span className="text-xs text-purple-400 flex items-center gap-1"><Sparkles className="w-3 h-3" />AI report</span>}
+                  {r.ai_report && <span className="text-xs text-cyan-400 flex items-center gap-1"><Sparkles className="w-3 h-3" />AI report</span>}
                 </div>
               </div>
               <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${expanded === r.id ? "rotate-180" : ""}`} />
@@ -238,8 +247,8 @@ Write a structured report: Summary, Work Completed, Resources Used, Safety Notes
                     )}
                     {r.delays && <div><p className="text-xs text-muted-foreground mb-1">Delays / Issues</p><p className="text-sm text-foreground">{r.delays}</p></div>}
                     {r.ai_report && (
-                      <div className="p-4 bg-purple-500/5 border border-purple-500/20 rounded-xl">
-                        <div className="flex items-center gap-2 mb-2"><Sparkles className="w-3.5 h-3.5 text-purple-400" /><p className="text-xs text-purple-400 font-medium">AI Report</p></div>
+                      <div className="p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
+                        <div className="flex items-center gap-2 mb-2"><Sparkles className="w-3.5 h-3.5 text-cyan-400" /><p className="text-xs text-cyan-400 font-medium">AI Report</p></div>
                         <p className="text-sm text-foreground whitespace-pre-wrap">{r.ai_report}</p>
                       </div>
                     )}
@@ -304,14 +313,14 @@ Write a structured report: Summary, Work Completed, Resources Used, Safety Notes
                 ))}
 
                 {form.ai_report && (
-                  <div className="p-4 bg-purple-500/5 border border-purple-500/20 rounded-xl">
-                    <div className="flex items-center gap-2 mb-2"><Sparkles className="w-3.5 h-3.5 text-purple-400" /><p className="text-xs text-purple-400 font-medium">AI Report</p></div>
+                  <div className="p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
+                    <div className="flex items-center gap-2 mb-2"><Sparkles className="w-3.5 h-3.5 text-cyan-400" /><p className="text-xs text-cyan-400 font-medium">AI Report</p></div>
                     <p className="text-sm text-foreground whitespace-pre-wrap">{form.ai_report}</p>
                   </div>
                 )}
 
                 <button onClick={generateAIReport} disabled={generating}
-                  className="w-full py-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400 text-sm font-medium hover:bg-purple-500/20 transition-colors flex items-center justify-center gap-2">
+                  className="w-full py-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-sm font-medium hover:bg-cyan-500/20 transition-colors flex items-center justify-center gap-2">
                   {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
                   Generate AI Report
                 </button>

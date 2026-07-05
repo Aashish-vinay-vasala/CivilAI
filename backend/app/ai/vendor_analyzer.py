@@ -1,13 +1,31 @@
-from app.ai.groq_client import analyze_document
-from app.ai.gemini_client import analyze_text
+import logging
+from typing import Literal
+from pydantic import BaseModel, Field
+from app.ai.groq_client import analyze_document, instructor_client, _FAST_MODEL
 
-def score_vendor(data: dict) -> str:
-    prompt = f"""
+logger = logging.getLogger("civilai.vendor")
+
+
+class VendorScore(BaseModel):
+    overall_score: float = Field(ge=0, le=100, description="Overall vendor score 0–100")
+    quality_score: float = Field(ge=0, le=100)
+    delivery_reliability: float = Field(ge=0, le=100)
+    safety_compliance: float = Field(ge=0, le=100)
+    financial_stability: float = Field(ge=0, le=100)
+    communication: float = Field(ge=0, le=100)
+    risk_level: Literal["Low", "Medium", "High"]
+    recommendation: Literal["Preferred", "Approved", "Review", "Blacklist"]
+    key_risk_factors: list[str] = Field(default_factory=list)
+    improvement_areas: list[str] = Field(default_factory=list)
+
+
+def score_vendor(data: dict) -> dict:
+    narrative_prompt = f"""
     You are a construction vendor evaluation expert.
     Score and analyze this vendor/subcontractor:
-    
+
     {data}
-    
+
     Provide:
     1. Overall Score (0-100)
     2. Performance Breakdown
@@ -24,13 +42,26 @@ def score_vendor(data: dict) -> str:
        - Reasoning
     5. Improvement Areas
     """
-    return analyze_document(str(data), prompt)
+    narrative = analyze_document(str(data), narrative_prompt)
+
+    try:
+        score: VendorScore = instructor_client.chat.completions.create(
+            model=_FAST_MODEL,
+            response_model=VendorScore,
+            messages=[{"role": "user", "content": f"Score this construction vendor/subcontractor:\n{data}"}],
+            max_retries=2,
+        )
+        return {"narrative": narrative, "scores": score.model_dump()}
+    except Exception as exc:
+        logger.warning("Vendor scoring failed: %s", exc)
+        return {"narrative": narrative, "scores": None}
+
 
 def compare_vendors(vendors: list) -> str:
     prompt = f"""
     Compare these construction vendors/subcontractors:
     {vendors}
-    
+
     Provide:
     1. Ranked comparison table
     2. Best vendor recommendation
@@ -40,11 +71,12 @@ def compare_vendors(vendors: list) -> str:
     """
     return analyze_document(str(vendors), prompt)
 
+
 def generate_vendor_report(vendor: dict) -> str:
     prompt = f"""
     Generate a detailed vendor performance report:
     {vendor}
-    
+
     Include:
     - Executive summary
     - Performance metrics

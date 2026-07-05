@@ -17,8 +17,10 @@ import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import dynamic from "next/dynamic";
+import { MarkdownText } from "@/lib/renderMarkdown";
 
 const GanttChart = dynamic(() => import("@/components/scheduling/GanttChart"), { ssr: false });
+const ML_API = process.env.NEXT_PUBLIC_ML_API_URL || "http://localhost:8001";
 
 const sCurveData = [
   { month: "Jan", planned: 5, actual: 4 },
@@ -46,9 +48,24 @@ interface Task {
   delay_days: number;
 }
 
+interface ExtractedTask {
+  task_name: string;
+  phase?: string;
+  assignee?: string;
+  planned_progress?: number;
+  actual_progress?: number;
+  status: string;
+  priority: string;
+  planned_start?: string;
+  planned_end?: string;
+  delay_days?: number;
+}
+
 export default function SchedulingPage() {
   const [loading, setLoading] = useState(false);
   const [analysis, setAnalysis] = useState("");
+  const [extractedTasks, setExtractedTasks] = useState<ExtractedTask[]>([]);
+  const [addingExtracted, setAddingExtracted] = useState<string | null>(null);
   const [whatIfOpen, setWhatIfOpen] = useState(false);
   const [addTaskOpen, setAddTaskOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"tasks" | "gantt">("tasks");
@@ -108,7 +125,7 @@ export default function SchedulingPage() {
   const fetchMLData = async () => {
     setMlLoading(true);
     try {
-      const mlRes = await axios.post("http://localhost:8001/predict/delay", {
+      const mlRes = await axios.post(`${ML_API}/predict/delay`, {
         project_type: "Commercial", planned_duration_days: 180,
         weather_delays: 10, labor_shortage: 1, material_delays: 1,
         design_changes: 5, subcontractor_issues: 1,
@@ -175,15 +192,47 @@ export default function SchedulingPage() {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = "";
     setLoading(true);
+    setExtractedTasks([]);
     try {
       const formData = new FormData();
       formData.append("file", file);
       const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/schedule/analyze`, formData);
       setAnalysis(response.data.analysis);
-      toast.success("Schedule analyzed!");
+      const found: ExtractedTask[] = response.data.extracted_tasks ?? [];
+      setExtractedTasks(found);
+      toast.success(found.length > 0 ? `Found ${found.length} task(s) — review below.` : "Schedule analyzed!");
     } catch { toast.error("Failed to analyze"); }
     finally { setLoading(false); }
+  };
+
+  const addExtractedTask = async (task: ExtractedTask, idx: number) => {
+    if (!projectId) { toast.error("Select a project first"); return; }
+    setAddingExtracted(String(idx));
+    try {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule`, { ...task, project_id: projectId });
+      toast.success(`"${task.task_name}" added to task list`);
+      setExtractedTasks(prev => prev.filter((_, i) => i !== idx));
+      fetchTasks();
+    } catch { toast.error("Failed to add task"); }
+    finally { setAddingExtracted(null); }
+  };
+
+  const addAllExtractedTasks = async () => {
+    if (!projectId) { toast.error("Select a project first"); return; }
+    setAddingExtracted("all");
+    let added = 0;
+    for (const task of extractedTasks) {
+      try {
+        await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule`, { ...task, project_id: projectId });
+        added++;
+      } catch { /* skip individual failures */ }
+    }
+    toast.success(`${added} task(s) added to task list`);
+    setExtractedTasks([]);
+    fetchTasks();
+    setAddingExtracted(null);
   };
 
   const runWhatIf = async () => {
@@ -444,9 +493,61 @@ export default function SchedulingPage() {
             </Button>
             {whatIfResult && (
               <div className="mt-4 p-4 bg-secondary rounded-xl">
-                <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{whatIfResult}</p>
+                <MarkdownText text={whatIfResult} className="text-sm text-foreground leading-relaxed" />
               </div>
             )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Extracted tasks from upload */}
+      <AnimatePresence>
+        {extractedTasks.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="bg-card border border-emerald-500/30 rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+              <div>
+                <h3 className="font-semibold text-foreground">Tasks Found in Document</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Review and add to your task list</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={addAllExtractedTasks} disabled={addingExtracted === "all"}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white border-0 h-7 px-3 text-xs">
+                  {addingExtracted === "all" ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Plus className="w-3 h-3 mr-1" />}
+                  Add All ({extractedTasks.length})
+                </Button>
+                <button onClick={() => setExtractedTasks([])} className="text-muted-foreground hover:text-foreground">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {extractedTasks.map((task, idx) => (
+                <div key={idx} className="flex items-start gap-3 p-3 rounded-xl bg-secondary/50">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{task.task_name}</p>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {task.phase && <span className="text-xs px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{task.phase}</span>}
+                      {task.assignee && <span className="text-xs text-muted-foreground">{task.assignee}</span>}
+                      {task.planned_start && <span className="text-xs text-muted-foreground">{task.planned_start} → {task.planned_end || "?"}</span>}
+                      {task.delay_days > 0 && <span className="text-xs text-red-400">{task.delay_days}d delay</span>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getStatusColor(task.status)}`}>
+                      {task.status}
+                    </span>
+                    <span className={`text-xs font-medium ${getPriorityColor(task.priority)}`}>{task.priority}</span>
+                    <Button size="sm" onClick={() => addExtractedTask(task, idx)}
+                      disabled={addingExtracted === String(idx) || addingExtracted === "all"}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white border-0 h-7 px-3 text-xs">
+                      {addingExtracted === String(idx) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3 mr-1" />}
+                      Add
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -699,7 +800,7 @@ export default function SchedulingPage() {
             <Calendar className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-foreground">AI Schedule Analysis</h3>
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{analysis}</p>
+          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
         </motion.div>
       )}
 

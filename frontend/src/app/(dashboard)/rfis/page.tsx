@@ -6,6 +6,14 @@ import { MessageSquare, Plus, X, Loader2, ChevronDown, Search, AlertTriangle, Ch
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import ModuleTabs from "@/components/shared/ModuleTabs";
+
+const CONSTRUCTION_MODULE_TABS = [
+  { href: "/construction",   label: "Construction" },
+  { href: "/daily-reports",  label: "Daily Reports" },
+  { href: "/rfis",           label: "RFIs" },
+  { href: "/meetings",       label: "Meetings" },
+];
 
 const API = `${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction`;
 
@@ -27,6 +35,7 @@ const inputClass = "w-full px-3 py-2 bg-secondary border border-border rounded-x
 export default function RFIsPage() {
   const [rfis, setRfis] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -50,13 +59,15 @@ export default function RFIsPage() {
       const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       const p = res.data.projects || [];
       setProjects(p);
-      if (p.length > 0) fetchRFIs(p[0].id);
-      else setLoading(false);
+      if (p.length > 0) {
+        setSelectedProjectId(p[0].id);
+        fetchRFIs(p[0].id);
+      } else setLoading(false);
     } catch { setLoading(false); }
   };
 
   const fetchRFIs = async (projectId?: string) => {
-    const id = projectId || (projects[0]?.id);
+    const id = projectId || selectedProjectId;
     if (!id) return;
     setLoading(true);
     try {
@@ -66,6 +77,11 @@ export default function RFIsPage() {
     finally { setLoading(false); }
   };
 
+  const handleProjectChange = (projectId: string) => {
+    setSelectedProjectId(projectId);
+    fetchRFIs(projectId);
+  };
+
   const handleCreate = async () => {
     if (!form.subject || !form.project_id) { toast.error("Project and subject are required"); return; }
     setCreating(true);
@@ -73,6 +89,7 @@ export default function RFIsPage() {
       await axios.post(`${API}/rfis`, form);
       toast.success("RFI created");
       setShowCreate(false);
+      setSelectedProjectId(form.project_id);
       setForm({ project_id: form.project_id, subject: "", question: "", submitted_by: "", assigned_to: "", priority: "medium", due_date: "" });
       fetchRFIs(form.project_id);
     } catch { toast.error("Failed to create RFI"); }
@@ -112,14 +129,24 @@ export default function RFIsPage() {
 
   return (
     <div className="space-y-6">
+      <ModuleTabs tabs={CONSTRUCTION_MODULE_TABS} />
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground">RFI Tracker</h1>
           <p className="text-muted-foreground text-sm mt-1">Request for Information log</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium">
-          <Plus className="w-4 h-4" /> New RFI
-        </button>
+        <div className="flex gap-2">
+          {projects.length > 0 && (
+            <select value={selectedProjectId} onChange={(e) => handleProjectChange(e.target.value)}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none">
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+          <button onClick={() => { setForm((f) => ({ ...f, project_id: selectedProjectId })); setShowCreate(true); }}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium">
+            <Plus className="w-4 h-4" /> New RFI
+          </button>
+        </div>
       </motion.div>
 
       {/* Stats */}

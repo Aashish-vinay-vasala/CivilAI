@@ -1,7 +1,18 @@
+import asyncio
+import sys
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.api.v1.routes import copilot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction, transcribe, email_notifications, preconstruction, financials
+from app.core.telemetry import setup_all
+from app.middleware.rate_limiter import RateLimiterMiddleware
+from app.api.v1.routes import copilot, chatbot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction, transcribe, email_notifications, preconstruction, financials, review, support, voice, agent, evaluation, accounting
+
+setup_all()   # boot LangSmith tracing + OTel before the app object is created
+
 app = FastAPI(
     title="CivilAI API",
     description="AI-Powered Construction Management Platform",
@@ -16,11 +27,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RateLimiterMiddleware)
 
 app.include_router(
     copilot.router,
     prefix="/api/v1/copilot",
     tags=["Copilot"]
+)
+
+app.include_router(
+    chatbot.router,
+    prefix="/api/v1/chatbot",
+    tags=["Chatbot"]
 )
 
 app.include_router(
@@ -155,6 +173,42 @@ app.include_router(
     tags=["Financial Budget"]
 )
 
+app.include_router(
+    review.router,
+    prefix="/api/v1/review",
+    tags=["Human Review Queue"]
+)
+
+app.include_router(
+    support.router,
+    prefix="/api/v1/support",
+    tags=["Customer Support"]
+)
+
+app.include_router(
+    voice.router,
+    prefix="/api/v1/voice",
+    tags=["Voice Bot"]
+)
+
+app.include_router(
+    agent.router,
+    prefix="/api/v1/agent",
+    tags=["AI Agent"]
+)
+
+app.include_router(
+    evaluation.router,
+    prefix="/api/v1/evaluation",
+    tags=["AI Evaluation"]
+)
+
+app.include_router(
+    accounting.router,
+    prefix="/api/v1/accounting",
+    tags=["Accounting Extraction"]
+)
+
 @app.get("/")
 def read_root():
     return {
@@ -172,6 +226,6 @@ def health_check():
     }
 
 if __name__ == "__main__":
-    import uvicorn
     import os
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

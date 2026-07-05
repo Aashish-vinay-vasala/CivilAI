@@ -209,6 +209,7 @@ def run_gnn_risk_analysis(project_data: dict) -> dict:
 
         # Run GNN if available
         propagated_risks = {}
+        trained_weights_loaded = False
         if HAS_GEOMETRIC and len(nodes) > 1:
             node_features = torch.tensor(
                 [n["features"] for n in nodes], dtype=torch.float
@@ -226,17 +227,15 @@ def run_gnn_risk_analysis(project_data: dict) -> dict:
             # Load trained model
             model = GNNRiskModel(node_features=8, hidden_dim=64, output_dim=3)
             model_path = os.path.join(os.path.dirname(__file__), "saved/gnn_risk_model.pt")
+            trained_weights_loaded = False
             if os.path.exists(model_path):
                 model.load_state_dict(torch.load(model_path, map_location="cpu"))
+                trained_weights_loaded = True
                 print("✅ Loaded trained GNN weights")
             else:
                 print("⚠️ No trained weights found, using random initialization")
-            model.eval()
-            with torch.no_grad():
-                risk_output = model(node_features, edge_index)
 
-            # Run GNN
-            model = GNNRiskModel(node_features=8, hidden_dim=64, output_dim=3)
+            # Run GNN inference using the (trained, if available) model
             model.eval()
             with torch.no_grad():
                 risk_output = model(node_features, edge_index)
@@ -265,6 +264,15 @@ def run_gnn_risk_analysis(project_data: dict) -> dict:
                     "propagated_risk": round(propagated, 3),
                     "mitigation_priority": round(propagated * 1.2, 3),
                 }
+
+        # Attach direct/propagated risk to each graph node so the 3D view
+        # reflects the actual post-GNN propagated risk (not just the pre-GNN
+        # heuristic risk_score), and so per-node tooltips have direct_risk to show.
+        for node in nodes:
+            node_risk = propagated_risks.get(node["label"])
+            if node_risk is not None:
+                node["direct_risk"] = node_risk["direct_risk"]
+                node["risk_score"] = node_risk["propagated_risk"]
 
         # Calculate overall project risk
         all_risks = [v["propagated_risk"] for v in propagated_risks.values()]
@@ -307,7 +315,8 @@ def run_gnn_risk_analysis(project_data: dict) -> dict:
             "risk_categories": risk_categories,
             "total_nodes": len(nodes),
             "total_edges": len(edges),
-            "gnn_used": HAS_GEOMETRIC,
+            "gnn_used": HAS_GEOMETRIC and len(nodes) > 1,
+            "trained_weights_loaded": trained_weights_loaded,
             "timestamp": datetime.now().isoformat(),
         }
 

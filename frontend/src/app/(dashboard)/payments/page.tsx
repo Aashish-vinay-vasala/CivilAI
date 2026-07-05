@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   DollarSign,
@@ -16,6 +16,7 @@ import {
   X,
   Trash2,
   ChevronDown,
+  Upload,
 } from "lucide-react";
 import {
   BarChart,
@@ -35,6 +36,7 @@ import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import { MarkdownText } from "@/lib/renderMarkdown";
 import {
   INVOICE_STATUSES,
   type InvoiceStatus,
@@ -70,7 +72,7 @@ function fmtMoney(v: number) {
 }
 
 
-export default function PaymentsPage() {
+export default function PaymentsPage({ projectId: filterProjectId }: { projectId?: string } = {}) {
   const [dataLoading, setDataLoading] = useState(true);
   const [kpis, setKpis] = useState<PaymentKpis | null>(null);
   const [monthlyData, setMonthlyData] = useState<any[]>([]);
@@ -102,15 +104,20 @@ export default function PaymentsPage() {
     description: "",
   });
   const [addLoading, setAddLoading] = useState(false);
+  const [extractedInvoices, setExtractedInvoices] = useState<any[]>([]);
+  const [extractLoading, setExtractLoading]       = useState(false);
+  const [addingExtracted, setAddingExtracted]     = useState<string | null>(null);
+  const extractFileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { fetchPayments(); }, []);
+  useEffect(() => { fetchPayments(); }, [filterProjectId]);
 
   const fetchPayments = async () => {
     setDataLoading(true);
     try {
-      const res = await axios.get(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/payments/invoices`
-      );
+      const url = filterProjectId
+        ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1/payments/invoices?project_id=${filterProjectId}`
+        : `${process.env.NEXT_PUBLIC_API_URL}/api/v1/payments/invoices`;
+      const res = await axios.get(url);
       const data = res.data;
       setKpis(data.kpis);
       setMonthlyData(data.monthly || []);
@@ -132,6 +139,7 @@ export default function PaymentsPage() {
       await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/payments/invoices`, {
         ...addForm,
         amount: parseFloat(addForm.amount),
+        ...(filterProjectId ? { project_id: filterProjectId } : {}),
       });
       toast.success("Invoice added successfully!");
       setShowAddModal(false);
@@ -230,6 +238,54 @@ export default function PaymentsPage() {
     }
   };
 
+  const handleExtractUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setExtractLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/payments/extract-invoices`, fd);
+      const found = res.data.extracted_invoices ?? [];
+      setExtractedInvoices(found);
+      toast.success(found.length > 0 ? `Found ${found.length} invoice(s) — review below.` : "No invoices found in document.");
+    } catch { toast.error("Failed to extract invoices from file"); }
+    finally { setExtractLoading(false); }
+  };
+
+  const addExtractedInvoice = async (inv: any, idx: number) => {
+    setAddingExtracted(String(idx));
+    try {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/payments/invoices`, {
+        ...inv,
+        ...(filterProjectId ? { project_id: filterProjectId } : {}),
+      });
+      setExtractedInvoices(prev => prev.filter((_, i) => i !== idx));
+      toast.success(`Invoice ${inv.invoice_number} added`);
+      fetchPayments();
+    } catch { toast.error(`Failed to add invoice`); }
+    finally { setAddingExtracted(null); }
+  };
+
+  const addAllExtractedInvoices = async () => {
+    setAddingExtracted("all");
+    let added = 0;
+    for (const inv of extractedInvoices) {
+      try {
+        await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/payments/invoices`, {
+          ...inv,
+          ...(filterProjectId ? { project_id: filterProjectId } : {}),
+        });
+        added++;
+      } catch { /* skip */ }
+    }
+    setExtractedInvoices([]);
+    toast.success(`Added ${added} invoice(s)`);
+    fetchPayments();
+    setAddingExtracted(null);
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "received": return <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />;
@@ -268,6 +324,11 @@ export default function PaymentsPage() {
           <h1 className="text-3xl font-bold text-foreground">Payment Tracker</h1>
           <p className="text-muted-foreground text-sm mt-1">
             AI-powered payment monitoring &amp; cash flow management
+            {filterProjectId && (
+              <span className="ml-2 px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 text-xs font-medium">
+                Filtered by project
+              </span>
+            )}
           </p>
         </div>
         <div className="flex gap-2">
@@ -287,6 +348,14 @@ export default function PaymentsPage() {
           >
             <Plus className="w-4 h-4 mr-2" />
             Add Invoice
+          </Button>
+          <input ref={extractFileRef} type="file" className="hidden"
+            accept=".pdf,.xlsx,.xls,.docx,.doc,.csv"
+            onChange={handleExtractUpload} />
+          <Button className="gradient-blue text-white border-0" disabled={extractLoading}
+            onClick={() => extractFileRef.current?.click()}>
+            {extractLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            Upload
           </Button>
           <Button
             onClick={handleAnalyze}
@@ -528,6 +597,48 @@ export default function PaymentsPage() {
             )}
           </motion.div>
 
+          {/* Extracted Invoices Review Panel */}
+          <AnimatePresence>
+            {extractedInvoices.length > 0 && (
+              <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+                className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-semibold text-foreground">Extracted Invoices</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">{extractedInvoices.length} invoice(s) found — select which to add</p>
+                  </div>
+                  <Button size="sm" className="gradient-blue text-white border-0"
+                    disabled={addingExtracted === "all"} onClick={addAllExtractedInvoices}>
+                    {addingExtracted === "all" ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                    Add All
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  {extractedInvoices.map((inv: any, idx: number) => (
+                    <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
+                      {getStatusIcon(inv.status || "pending")}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">
+                          {inv.contractor} <span className="text-muted-foreground font-normal">#{inv.invoice_number}</span>
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {fmtMoney(inv.amount || 0)}
+                          {inv.due_date && ` · Due ${inv.due_date}`}
+                          {inv.status && ` · ${inv.status}`}
+                          {inv.description && ` · ${inv.description}`}
+                        </p>
+                      </div>
+                      <Button size="sm" variant="outline" disabled={addingExtracted === String(idx)}
+                        onClick={() => addExtractedInvoice(inv, idx)}>
+                        {addingExtracted === String(idx) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* Invoice List with Filters */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -544,7 +655,7 @@ export default function PaymentsPage() {
             <div className="flex gap-2 mb-4 flex-wrap">
               {(["all", "received", "pending", "overdue"] as StatusFilter[]).map((f) => {
                 const colors: Record<StatusFilter, string> = {
-                  all:      activeTab === f ? "bg-blue-500 text-white" : "bg-secondary text-muted-foreground",
+                  all:      statusFilter === f ? "bg-blue-500 text-white" : "bg-secondary text-muted-foreground",
                   received: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
                   pending:  "bg-orange-500/10 text-orange-400 border border-orange-500/20",
                   overdue:  "bg-red-500/10 text-red-400 border border-red-500/20",
@@ -761,7 +872,7 @@ export default function PaymentsPage() {
             <DollarSign className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-foreground">AI Analysis</h3>
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{result}</p>
+          <MarkdownText text={result} className="text-sm text-muted-foreground leading-relaxed" />
         </motion.div>
       )}
 

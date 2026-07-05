@@ -138,7 +138,7 @@ async def get_material_prices() -> list:
     ]
 
 
-async def get_safety_stats() -> dict:
+async def get_safety_stats(project_id: str | None = None) -> dict:
     from datetime import datetime, date, timezone
     from collections import defaultdict
 
@@ -167,7 +167,10 @@ async def get_safety_stats() -> dict:
 
     try:
         sb = _get_supabase()
-        incidents_res = sb.table("safety_incidents").select("*").execute()
+        incidents_query = sb.table("safety_incidents").select("*")
+        if project_id:
+            incidents_query = incidents_query.eq("project_id", project_id)
+        incidents_res = incidents_query.execute()
         incidents = incidents_res.data or []
         total = len(incidents)
 
@@ -258,7 +261,10 @@ async def get_safety_stats() -> dict:
         # --- inter-module: equipment at risk ---
         # Equipment table uses: Operational | Needs Service | Critical | Inactive
         try:
-            equip_res = sb.table("equipment").select("status,health_score").execute()
+            equip_query = sb.table("equipment").select("status,health_score")
+            if project_id:
+                equip_query = equip_query.eq("project_id", project_id)
+            equip_res = equip_query.execute()
             equipment = equip_res.data or []
             equipment_at_risk = sum(
                 1 for e in equipment
@@ -272,7 +278,10 @@ async def get_safety_stats() -> dict:
         # Permits table uses: Pending | Approved | Rejected
         try:
             today_str = date.today().isoformat()
-            permits_res = sb.table("permits").select("status,expiry_date").execute()
+            permits_query = sb.table("permits").select("status,expiry_date")
+            if project_id:
+                permits_query = permits_query.eq("project_id", project_id)
+            permits_res = permits_query.execute()
             permit_violations = sum(
                 1 for p in (permits_res.data or [])
                 if str(p.get("status") or "").lower() == "rejected"
@@ -283,7 +292,10 @@ async def get_safety_stats() -> dict:
 
         # --- inter-module: active workers ---
         try:
-            workers_res = sb.table("workforce").select("status").execute()
+            workers_query = sb.table("workforce").select("status")
+            if project_id:
+                workers_query = workers_query.eq("project_id", project_id)
+            workers_res = workers_query.execute()
             active_workers = sum(
                 1 for w in (workers_res.data or [])
                 if str(w.get("status") or "").lower() == "active"
@@ -319,10 +331,13 @@ async def get_safety_stats() -> dict:
         }
 
 
-async def get_delay_stats() -> dict:
+async def get_delay_stats(project_id: str | None = None) -> dict:
     try:
         sb = _get_supabase()
-        tasks_res = sb.table("schedule_tasks").select("delay_days,status,actual_progress,planned_progress").execute()
+        tasks_query = sb.table("schedule_tasks").select("delay_days,status,actual_progress,planned_progress")
+        if project_id:
+            tasks_query = tasks_query.eq("project_id", project_id)
+        tasks_res = tasks_query.execute()
         tasks = tasks_res.data or []
         total = len(tasks)
 
@@ -333,8 +348,11 @@ async def get_delay_stats() -> dict:
             / max(delayed, 1)
         )
 
-        projects_res = sb.table("projects").select("id").execute()
-        project_count = len(projects_res.data or [])
+        if project_id:
+            project_count = 1
+        else:
+            projects_res = sb.table("projects").select("id").execute()
+            project_count = len(projects_res.data or [])
 
         return {
             "delay_rate_pct": round(delayed / max(total, 1) * 100, 1),
@@ -342,19 +360,24 @@ async def get_delay_stats() -> dict:
             "avg_cost_overrun_pct": 0,
             "on_time_completion_pct": round(on_time / max(total, 1) * 100, 1),
             "total_projects": project_count,
+            "total_tasks": total,
         }
     except Exception:
         logger.exception("get_delay_stats: Supabase query failed")
         return {
             "delay_rate_pct": 0, "avg_delay_days": 0,
             "avg_cost_overrun_pct": 0, "on_time_completion_pct": 0, "total_projects": 0,
+            "total_tasks": 0,
         }
 
 
-async def get_workforce_stats() -> dict:
+async def get_workforce_stats(project_id: str | None = None) -> dict:
     try:
         sb = _get_supabase()
-        res = sb.table("workforce").select("*").execute()
+        query = sb.table("workforce").select("*")
+        if project_id:
+            query = query.eq("project_id", project_id)
+        res = query.execute()
         workers = res.data or []
         total = len(workers)
 
@@ -380,10 +403,13 @@ async def get_workforce_stats() -> dict:
         }
 
 
-async def get_equipment_stats() -> dict:
+async def get_equipment_stats(project_id: str | None = None) -> dict:
     try:
         sb = _get_supabase()
-        res = sb.table("equipment").select("health_score,status").execute()
+        query = sb.table("equipment").select("health_score,status")
+        if project_id:
+            query = query.eq("project_id", project_id)
+        res = query.execute()
         equipment = res.data or []
         total = len(equipment)
 
@@ -558,13 +584,16 @@ async def get_performance_trend(months: int = 6) -> list:
         return []
 
 
-async def get_auto_cost_overrun() -> dict:
+async def get_auto_cost_overrun(project_id: str | None = None) -> dict:
     """Predict cost overrun probability from real Supabase project data."""
     try:
         sb = _get_supabase()
 
         # Average project duration in months
-        projects_res = sb.table("projects").select("start_date,end_date").execute()
+        projects_query = sb.table("projects").select("start_date,end_date,project_type")
+        if project_id:
+            projects_query = projects_query.eq("id", project_id)
+        projects_res = projects_query.execute()
         projects = projects_res.data or []
         durations = []
         for p in projects:
@@ -578,9 +607,13 @@ async def get_auto_cost_overrun() -> dict:
                 except Exception:
                     pass
         avg_duration = round(sum(durations) / max(len(durations), 1)) if durations else 12
+        project_type = (projects[0].get("project_type") if projects else None) or "Commercial"
 
         # Active workforce (team size)
-        workforce_res = sb.table("workforce").select("status,role").execute()
+        workforce_query = sb.table("workforce").select("status,role")
+        if project_id:
+            workforce_query = workforce_query.eq("project_id", project_id)
+        workforce_res = workforce_query.execute()
         workforce = workforce_res.data or []
         team_size = sum(1 for w in workforce if w.get("status") == "active") or max(len(workforce), 1)
         subcontractors = sum(
@@ -589,16 +622,22 @@ async def get_auto_cost_overrun() -> dict:
         ) or 3
 
         # Change orders from open RFIs
-        rfis_res = sb.table("rfis").select("id").execute()
+        rfis_query = sb.table("rfis").select("id")
+        if project_id:
+            rfis_query = rfis_query.eq("project_id", project_id)
+        rfis_res = rfis_query.execute()
         change_orders = len(rfis_res.data or [])
 
-        # Material price increase from material_prices table
+        # Material price increase from material_prices table (global commodity data, not project-scoped)
         prices_res = sb.table("material_prices").select("change_pct").execute()
         price_changes = [abs(float(p.get("change_pct", 0))) for p in (prices_res.data or []) if p.get("change_pct")]
         material_price_increase = round(sum(price_changes) / max(len(price_changes), 1), 1) if price_changes else 5.0
 
         # Weather-related incidents as proxy for weather impact days
-        incidents_res = sb.table("safety_incidents").select("description,type").execute()
+        incidents_query = sb.table("safety_incidents").select("description,type")
+        if project_id:
+            incidents_query = incidents_query.eq("project_id", project_id)
+        incidents_res = incidents_query.execute()
         weather_days = sum(
             1 for i in (incidents_res.data or [])
             if "weather" in str(i.get("description") or "").lower()
@@ -606,7 +645,7 @@ async def get_auto_cost_overrun() -> dict:
         )
 
         inputs = {
-            "project_type": "Commercial",
+            "project_type": project_type,
             "duration_months": max(avg_duration, 6),
             "team_size": team_size,
             "change_orders": change_orders,

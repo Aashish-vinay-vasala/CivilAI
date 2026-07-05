@@ -1,8 +1,11 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional
+from app.core.guardrails import guard_text
+from app.core.hitl import check_safety_incident
 from app.ai.safety_analyzer import (
     analyze_safety_report,
+    extract_safety_incidents,
     generate_incident_report,
     assess_zone_risk,
 )
@@ -76,6 +79,12 @@ def list_incidents():
 def create_incident(body: IncidentCreate):
     from datetime import date as _date
     try:
+        if body.description:
+            try:
+                body.description, _ = guard_text(body.description)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
         data = {
             "id":          str(uuid.uuid4()),
             "type":        body.type.strip(),
@@ -179,11 +188,39 @@ async def analyze_safety_report_route(file: UploadFile = File(...)):
     }
 
 
+@router.post("/extract-incidents")
+async def extract_incidents_route(file: UploadFile = File(...)):
+    try:
+        file_bytes = await file.read()
+        doc = process_document(file_bytes, file.filename)
+        text = doc["extracted_text"]
+        if not text:
+            raise HTTPException(status_code=400, detail="Could not extract text from file")
+        incidents = extract_safety_incidents(text)
+        return {"status": "success", "extracted_incidents": incidents}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/incident-report")
 async def create_incident_report(request: IncidentReportRequest):
     try:
+        request.description, _ = guard_text(request.description)
         report = generate_incident_report(request.model_dump())
-        return {"status": "success", "report": report}
+
+        needs_review, review_id, review_reason = check_safety_incident(
+            incident_data=request.model_dump(),
+            ai_output=str(report),
+        )
+        return {
+            "status":          "success",
+            "report":          report,
+            "requires_review": needs_review,
+            "review_id":       review_id,
+            "review_message":  review_reason if needs_review else None,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

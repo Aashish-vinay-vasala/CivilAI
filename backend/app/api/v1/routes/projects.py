@@ -1,6 +1,9 @@
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+
+logger = logging.getLogger("civilai.projects")
 from app.services.db_service import (
     get_projects,
     get_project_by_id,
@@ -42,6 +45,7 @@ class ProjectCreate(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     client: Optional[str] = None
+    project_type: Optional[str] = None
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
@@ -84,6 +88,31 @@ def list_projects():
     try:
         projects = get_projects()
         return {"status": "success", "projects": projects}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/")
+def create_project(body: ProjectCreate):
+    try:
+        data = {
+            "id": str(uuid.uuid4()),
+            "name": body.name,
+            "location": body.location,
+            "status": body.status or "active",
+            "budget": body.budget or 0,
+            "client": body.client,
+            "project_type": body.project_type,
+        }
+        if body.start_date:
+            data["start_date"] = body.start_date
+        if body.end_date:
+            data["end_date"] = body.end_date
+        result = supabase.table("projects").insert(data).execute()
+        if result.data:
+            return {"status": "success", "project": result.data[0]}
+        raise HTTPException(status_code=500, detail="Insert failed")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -370,11 +399,11 @@ def delete_project(project_id: str):
 def get_project(project_id: str):
     try:
         project = get_project_by_id(project_id)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-        return {"status": "success", "project": project}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"status": "success", "project": project}
 
 @router.get("/{project_id}/cost")
 def get_project_cost(project_id: str):
@@ -414,7 +443,8 @@ def get_project_schedule(project_id: str):
         data = get_schedule_tasks(project_id)
         return {"status": "success", "tasks": data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("get_project_schedule failed project=%s: %s", project_id, e)
+        return {"status": "error", "tasks": [], "error": str(e)}
 
 @router.post("/{project_id}/schedule")
 def add_task(project_id: str, task: TaskCreate):
@@ -461,7 +491,8 @@ def get_project_safety(project_id: str):
         data = get_safety_incidents(project_id)
         return {"status": "success", "incidents": data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("get_project_safety failed project=%s: %s", project_id, e)
+        return {"status": "error", "incidents": [], "error": str(e)}
 
 @router.get("/{project_id}/workforce")
 def get_project_workforce(project_id: str):
@@ -469,7 +500,8 @@ def get_project_workforce(project_id: str):
         data = get_workforce(project_id)
         return {"status": "success", "workforce": data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("get_project_workforce failed project=%s: %s", project_id, e)
+        return {"status": "error", "workforce": [], "error": str(e)}
 
 @router.get("/{project_id}/equipment")
 def get_project_equipment(project_id: str):
@@ -477,7 +509,8 @@ def get_project_equipment(project_id: str):
         data = get_equipment(project_id)
         return {"status": "success", "equipment": data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("get_project_equipment failed project=%s: %s", project_id, e)
+        return {"status": "error", "equipment": [], "error": str(e)}
 
 @router.get("/{project_id}/contracts")
 def get_project_contracts(project_id: str):
@@ -540,7 +573,7 @@ def get_project_overview(project_id: str):
         punch = supabase.table("punch_list").select("due_date,status").eq("project_id", project_id).execute().data or []
         meetings_raw = supabase.table("meeting_minutes").select("meeting_date,next_meeting").eq("project_id", project_id).execute().data or []
         for m in meetings_raw:
-            m["target_date"] = m.get("next_meeting") or m.get("meeting_date") or ""
+            m["target_date"] = m.get("next_meeting") or ""
             m["status"] = "open"
 
         return {
@@ -550,7 +583,7 @@ def get_project_overview(project_id: str):
                 "submittals":   classify(submittals_raw, "review_date", {"pending", "under_review"}),
                 "schedule":     classify(tasks, "planned_end", {"pending", "inprogress", "delayed", "atrisk"}),
                 "inspections":  classify(permits, "expiry_date", {"Pending", "Approved"}),
-                "observations": classify(incidents, "incident_date"),
+                "observations": classify(incidents, "incident_date", {"open", "investigating"}),
                 "punch_list":   classify(punch, "due_date", {"open"}),
                 "meetings":     classify(meetings_raw, "target_date", {"open"}),
             },

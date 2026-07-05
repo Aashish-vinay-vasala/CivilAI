@@ -29,7 +29,7 @@ const CATEGORY_STYLES = {
   equipment: "bg-blue-500/10 text-blue-400",
   material:  "bg-orange-500/10 text-orange-400",
   tool:      "bg-emerald-500/10 text-emerald-400",
-  area:      "bg-purple-500/10 text-purple-400",
+  area:      "bg-cyan-500/10 text-cyan-400",
 };
 
 const STATUS_STYLES = {

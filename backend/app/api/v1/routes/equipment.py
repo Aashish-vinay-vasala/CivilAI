@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 from app.ai.equipment_analyzer import (
     analyze_equipment,
+    extract_equipment_items,
     predict_failure,
     generate_maintenance_schedule,
     analyze_downtime
@@ -78,7 +79,11 @@ def list_all_equipment():
 @router.post("/")
 def create_equipment(eq: EquipmentCreate):
     try:
-        data = {"id": str(uuid.uuid4()), **eq.model_dump(exclude_none=True)}
+        _DB_COLUMNS = {"id", "name", "equipment_code", "equipment_type",
+                       "health_score", "status", "next_service", "notes", "project_id"}
+        raw = {"id": str(uuid.uuid4()), **eq.model_dump(exclude_none=True)}
+        data = {k: v for k, v in raw.items()
+                if k in _DB_COLUMNS and v != ""}  # skip unknown cols + empty date strings
         response = supabase.table("equipment").insert(data).execute()
         return {"status": "success", "equipment": response.data[0] if response.data else data}
     except Exception as e:
@@ -152,6 +157,20 @@ async def analyze_equipment_route(file: UploadFile = File(...)):
         return {"status": "success", "analysis": result["analysis"], "risk_data": result["risk_data"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/extract-items")
+async def extract_equipment_route(file: UploadFile = File(...)):
+    try:
+        file_bytes = await file.read()
+        doc = process_document(file_bytes, file.filename)
+        text = doc["extracted_text"]
+        if not text:
+            raise HTTPException(status_code=400, detail="Could not extract text from file")
+        items = extract_equipment_items(text)
+        return {"status": "success", "extracted_items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/predict-failure")
 async def predict_failure_route(request: FailurePredictionRequest):

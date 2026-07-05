@@ -1,5 +1,9 @@
-from app.ai.groq_client import analyze_document
-from app.ai.gemini_client import analyze_text
+import logging
+from typing import Literal
+from pydantic import BaseModel, Field
+from app.ai.groq_client import analyze_document, instructor_client, _FAST_MODEL
+
+logger = logging.getLogger("civilai.contract")
 
 CONTRACT_PROMPT = """
 You are an expert construction contract analyst.
@@ -32,35 +36,38 @@ Analyze this contract and provide:
 Be specific and actionable.
 """
 
+
+class ContractRisk(BaseModel):
+    risk_score: float = Field(ge=0, le=10, description="Overall contract risk score 0–10")
+    risk_level: Literal["Low", "Medium", "High"]
+    top_risks: list[str] = Field(default_factory=list)
+    dispute_probability: str = Field(description="Probability as a percentage string, e.g. '65%'")
+
+
 def analyze_contract(text: str) -> dict:
     analysis = analyze_document(text, CONTRACT_PROMPT)
-    
-    risk_prompt = """
-    Based on this contract, give a risk score 1-10.
-    Return ONLY a JSON like:
-    {
-        "risk_score": 7,
-        "risk_level": "High",
-        "top_risks": ["risk1", "risk2", "risk3"],
-        "dispute_probability": "65%"
-    }
-    """
-    
-    risk_data = analyze_text(text[:3000], risk_prompt)
-    
-    return {
-        "analysis": analysis,
-        "risk_data": risk_data
-    }
+    try:
+        risk: ContractRisk = instructor_client.chat.completions.create(
+            model=_FAST_MODEL,
+            response_model=ContractRisk,
+            messages=[{"role": "user", "content": f"Score the risk of this construction contract:\n{text[:3000]}"}],
+            max_retries=2,
+        )
+        risk_data = risk.model_dump()
+    except Exception as exc:
+        logger.warning("Contract risk extraction failed: %s", exc)
+        risk_data = {"risk_score": 5.0, "risk_level": "Medium", "top_risks": [], "dispute_probability": "Unknown"}
+    return {"analysis": analysis, "risk_data": risk_data}
+
 
 def generate_rfi(issue: str, project_context: str) -> str:
     prompt = f"""
-    Generate a professional RFI (Request for Information) 
+    Generate a professional RFI (Request for Information)
     for this construction issue:
-    
+
     Issue: {issue}
     Project Context: {project_context}
-    
+
     Format it professionally with:
     - RFI Number (auto)
     - Date
@@ -70,6 +77,7 @@ def generate_rfi(issue: str, project_context: str) -> str:
     - Impact if not resolved
     """
     return analyze_document(issue, prompt)
+
 
 def analyze_change_order(text: str) -> str:
     prompt = """

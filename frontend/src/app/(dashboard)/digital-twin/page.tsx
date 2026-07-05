@@ -75,6 +75,25 @@ export default function DigitalTwinPage() {
   useEffect(() => { fetchProjects(); }, []);
   useEffect(() => { if (projectId) fetchProjectData(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-load saved IFC for the project
+  useEffect(() => {
+    if (!projectId) return;
+    const saved = localStorage.getItem(`dt_ifc_${projectId}`);
+    if (saved) {
+      try {
+        const { meshes, filename } = JSON.parse(saved);
+        if (meshes?.length > 0) {
+          setIfcMeshes(meshes);
+          setIfcFileName(filename);
+        }
+      } catch {}
+    } else {
+      // Clear IFC when switching to a project with no saved model
+      setIfcMeshes([]);
+      setIfcFileName("");
+    }
+  }, [projectId]);
+
   const fetchProjects = async () => {
     try {
       const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
@@ -123,6 +142,12 @@ export default function DigitalTwinPage() {
       if (data.success && data.meshes && data.meshes.length > 0) {
         setIfcMeshes(data.meshes);
         setIfcError("");
+        if (projectId) {
+          localStorage.setItem(`dt_ifc_${projectId}`, JSON.stringify({
+            meshes: data.meshes,
+            filename: file.name,
+          }));
+        }
       } else {
         setIfcError(data.error || data.detail || "No geometry found in this IFC file.");
       }
@@ -209,7 +234,7 @@ export default function DigitalTwinPage() {
         {[
           { label: "Sensor Zones",      value: "16",                   icon: Cpu,       color: "border-blue-500/20 bg-blue-500/5",      iconColor: "text-blue-400"    },
           { label: "Equipment Tracked", value: String(equipmentCount), icon: Building2, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400" },
-          { label: "Update Interval",   value: "3s",                   icon: Activity,  color: "border-purple-500/20 bg-purple-500/5",  iconColor: "text-purple-400"  },
+          { label: "Update Interval",   value: "3s",                   icon: Activity,  color: "border-cyan-500/20 bg-cyan-500/5",  iconColor: "text-cyan-400"  },
           { label: "Data Points",       value: "64/min",               icon: Wifi,      color: "border-orange-500/20 bg-orange-500/5",  iconColor: "text-orange-400"  },
         ].map((kpi, i) => (
           <motion.div
@@ -245,7 +270,7 @@ export default function DigitalTwinPage() {
           {/* IFC Upload */}
           <div className="space-y-2">
             <p className="text-xs font-medium text-muted-foreground">BIM / IFC Model</p>
-            <p className="text-xs text-muted-foreground/70">Upload an .ifc file to replace the demo building with your real building geometry</p>
+            <p className="text-xs text-muted-foreground/70">Upload an .ifc file to replace the default scene. Uploading a new file replaces it; the × button clears it.</p>
             <input
               ref={ifcInputRef}
               type="file"
@@ -257,7 +282,11 @@ export default function DigitalTwinPage() {
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
                 <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
                 <span className="text-xs text-cyan-400 truncate flex-1">{ifcFileName}</span>
-                <button onClick={() => { setIfcMeshes([]); setIfcFileName(""); }} className="text-muted-foreground hover:text-foreground">
+                <button onClick={() => {
+                  setIfcMeshes([]);
+                  setIfcFileName("");
+                  if (projectId) localStorage.removeItem(`dt_ifc_${projectId}`);
+                }} className="text-muted-foreground hover:text-foreground">
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -382,7 +411,7 @@ export default function DigitalTwinPage() {
             { icon: Users,       title: "Occupancy Analytics",      desc: "Live occupancy tracking per floor and zone with capacity alerts",         color: "text-blue-400 bg-blue-500/10"   },
             { icon: Cpu,         title: "Equipment Tracking",        desc: "Real-time equipment location, health scores and maintenance alerts",      color: "text-emerald-400 bg-emerald-500/10" },
             { icon: AlertTriangle, title: "Smart Alerts",           desc: "AI-powered anomaly detection with instant visual alerts on 3D model",     color: "text-red-400 bg-red-500/10"     },
-            { icon: Activity,    title: "Progress Tracking",         desc: "Construction progress visualization per zone and floor in real-time",     color: "text-purple-400 bg-purple-500/10" },
+            { icon: Activity,    title: "Progress Tracking",         desc: "Construction progress visualization per zone and floor in real-time",     color: "text-cyan-400 bg-cyan-500/10" },
             { icon: Building2,   title: "BIM Integration",           desc: "Upload your IFC file to replace the demo building with real geometry",    color: "text-cyan-400 bg-cyan-500/10"   },
           ].map((item, i) => (
             <motion.div

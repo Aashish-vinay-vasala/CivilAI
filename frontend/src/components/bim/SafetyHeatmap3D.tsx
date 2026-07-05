@@ -143,9 +143,12 @@ export default function SafetyHeatmap3D() {
       stateRef.current.isDragging = false;
       stateRef.current.prevX = e.clientX;
       stateRef.current.prevY = e.clientY;
+      canvas.style.cursor = "grabbing";
     };
     const onMouseMove = (e: MouseEvent) => {
-      if (Math.abs(e.clientX - stateRef.current.prevX) > 3) stateRef.current.isDragging = true;
+      const dx = Math.abs(e.clientX - stateRef.current.prevX);
+      const dy = Math.abs(e.clientY - stateRef.current.prevY);
+      if (dx > 3 || dy > 3) stateRef.current.isDragging = true;
       if (!stateRef.current.isDragging) return;
       stateRef.current.angle -= (e.clientX - stateRef.current.prevX) * 0.008;
       stateRef.current.targetY = Math.max(5, Math.min(60,
@@ -153,6 +156,10 @@ export default function SafetyHeatmap3D() {
       ));
       stateRef.current.prevX = e.clientX;
       stateRef.current.prevY = e.clientY;
+    };
+    const onMouseUp = () => {
+      stateRef.current.isDragging = false;
+      canvas.style.cursor = "grab";
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -174,6 +181,8 @@ export default function SafetyHeatmap3D() {
     canvas.style.cursor = "grab";
     canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("mousemove", onMouseMove);
+    canvas.addEventListener("mouseup", onMouseUp);
+    canvas.addEventListener("mouseleave", onMouseUp);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("click", onClick);
 
@@ -217,6 +226,8 @@ export default function SafetyHeatmap3D() {
       cancelAnimationFrame(frameRef.current);
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("mousemove", onMouseMove);
+      canvas.removeEventListener("mouseup", onMouseUp);
+      canvas.removeEventListener("mouseleave", onMouseUp);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("click", onClick);
       window.removeEventListener("resize", handleResize);

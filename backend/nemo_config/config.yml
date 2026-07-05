@@ -1,0 +1,14 @@
+colang_version: "1.0"
+
+# The LLM is provided programmatically in nemo_rails.py (ChatGroq),
+# so no model block is needed here.
+
+rails:
+  input:
+    flows:
+      - check jailbreak
+      - check off topic
+
+  output:
+    flows:
+      - check off topic response

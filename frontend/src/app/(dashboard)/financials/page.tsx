@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   DollarSign, TrendingUp, ChevronRight, Download, Filter, RefreshCw,
   Loader2, Clock, CheckCircle2, AlertCircle, FileSpreadsheet, History,
   ReceiptText, FolderOpen, Upload, X, AlertTriangle, CheckCheck, FileText,
-  Building2, ChevronDown,
+  Building2, ChevronDown, Sparkles, Link2, Plus, Edit2, Trash2, PlusCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
@@ -30,8 +31,10 @@ type ColKey = "originalBudget" | "budgetMods" | "approvedCOs" | "revisedBudget"
 type ViewMode     = "standard" | "committed" | "direct";
 type SnapshotMode = "current"  | "original"  | "last-month";
 type GroupMode    = "division" | "cost-code" | "project";
+type ImportStep   = "upload" | "analyzing" | "review" | "details" | "confirm";
 
 interface BudgetItem {
+  id?: string;
   code: string; description: string; divCode: string; divName: string;
   originalBudget: number; budgetMods: number; approvedCOs: number;
   revisedBudget: number; pendingChanges: number; projectedBudget: number;
@@ -59,37 +62,36 @@ const ZERO: Totals = {
   pendingChanges: 0, projectedBudget: 0, committedCosts: 0, directCosts: 0,
 };
 
-// ─── Import modal types ───────────────────────────────────────────────────────
-
-type ImportStep = "upload" | "validate" | "details" | "confirm";
-
 interface ColMapping { file_header: string; canonical: string; }
-interface ValidationResult {
-  valid: boolean;
-  errors: string[];
-  warnings: string[];
-  row_count: number;
-  column_mapping: ColMapping[];
-  preview: Record<string, unknown>[];
-}
 
 // ─── Column definitions ───────────────────────────────────────────────────────
 
 interface ColDef {
-  key: ColKey; header: string; header2?: string;
+  key: ColKey; header: string;
   hColor: string; cellColor: (v: number) => string; bold?: boolean;
 }
 
 const COL_DEFS: ColDef[] = [
-  { key: "originalBudget",  header: "Original Budget", header2: "Amount",        hColor: "text-muted-foreground", cellColor: ()  => "text-foreground",      bold: true },
-  { key: "budgetMods",      header: "Budget",          header2: "Modifications", hColor: "text-muted-foreground", cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-foreground" },
-  { key: "approvedCOs",     header: "Approved COs",                              hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-blue-400 font-medium" },
-  { key: "revisedBudget",   header: "Revised Budget",                            hColor: "text-muted-foreground", cellColor: ()  => "text-foreground",      bold: true },
-  { key: "pendingChanges",  header: "Pending Budget",  header2: "Changes",       hColor: "text-muted-foreground", cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-foreground" },
-  { key: "projectedBudget", header: "Projected",       header2: "Budget",        hColor: "text-muted-foreground", cellColor: ()  => "text-foreground",      bold: true },
-  { key: "committedCosts",  header: "Committed",       header2: "Costs",         hColor: "text-orange-400",       cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-orange-400 font-medium" },
-  { key: "directCosts",     header: "Direct Costs",                              hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-blue-400 font-medium" },
+  { key: "originalBudget",  header: "Original Budget",  hColor: "text-muted-foreground", cellColor: ()  => "text-foreground",      bold: true },
+  { key: "budgetMods",      header: "Budget Mods",      hColor: "text-muted-foreground", cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-foreground" },
+  { key: "approvedCOs",     header: "Approved COs",     hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-blue-400 font-medium" },
+  { key: "revisedBudget",   header: "Revised Budget",   hColor: "text-muted-foreground", cellColor: ()  => "text-foreground",      bold: true },
+  { key: "pendingChanges",  header: "Pending COs",      hColor: "text-muted-foreground", cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-foreground" },
+  { key: "projectedBudget", header: "Projected Budget", hColor: "text-muted-foreground", cellColor: ()  => "text-foreground",      bold: true },
+  { key: "committedCosts",  header: "Committed Costs",  hColor: "text-orange-400",       cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-orange-400 font-medium" },
+  { key: "directCosts",     header: "Direct Costs",     hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-blue-400 font-medium" },
 ];
+
+const COL_TOOLTIPS: Record<ColKey, string> = {
+  originalBudget:  "The initial approved budget at project start",
+  budgetMods:      "Manual budget adjustments, not from change orders",
+  approvedCOs:     "Budget added by formally approved change orders",
+  revisedBudget:   "Original Budget + Budget Mods + Approved COs",
+  pendingChanges:  "Change orders submitted but not yet approved",
+  projectedBudget: "Revised Budget + Pending COs — expected final budget",
+  committedCosts:  "Amounts obligated via subcontracts & purchase orders",
+  directCosts:     "Labor, materials & expenses paid directly (actual spend)",
+};
 
 const VIEW_KEYS: Record<ViewMode, ColKey[]> = {
   standard:  ["originalBudget","budgetMods","approvedCOs","revisedBudget","pendingChanges","projectedBudget","committedCosts","directCosts"],
@@ -166,11 +168,7 @@ const CSI_BLUEPRINT = [
   ]},
 ];
 
-function buildFallbackDivisions(
-  totalBudget: number,
-  committedTotal: number,
-  directTotal: number,
-): BudgetDivision[] {
+function buildFallbackDivisions(totalBudget: number, committedTotal: number, directTotal: number): BudgetDivision[] {
   const pctSum = CSI_BLUEPRINT.reduce((s, d) => s + d.pct, 0);
   let totalComWeight = 0, totalDirWeight = 0;
   for (const div of CSI_BLUEPRINT) {
@@ -214,6 +212,7 @@ function dbItemsToDivisions(items: Record<string, unknown>[]): BudgetDivision[] 
     const divName = String(raw.div_name || "Uncategorized");
     if (!divMap.has(divCode)) divMap.set(divCode, { code: divCode, name: divName, items: [] });
     divMap.get(divCode)!.items.push({
+      id:              String(raw.id || ""),
       code:            String(raw.code || ""),
       description:     String(raw.description || ""),
       divCode,
@@ -294,20 +293,25 @@ function ImportModal({
   onSuccess: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [step, setStep] = useState<ImportStep>("upload");
-  const [file, setFile] = useState<File | null>(null);
-  const [dragOver, setDragOver] = useState(false);
-  const [validating, setValidating] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [step,       setStep]       = useState<ImportStep>("upload");
+  const [file,       setFile]       = useState<File | null>(null);
+  const [dragOver,   setDragOver]   = useState(false);
+  const [analyzing,  setAnalyzing]  = useState(false);
+  const [importing,  setImporting]  = useState(false);
+  const [isAiPath,   setIsAiPath]   = useState(false);
+  const [aiItems,    setAiItems]    = useState<Record<string, unknown>[]>([]);
+  const [colMapping, setColMapping] = useState<ColMapping[]>([]);
+  const [rowCount,   setRowCount]   = useState(0);
+  const [warnings,   setWarnings]   = useState<string[]>([]);
+  const [errors,     setErrors]     = useState<string[]>([]);
+  const [source,     setSource]     = useState("ai_extraction");
 
-  // Details form
   const [projectId,   setProjectId]   = useState(projects[0]?.id ?? "");
   const [companyName, setCompanyName] = useState("");
   const [notes,       setNotes]       = useState("");
   const [userName,    setUserName]    = useState("");
 
-  const ACCEPTED = ".csv,.xlsx,.xls";
+  const ACCEPTED = ".csv,.xlsx,.xls,.pdf,.doc,.docx";
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -316,55 +320,61 @@ function ImportModal({
     if (f) pickFile(f);
   }
 
-  function pickFile(f: File) {
-    const ext = f.name.split(".").pop()?.toLowerCase();
-    if (!["csv", "xlsx", "xls"].includes(ext ?? "")) {
-      toast.error("Only .csv, .xlsx, and .xls files are accepted");
-      return;
-    }
+  async function pickFile(f: File) {
     setFile(f);
-    setValidation(null);
-    setStep("validate");
-    runValidation(f);
-  }
+    setErrors([]);
+    setWarnings([]);
+    setAiItems([]);
+    setColMapping([]);
+    setStep("analyzing");
+    setAnalyzing(true);
 
-  async function runValidation(f: File) {
-    setValidating(true);
     try {
       const fd = new FormData();
       fd.append("file", f);
-      const res = await axios.post<ValidationResult>(`${API}/api/v1/financials/import/validate`, fd);
-      setValidation(res.data);
+      const res = await axios.post(`${API}/api/v1/financials/extract`, fd);
+      const data = res.data;
+
+      setAiItems(data.items || []);
+      setRowCount(data.row_count || data.items?.length || 0);
+      setWarnings(data.warnings || []);
+      setIsAiPath(data.source === "ai_extraction");
+      setColMapping(data.column_mapping || []);
+      setSource(data.source || "ai_extraction");
+      setStep("review");
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setValidation({
-        valid: false,
-        errors: [typeof msg === "string" ? msg : "Validation request failed"],
-        warnings: [],
-        row_count: 0,
-        column_mapping: [],
-        preview: [],
-      });
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setErrors([typeof detail === "string" ? detail : "Analysis failed — check that the file contains budget line items with descriptions and amounts."]);
+      setStep("upload");
     } finally {
-      setValidating(false);
+      setAnalyzing(false);
     }
   }
 
   async function handleConfirmImport() {
-    if (!file || !companyName.trim()) {
+    if (!companyName.trim()) {
       toast.error("Company name is required");
       return;
     }
     setImporting(true);
     try {
       const fd = new FormData();
-      fd.append("file", file);
       fd.append("project_id", projectId || "all");
       fd.append("company_name", companyName.trim());
       fd.append("notes", notes.trim());
       fd.append("user_name", userName.trim() || companyName.trim());
-      const res = await axios.post(`${API}/api/v1/financials/import/confirm`, fd);
-      toast.success(`Imported ${res.data.imported_rows} line items successfully`);
+
+      if (isAiPath || !file) {
+        fd.append("items", JSON.stringify(aiItems));
+        fd.append("source", source);
+        const res = await axios.post(`${API}/api/v1/financials/import/from-items`, fd);
+        toast.success(`Imported ${res.data.imported_rows} line items successfully`);
+      } else {
+        fd.append("file", file);
+        const res = await axios.post(`${API}/api/v1/financials/import/confirm`, fd);
+        toast.success(`Imported ${res.data.imported_rows} line items successfully`);
+      }
+
       onSuccess();
       onClose();
     } catch (err: unknown) {
@@ -380,10 +390,15 @@ function ImportModal({
     }
   }
 
-  const REQUIRED_CANONICALS = ["description", "original_budget"];
-  const allRequiredMatched = validation
-    ? REQUIRED_CANONICALS.every((c) => validation.column_mapping.some((m) => m.canonical === c))
-    : false;
+  const stepLabels: Record<ImportStep, string> = {
+    upload:    "1. File",
+    analyzing: "2. Analyze",
+    review:    "2. Review",
+    details:   "3. Details",
+    confirm:   "4. Confirm",
+  };
+  const stepOrder: ImportStep[] = ["upload", "analyzing", "review", "details", "confirm"];
+  const currentIdx = stepOrder.indexOf(step);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
@@ -401,7 +416,7 @@ function ImportModal({
             </div>
             <div>
               <h2 className="font-semibold text-foreground">Import Budget Data</h2>
-              <p className="text-xs text-muted-foreground">CSV · XLSX · XLS</p>
+              <p className="text-xs text-muted-foreground">CSV · XLSX · XLS · PDF · Word — AI-powered detection</p>
             </div>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
@@ -410,16 +425,14 @@ function ImportModal({
         </div>
 
         <div className="p-5 space-y-5">
-
           {/* Step indicator */}
           <div className="flex items-center gap-2 text-xs">
-            {(["upload","validate","details","confirm"] as ImportStep[]).map((s, i) => {
-              const labels: Record<ImportStep, string> = { upload:"1. File", validate:"2. Validate", details:"3. Details", confirm:"4. Confirm" };
-              const reached = ["upload","validate","details","confirm"].indexOf(step) >= i;
+            {(["upload","review","details","confirm"] as ImportStep[]).map((s, i) => {
+              const reached = currentIdx >= stepOrder.indexOf(s) || step === "analyzing";
               return (
                 <Fragment key={s}>
                   <span className={`px-2.5 py-1 rounded-full font-medium transition-colors ${reached ? "bg-blue-500/15 text-blue-400" : "text-muted-foreground"}`}>
-                    {labels[s]}
+                    {stepLabels[s]}
                   </span>
                   {i < 3 && <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
                 </Fragment>
@@ -428,121 +441,156 @@ function ImportModal({
           </div>
 
           {/* ── STEP 1: Upload ── */}
-          {(step === "upload" || (step === "validate" && !file)) && (
-            <div
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
-                dragOver ? "border-blue-400 bg-blue-500/5" : "border-border hover:border-blue-500/50"
-              }`}
-            >
-              <input
-                ref={fileInputRef} type="file" accept={ACCEPTED} className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) pickFile(f); }}
-              />
-              <FileText className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-              <p className="text-sm font-medium text-foreground">Drop your budget file here</p>
-              <p className="text-xs text-muted-foreground mt-1">or click to browse — .csv, .xlsx, .xls</p>
+          {step === "upload" && (
+            <div className="space-y-4">
+              <div
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
+                  dragOver ? "border-blue-400 bg-blue-500/5" : "border-border hover:border-blue-500/50"
+                }`}
+              >
+                <input
+                  ref={fileInputRef} type="file" accept={ACCEPTED} className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) pickFile(f); e.target.value = ""; }}
+                />
+                <Sparkles className="w-10 h-10 text-blue-400/60 mx-auto mb-3" />
+                <p className="text-sm font-medium text-foreground">Drop any budget document here</p>
+                <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
+                <div className="flex flex-wrap justify-center gap-2 mt-4">
+                  {[".csv", ".xlsx", ".xls", ".pdf", ".doc", ".docx"].map((ext) => (
+                    <span key={ext} className="text-[10px] px-2 py-0.5 rounded-md bg-secondary text-muted-foreground border border-border">{ext}</span>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground mt-3">
+                  Column names are auto-detected — case-insensitive, flexible naming accepted
+                </p>
+              </div>
+
+              {errors.length > 0 && (
+                <div className="space-y-1.5">
+                  {errors.map((e, i) => (
+                    <div key={i} className="flex items-start gap-2 text-xs text-red-400 bg-red-500/5 rounded-lg px-3 py-2">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      {e}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
-          {/* ── STEP 2: Validation results ── */}
-          {step === "validate" && file && (
+          {/* ── STEP 2a: Analyzing ── */}
+          {step === "analyzing" && (
+            <div className="flex flex-col items-center gap-4 py-10">
+              <div className="w-14 h-14 rounded-2xl bg-blue-500/10 flex items-center justify-center">
+                <Loader2 className="w-7 h-7 animate-spin text-blue-400" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-foreground">Analyzing {file?.name}</p>
+                <p className="text-xs text-muted-foreground mt-1">AI is detecting budget structure and extracting line items…</p>
+              </div>
+            </div>
+          )}
+
+          {/* ── STEP 2b: Review extracted items ── */}
+          {step === "review" && (
             <div className="space-y-4">
+              {/* File info */}
               <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary/40 border border-border">
                 <FileText className="w-4 h-4 text-blue-400 shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
-                  <p className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</p>
+                  <p className="text-sm font-medium text-foreground truncate">{file?.name}</p>
+                  <p className="text-xs text-muted-foreground">{(file?.size ?? 0 / 1024).toFixed(1)} KB</p>
                 </div>
-                <button
-                  onClick={() => { setFile(null); setValidation(null); setStep("upload"); }}
-                  className="text-muted-foreground hover:text-foreground"
-                >
+                <div className="flex items-center gap-1.5">
+                  {isAiPath
+                    ? <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex items-center gap-1"><Sparkles className="w-3 h-3" />AI extracted</span>
+                    : <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1"><CheckCheck className="w-3 h-3" />Structured parse</span>
+                  }
+                </div>
+                <button onClick={() => { setFile(null); setStep("upload"); }} className="text-muted-foreground hover:text-foreground">
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              {validating ? (
-                <div className="flex items-center gap-3 p-4 rounded-xl bg-secondary/30">
-                  <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
-                  <p className="text-sm text-muted-foreground">Validating file…</p>
+              {/* Summary badge */}
+              <div className="flex items-center gap-2 p-3 rounded-xl border bg-emerald-500/5 border-emerald-500/20 text-emerald-400 text-sm font-medium">
+                <CheckCheck className="w-4 h-4" /> {rowCount} line items detected and ready to import
+              </div>
+
+              {/* Warnings */}
+              {warnings.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-semibold text-amber-400 uppercase tracking-wide">Warnings</p>
+                  {warnings.map((w, i) => (
+                    <div key={i} className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/5 rounded-lg px-3 py-2">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />{w}
+                    </div>
+                  ))}
                 </div>
-              ) : validation && (
-                <div className="space-y-3">
-                  {/* Summary badge */}
-                  <div className={`flex items-center gap-2 p-3 rounded-xl border text-sm font-medium ${
-                    validation.valid && allRequiredMatched
-                      ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400"
-                      : "bg-red-500/5 border-red-500/20 text-red-400"
-                  }`}>
-                    {validation.valid && allRequiredMatched
-                      ? <><CheckCheck className="w-4 h-4" /> {validation.row_count} rows ready to import</>
-                      : <><AlertTriangle className="w-4 h-4" /> Validation failed — fix errors below</>
-                    }
-                  </div>
+              )}
 
-                  {/* Errors */}
-                  {validation.errors.length > 0 && (
-                    <div className="space-y-1.5">
-                      <p className="text-xs font-semibold text-red-400 uppercase tracking-wide">Errors</p>
-                      {validation.errors.map((e, i) => (
-                        <div key={i} className="flex items-start gap-2 text-xs text-red-400 bg-red-500/5 rounded-lg px-3 py-2">
-                          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                          {e}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Warnings */}
-                  {validation.warnings.length > 0 && (
-                    <div className="space-y-1.5">
-                      <p className="text-xs font-semibold text-amber-400 uppercase tracking-wide">Warnings</p>
-                      {validation.warnings.map((w, i) => (
-                        <div key={i} className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/5 rounded-lg px-3 py-2">
-                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                          {w}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Column mapping */}
-                  {validation.column_mapping.length > 0 && (
-                    <div className="space-y-1.5">
-                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Column Mapping</p>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {validation.column_mapping.map((m, i) => {
-                          const isRequired = REQUIRED_CANONICALS.includes(m.canonical);
-                          return (
-                            <div key={i} className="flex items-center gap-2 text-xs bg-secondary/30 rounded-lg px-3 py-1.5">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                              <span className="text-muted-foreground truncate">{m.file_header}</span>
-                              <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
-                              <span className={`font-medium truncate ${isRequired ? "text-blue-400" : "text-foreground"}`}>
-                                {m.canonical}
-                              </span>
-                            </div>
-                          );
-                        })}
+              {/* Column mapping (for structured parse) */}
+              {colMapping.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Detected Column Mapping</p>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {colMapping.map((m, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs bg-secondary/30 rounded-lg px-3 py-1.5">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                        <span className="text-muted-foreground truncate">{m.file_header}</span>
+                        <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
+                        <span className="font-medium text-foreground truncate">{m.canonical}</span>
                       </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Preview table */}
+              {aiItems.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Preview (first 5 rows)</p>
+                  <div className="rounded-xl border border-border overflow-hidden">
+                    <div className="overflow-x-auto max-h-48">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-secondary/50">
+                            <th className="px-3 py-2 text-left text-muted-foreground font-medium">Code</th>
+                            <th className="px-3 py-2 text-left text-muted-foreground font-medium">Description</th>
+                            <th className="px-3 py-2 text-right text-muted-foreground font-medium">Orig. Budget</th>
+                            <th className="px-3 py-2 text-right text-muted-foreground font-medium">Direct Costs</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {aiItems.slice(0, 5).map((item, i) => (
+                            <tr key={i} className="border-t border-border/50">
+                              <td className="px-3 py-1.5 text-blue-400 font-mono">{String(item.code || "—")}</td>
+                              <td className="px-3 py-1.5 text-foreground max-w-48 truncate">{String(item.description || "")}</td>
+                              <td className="px-3 py-1.5 text-right text-foreground">{fmtCurrency(Number(item.original_budget || 0))}</td>
+                              <td className="px-3 py-1.5 text-right text-foreground">{fmtCurrency(Number(item.direct_costs || 0))}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
+                  </div>
+                  {aiItems.length > 5 && (
+                    <p className="text-xs text-muted-foreground text-right">+{aiItems.length - 5} more rows</p>
                   )}
                 </div>
               )}
 
               <div className="flex gap-3">
-                <Button variant="outline" size="sm" onClick={() => { setFile(null); setValidation(null); setStep("upload"); }} className="border-border flex-1">
+                <Button variant="outline" size="sm" onClick={() => { setFile(null); setStep("upload"); }} className="border-border flex-1">
                   Choose Different File
                 </Button>
-                {validation?.valid && allRequiredMatched && (
-                  <Button className="gradient-blue text-white border-0 flex-1" size="sm" onClick={() => setStep("details")}>
-                    Continue
-                  </Button>
-                )}
+                <Button className="gradient-blue text-white border-0 flex-1" size="sm" onClick={() => setStep("details")}>
+                  Continue
+                </Button>
               </div>
             </div>
           )}
@@ -552,7 +600,7 @@ function ImportModal({
             <div className="space-y-4">
               <div className="p-3 rounded-xl bg-secondary/30 border border-border text-xs text-muted-foreground flex items-center gap-2">
                 <CheckCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                {file?.name} · {validation?.row_count} rows validated
+                {file?.name} · {rowCount} rows ready
               </div>
 
               <div className="space-y-3">
@@ -611,9 +659,7 @@ function ImportModal({
               </div>
 
               <div className="flex gap-3">
-                <Button variant="outline" size="sm" onClick={() => setStep("validate")} className="border-border flex-1">
-                  Back
-                </Button>
+                <Button variant="outline" size="sm" onClick={() => setStep("review")} className="border-border flex-1">Back</Button>
                 <Button
                   className="gradient-blue text-white border-0 flex-1"
                   size="sm"
@@ -635,8 +681,14 @@ function ImportModal({
                   <span className="text-foreground font-medium">{file?.name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Rows</span>
-                  <span className="text-foreground font-medium">{validation?.row_count}</span>
+                  <span className="text-muted-foreground">Line items</span>
+                  <span className="text-foreground font-medium">{rowCount}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Method</span>
+                  <span className={`font-medium ${isAiPath ? "text-cyan-400" : "text-emerald-400"}`}>
+                    {isAiPath ? "AI Extraction" : "Structured Parse"}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Company</span>
@@ -654,12 +706,6 @@ function ImportModal({
                     <span className="text-foreground font-medium">{userName}</span>
                   </div>
                 )}
-                {notes && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Notes</span>
-                    <span className="text-foreground font-medium text-right max-w-48 truncate">{notes}</span>
-                  </div>
-                )}
               </div>
 
               <p className="text-xs text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-xl px-3 py-2">
@@ -667,20 +713,488 @@ function ImportModal({
               </p>
 
               <div className="flex gap-3">
-                <Button variant="outline" size="sm" onClick={() => setStep("details")} className="border-border flex-1" disabled={importing}>
-                  Back
-                </Button>
-                <Button
-                  className="gradient-blue text-white border-0 flex-1"
-                  size="sm"
-                  onClick={handleConfirmImport}
-                  disabled={importing}
-                >
+                <Button variant="outline" size="sm" onClick={() => setStep("details")} className="border-border flex-1" disabled={importing}>Back</Button>
+                <Button className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleConfirmImport} disabled={importing}>
                   {importing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Importing…</> : "Confirm Import"}
                 </Button>
               </div>
             </div>
           )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Sync Modal ────────────────────────────────────────────────────────────────
+
+function SyncModal({
+  projects,
+  onClose,
+  onSuccess,
+}: {
+  projects: ProjectInfo[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [projectId,   setProjectId]   = useState(projects[0]?.id ?? "");
+  const [syncing,     setSyncing]     = useState(false);
+  const [saving,      setSaving]      = useState(false);
+  const [syncData,    setSyncData]    = useState<{ items: Record<string, unknown>[]; summary: Record<string, unknown> } | null>(null);
+  const [companyName, setCompanyName] = useState(projects.find(p => p.id === projectId)?.name ?? "");
+
+  async function handleSync() {
+    setSyncing(true);
+    try {
+      const res = await axios.get(`${API}/api/v1/financials/sync-from-modules?project_id=${projectId}`);
+      setSyncData(res.data);
+      setCompanyName(projects.find(p => p.id === projectId)?.name ?? "");
+    } catch {
+      toast.error("Failed to fetch module data");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!syncData?.items.length) return;
+    setSaving(true);
+    try {
+      const fd = new FormData();
+      fd.append("project_id", projectId);
+      fd.append("company_name", companyName || "Sync");
+      fd.append("notes", `Synced from construction cost codes on ${new Date().toLocaleDateString()}`);
+      fd.append("source", "module_sync");
+      fd.append("items", JSON.stringify(syncData.items));
+      const res = await axios.post(`${API}/api/v1/financials/import/from-items`, fd);
+      toast.success(`Synced ${res.data.imported_rows} cost codes to financial budget`);
+      onSuccess();
+      onClose();
+    } catch {
+      toast.error("Sync save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl"
+      >
+        <div className="flex items-center justify-between p-5 border-b border-border">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-teal-500/10 flex items-center justify-center">
+              <Link2 className="w-4 h-4 text-teal-400" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">Sync from Modules</h2>
+              <p className="text-xs text-muted-foreground">Pull cost codes from Construction module</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1.5">Select Project</label>
+            <div className="flex gap-2">
+              <div className="flex-1 flex items-center bg-secondary border border-border rounded-xl px-3 py-2.5">
+                <FolderOpen className="w-4 h-4 text-muted-foreground shrink-0 mr-2" />
+                <select
+                  value={projectId}
+                  onChange={(e) => { setProjectId(e.target.value); setSyncData(null); }}
+                  className="flex-1 bg-transparent text-sm text-foreground outline-none appearance-none"
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <Button className="gradient-blue text-white border-0" size="sm" onClick={handleSync} disabled={syncing}>
+                {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Fetch"}
+              </Button>
+            </div>
+          </div>
+
+          {syncData && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
+                  <p className="text-lg font-bold text-foreground">{Number(syncData.summary.cost_codes_count)}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Cost Codes</p>
+                </div>
+                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
+                  <p className="text-lg font-bold text-blue-400">{fmtMoney(Number(syncData.summary.total_direct_from_invoices))}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Invoiced (Direct)</p>
+                </div>
+                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
+                  <p className="text-lg font-bold text-orange-400">{fmtMoney(Number(syncData.summary.total_committed_from_invoices))}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Committed</p>
+                </div>
+              </div>
+
+              {syncData.items.length > 0 ? (
+                <>
+                  <div className="rounded-xl border border-border overflow-hidden">
+                    <div className="overflow-y-auto max-h-48">
+                      <table className="w-full text-xs">
+                        <thead className="bg-secondary/50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-muted-foreground font-medium">Code</th>
+                            <th className="px-3 py-2 text-left text-muted-foreground font-medium">Description</th>
+                            <th className="px-3 py-2 text-right text-muted-foreground font-medium">Budget</th>
+                            <th className="px-3 py-2 text-right text-muted-foreground font-medium">Actual</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {syncData.items.map((item, i) => (
+                            <tr key={i} className="border-t border-border/50">
+                              <td className="px-3 py-1.5 text-blue-400 font-mono">{String(item.code || "—")}</td>
+                              <td className="px-3 py-1.5 text-foreground max-w-36 truncate">{String(item.description || "")}</td>
+                              <td className="px-3 py-1.5 text-right text-foreground">{fmtCurrency(Number(item.original_budget || 0))}</td>
+                              <td className="px-3 py-1.5 text-right text-foreground">{fmtCurrency(Number(item.direct_costs || 0))}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-xl px-3 py-2">
+                    This will replace existing budget line items for the selected project with these cost codes.
+                  </p>
+
+                  <div className="flex gap-3">
+                    <Button variant="outline" size="sm" onClick={onClose} className="border-border flex-1">Cancel</Button>
+                    <Button className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleSave} disabled={saving}>
+                      {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : `Sync ${syncData.items.length} items`}
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-6 text-muted-foreground">
+                  <p className="text-sm">No cost codes found for this project.</p>
+                  <p className="text-xs mt-1">Add cost codes in the Construction module first.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!syncData && !syncing && (
+            <p className="text-xs text-muted-foreground text-center py-4">
+              Select a project and click Fetch to preview cost codes from the Construction module.
+            </p>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Sync Project Budget Modal ─────────────────────────────────────────────────
+
+function BudgetSyncModal({
+  projectId,
+  onClose,
+  onSuccess,
+}: {
+  projectId: string;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [preview, setPreview] = useState<{
+    project_name: string; current_budget: number; itemized_total: number;
+    difference: number; in_sync: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    axios.get(`${API}/api/v1/financials/budget-sync-preview`, { params: { project_id: projectId } })
+      .then((res) => setPreview(res.data))
+      .catch(() => toast.error("Could not load sync preview"))
+      .finally(() => setLoading(false));
+  }, [projectId]);
+
+  async function handleConfirm() {
+    setSyncing(true);
+    try {
+      await axios.post(`${API}/api/v1/financials/sync-project-budget`, { project_id: projectId });
+      toast.success("Project budget synced");
+      onSuccess();
+      onClose();
+    } catch {
+      toast.error("Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  const isDecrease = (preview?.difference ?? 0) < 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl"
+      >
+        <div className="flex items-center justify-between p-5 border-b border-border">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/10 flex items-center justify-center">
+              <Link2 className="w-4 h-4 text-amber-400" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">Sync to Project Budget</h2>
+              <p className="text-xs text-muted-foreground">{preview?.project_name ?? "Loading…"}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+            </div>
+          ) : preview ? (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
+                  <p className="text-[11px] text-muted-foreground mb-1">Current Project Budget</p>
+                  <p className="text-lg font-bold text-foreground">{fmtMoney(preview.current_budget)}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
+                  <p className="text-[11px] text-muted-foreground mb-1">Sum of Line Items</p>
+                  <p className="text-lg font-bold text-blue-400">{fmtMoney(preview.itemized_total)}</p>
+                </div>
+              </div>
+
+              {preview.in_sync ? (
+                <p className="text-xs text-emerald-400 bg-emerald-500/5 border border-emerald-500/20 rounded-xl px-3 py-2.5">
+                  Already in sync — no change needed.
+                </p>
+              ) : (
+                <div className={`text-xs rounded-xl px-3 py-2.5 border ${isDecrease ? "text-red-400 bg-red-500/5 border-red-500/20" : "text-amber-400 bg-amber-500/5 border-amber-500/20"}`}>
+                  <p className="font-semibold mb-1">
+                    {isDecrease ? "This will DECREASE" : "This will increase"} the project budget by {fmtMoney(Math.abs(preview.difference))}.
+                  </p>
+                  <p className="text-muted-foreground">
+                    {isDecrease
+                      ? "The itemized line items add up to less than the current budget — this usually means not every division has been entered yet. Only confirm if the line items are the complete, final budget."
+                      : "The itemized line items add up to more than the current budget."}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <Button variant="outline" size="sm" onClick={onClose} className="border-border flex-1">Cancel</Button>
+                <Button
+                  className={`border-0 flex-1 text-white ${isDecrease ? "bg-red-600 hover:bg-red-500" : "gradient-blue"}`}
+                  size="sm" onClick={handleConfirm} disabled={syncing || preview.in_sync}
+                >
+                  {syncing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Syncing…</> : "Confirm Sync"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-4">Could not load preview.</p>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Add / Edit Line Item Modal ───────────────────────────────────────────────
+
+const EMPTY_FORM = {
+  code: "", description: "", div_code: "00", div_name: "Uncategorized",
+  original_budget: "", budget_mods: "", approved_cos: "", revised_budget: "",
+  pending_changes: "", projected_budget: "", committed_costs: "", direct_costs: "",
+};
+
+// Defined at module scope (not inside ItemFormModal) so its identity is stable across
+// re-renders — a component redefined inline on every render gets remounted by React
+// on every keystroke, which drops input focus after each character typed.
+function BudgetItemField({ label, value, numeric, onChange }: {
+  label: string; value: string; numeric?: boolean; onChange: (val: string) => void;
+}) {
+  return (
+    <div>
+      <label className="block text-xs text-muted-foreground mb-1">{label}</label>
+      <input
+        type={numeric ? "number" : "text"}
+        step={numeric ? "0.01" : undefined}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-blue-500"
+        placeholder={numeric ? "0.00" : ""}
+      />
+    </div>
+  );
+}
+
+function ItemFormModal({
+  projectId,
+  item,
+  onClose,
+  onSuccess,
+}: {
+  projectId: string;
+  item: BudgetItem | null;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const isEdit = !!item?.id;
+  const [form, setForm] = useState<Record<string, string>>(
+    item
+      ? {
+          code:             item.code,
+          description:      item.description,
+          div_code:         item.divCode,
+          div_name:         item.divName,
+          original_budget:  String(item.originalBudget),
+          budget_mods:      String(item.budgetMods),
+          approved_cos:     String(item.approvedCOs),
+          revised_budget:   String(item.revisedBudget),
+          pending_changes:  String(item.pendingChanges),
+          projected_budget: String(item.projectedBudget),
+          committed_costs:  String(item.committedCosts),
+          direct_costs:     String(item.directCosts),
+        }
+      : { ...EMPTY_FORM }
+  );
+  const [saving, setSaving] = useState(false);
+
+  function n(key: string) { return parseFloat(form[key]) || 0; }
+
+  // Auto-compute revised and projected when numeric fields change
+  function handleChange(key: string, val: string) {
+    setForm((prev) => {
+      const next = { ...prev, [key]: val };
+      const orig  = parseFloat(next.original_budget)  || 0;
+      const mods  = parseFloat(next.budget_mods)       || 0;
+      const cos   = parseFloat(next.approved_cos)      || 0;
+      const pend  = parseFloat(next.pending_changes)   || 0;
+      const rev   = orig + mods + cos;
+      const proj  = rev  + pend;
+      next.revised_budget   = rev  > 0 ? String(rev)  : next.revised_budget;
+      next.projected_budget = proj > 0 ? String(proj) : next.projected_budget;
+      return next;
+    });
+  }
+
+  async function handleSave() {
+    if (!form.description.trim()) { toast.error("Description is required"); return; }
+    setSaving(true);
+    try {
+      const body = {
+        project_id:       projectId !== "all" ? projectId : undefined,
+        code:             form.code.trim(),
+        description:      form.description.trim(),
+        div_code:         form.div_code.trim() || "00",
+        div_name:         form.div_name.trim() || "Uncategorized",
+        original_budget:  n("original_budget"),
+        budget_mods:      n("budget_mods"),
+        approved_cos:     n("approved_cos"),
+        revised_budget:   n("revised_budget"),
+        pending_changes:  n("pending_changes"),
+        projected_budget: n("projected_budget"),
+        committed_costs:  n("committed_costs"),
+        direct_costs:     n("direct_costs"),
+      };
+      if (isEdit) {
+        await axios.put(`${API}/api/v1/financials/items/${item!.id}`, body);
+        toast.success("Line item updated");
+      } else {
+        await axios.post(`${API}/api/v1/financials/items`, body);
+        toast.success("Line item added");
+      }
+      onSuccess();
+      onClose();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function setField(fkey: string, val: string) {
+    setForm((p) => ({ ...p, [fkey]: val }));
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto"
+      >
+        <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-card z-10">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-500/10 flex items-center justify-center">
+              {isEdit ? <Edit2 className="w-4 h-4 text-blue-400" /> : <Plus className="w-4 h-4 text-blue-400" />}
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">{isEdit ? "Edit Line Item" : "Add Line Item"}</h2>
+              <p className="text-xs text-muted-foreground">{isEdit ? item!.description : "New budget line item"}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {/* Identity */}
+          <div className="grid grid-cols-2 gap-4">
+            <BudgetItemField label="Code" value={form.code} onChange={(v) => setField("code", v)} />
+            <div className="col-span-2">
+              <BudgetItemField label="Description *" value={form.description} onChange={(v) => setField("description", v)} />
+            </div>
+            <BudgetItemField label="Division Code" value={form.div_code} onChange={(v) => setField("div_code", v)} />
+            <BudgetItemField label="Division Name" value={form.div_name} onChange={(v) => setField("div_name", v)} />
+          </div>
+
+          <div className="border-t border-border/50" />
+
+          {/* Numeric fields */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Budget Amounts</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              <BudgetItemField label="Original Budget"   value={form.original_budget}  numeric onChange={(v) => handleChange("original_budget", v)} />
+              <BudgetItemField label="Budget Mods"        value={form.budget_mods}      numeric onChange={(v) => handleChange("budget_mods", v)} />
+              <BudgetItemField label="Approved COs"       value={form.approved_cos}     numeric onChange={(v) => handleChange("approved_cos", v)} />
+              <BudgetItemField label="Revised Budget"     value={form.revised_budget}   numeric onChange={(v) => handleChange("revised_budget", v)} />
+              <BudgetItemField label="Pending COs"        value={form.pending_changes}  numeric onChange={(v) => handleChange("pending_changes", v)} />
+              <BudgetItemField label="Projected Budget"   value={form.projected_budget} numeric onChange={(v) => handleChange("projected_budget", v)} />
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Costs</p>
+            <div className="grid grid-cols-2 gap-4">
+              <BudgetItemField label="Committed Costs" value={form.committed_costs} numeric onChange={(v) => handleChange("committed_costs", v)} />
+              <BudgetItemField label="Direct Costs"    value={form.direct_costs}    numeric onChange={(v) => handleChange("direct_costs", v)} />
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <Button variant="outline" size="sm" onClick={onClose} className="border-border flex-1" disabled={saving}>Cancel</Button>
+            <Button className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleSave} disabled={saving}>
+              {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : isEdit ? "Save Changes" : "Add Item"}
+            </Button>
+          </div>
         </div>
       </motion.div>
     </div>
@@ -696,7 +1210,23 @@ export default function FinancialsPage() {
   const [allDivisions, setAllDivisions] = useState<BudgetDivision[]>([]);
   const [history,      setHistory]      = useState<ChangeHistoryEntry[]>([]);
   const [showImport,   setShowImport]   = useState(false);
+  const [showSync,     setShowSync]     = useState(false);
+  const [showBudgetSync, setShowBudgetSync] = useState(false);
+  const [showItemForm, setShowItemForm] = useState(false);
+  const [editingItem,  setEditingItem]  = useState<BudgetItem | null>(null);
+  const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
   const [usingFallback, setUsingFallback] = useState(false);
+  const [liveActuals,  setLiveActuals]  = useState<{
+    project_budget: number;
+    direct_costs: number;
+    committed_costs: number;
+    financial_items_total: number;
+    has_financial_items: boolean;
+    cost_codes_count: number;
+    discrepancy_pct: number;
+    in_sync: boolean;
+    utilization_pct: number;
+  } | null>(null);
 
   const [selectedPid, setSelectedPid] = useState("all");
   const [view,        setView]        = useState<ViewMode>("standard");
@@ -704,6 +1234,15 @@ export default function FinancialsPage() {
   const [group,       setGroup]       = useState<GroupMode>("division");
   const [search,      setSearch]      = useState("");
   const [collapsed,   setCollapsed]   = useState<Record<string, boolean>>({});
+  const [invoiceSummary, setInvoiceSummary] = useState({ pending: 0, pendingAmt: 0, overdue: 0, overdueAmt: 0 });
+
+  // Fetch live actuals whenever the project selection changes
+  useEffect(() => {
+    const params = selectedPid !== "all" ? `?project_id=${selectedPid}` : "";
+    axios.get(`${API}/api/v1/financials/live-actuals${params}`)
+      .then(r => setLiveActuals(r.data))
+      .catch(() => setLiveActuals(null));
+  }, [selectedPid, projects]); // re-run when projects load or selection changes
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -719,24 +1258,21 @@ export default function FinancialsPage() {
       if (projRes.status === "fulfilled") rawProjects = projRes.value.data.projects || [];
       if (rawProjects.length === 0) rawProjects = [{ id: "demo", name: "Demo Project", total_budget: 2_450_000, spent_to_date: 930_000 }];
 
-      // Invoice committed totals per project
-      const invByProj: Record<string, number> = {};
+      let pendingCount = 0, pendingAmt = 0, overdueCount = 0, overdueAmt = 0;
       if (payRes.status === "fulfilled") {
         for (const inv of (payRes.value.data.invoices || [])) {
-          if (inv.status === "received" && inv.project_id) {
-            invByProj[inv.project_id] = (invByProj[inv.project_id] || 0) + (inv.amount || 0);
-          }
+          if (inv.status === "pending") { pendingCount++; pendingAmt += inv.amount || 0; }
+          if (inv.status === "overdue")  { overdueCount++;  overdueAmt  += inv.amount || 0; }
         }
       }
+      setInvoiceSummary({ pending: pendingCount, pendingAmt, overdue: overdueCount, overdueAmt });
 
-      // Real budget items from DB
       const dbItems: Record<string, unknown>[] =
         itemsRes.status === "fulfilled" ? (itemsRes.value.data.items || []) : [];
 
       const hasRealItems = dbItems.length > 0;
       setUsingFallback(!hasRealItems);
 
-      // Group DB items by project_id
       const itemsByProject = new Map<string, Record<string, unknown>[]>();
       for (const item of dbItems) {
         const pid = String(item.project_id || "all");
@@ -745,31 +1281,26 @@ export default function FinancialsPage() {
       }
 
       const projectList: ProjectInfo[] = rawProjects.map((p) => {
-        const budget    = Number(p.total_budget  ?? 0);
-        const spent     = Number(p.spent_to_date ?? 0);
-        const committed = invByProj[String(p.id)] ?? spent * 0.72;
-        const direct    = Math.max(0, spent - committed);
+        const budget    = Number(p.total_budget    ?? 0);
+        const spent     = Number(p.spent_to_date   ?? 0);
+        // committed_amount comes from invoices (pending+approved+received) via db_service
+        const committed = Number(p.committed_amount ?? 0);
+        const direct    = spent; // direct costs = actual cost_entries spend
 
-        const projItems = itemsByProject.get(String(p.id)) ?? [];
-        const hasProjItems = projItems.length > 0;
-        const divisions = hasProjItems
+        const projItems     = itemsByProject.get(String(p.id)) ?? [];
+        const hasProjItems  = projItems.length > 0;
+        const divisions     = hasProjItems
           ? dbItemsToDivisions(projItems)
           : buildFallbackDivisions(budget || 2_450_000, committed, direct);
 
         return {
-          id:           String(p.id),
-          name:         String(p.name || `Project ${String(p.id).slice(0, 6)}`),
-          total_budget: budget,
-          spent_to_date: spent,
-          committed,
-          direct,
-          divisions,
-          hasRealItems: hasProjItems,
+          id: String(p.id), name: String(p.name || `Project ${String(p.id).slice(0, 6)}`),
+          total_budget: budget, spent_to_date: spent, committed, direct,
+          divisions, hasRealItems: hasProjItems,
         };
       });
       setProjects(projectList);
 
-      // Aggregated all-projects view
       if (hasRealItems) {
         setAllDivisions(dbItemsToDivisions(dbItems));
       } else {
@@ -779,7 +1310,6 @@ export default function FinancialsPage() {
         setAllDivisions(buildFallbackDivisions(aggBudget, aggCommitted, aggDirect));
       }
 
-      // Collapse state
       const divCodes = new Set<string>([
         ...CSI_BLUEPRINT.map((d) => d.code),
         ...dbItems.map((i) => String(i.div_code || "00")),
@@ -788,7 +1318,6 @@ export default function FinancialsPage() {
       divCodes.forEach((c) => { initCollapsed[c] = true; });
       setCollapsed(initCollapsed);
 
-      // Change history
       if (histRes.status === "fulfilled") {
         setHistory(histRes.value.data.history || []);
       }
@@ -801,7 +1330,85 @@ export default function FinancialsPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // ── Derived data ────────────────────────────────────────────────────────────
+  // ── Export: generate CSV client-side from current data ───────────────────────
+
+  const handleExport = useCallback(() => {
+    const divsToExport = selectedPid !== "all"
+      ? (projects.find(p => p.id === selectedPid)?.divisions ?? allDivisions)
+      : allDivisions;
+
+    if (divsToExport.length === 0 || divsToExport.every(d => d.items.length === 0)) {
+      toast.error("No budget data to export");
+      return;
+    }
+
+    const headers = [
+      "code", "description", "div_code", "div_name",
+      "original_budget", "budget_mods", "approved_cos", "revised_budget",
+      "pending_changes", "projected_budget", "committed_costs", "direct_costs",
+    ];
+    const rows: string[] = [headers.join(",")];
+
+    for (const div of divsToExport) {
+      for (const item of div.items) {
+        rows.push([
+          item.code,
+          `"${item.description.replace(/"/g, '""')}"`,
+          div.code,
+          `"${div.name.replace(/"/g, '""')}"`,
+          item.originalBudget.toFixed(2),
+          item.budgetMods.toFixed(2),
+          item.approvedCOs.toFixed(2),
+          item.revisedBudget.toFixed(2),
+          item.pendingChanges.toFixed(2),
+          item.projectedBudget.toFixed(2),
+          item.committedCosts.toFixed(2),
+          item.directCosts.toFixed(2),
+        ].join(","));
+      }
+    }
+
+    const csv = rows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `financial_budget_${selectedPid}_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${rows.length - 1} line items to CSV`);
+  }, [selectedPid, projects, allDivisions]);
+
+  // ── Item CRUD ─────────────────────────────────────────────────────────────────
+
+  function openAddItem() {
+    setEditingItem(null);
+    setShowItemForm(true);
+  }
+
+  function openEditItem(item: BudgetItem) {
+    setEditingItem(item);
+    setShowItemForm(true);
+  }
+
+  async function handleDeleteItem(item: BudgetItem) {
+    if (!item.id) return;
+    if (!confirm(`Delete "${item.description}"?`)) return;
+    setDeletingItemId(item.id);
+    try {
+      await axios.delete(`${API}/api/v1/financials/items/${item.id}`);
+      toast.success("Line item deleted");
+      fetchData();
+    } catch {
+      toast.error("Delete failed");
+    } finally {
+      setDeletingItemId(null);
+    }
+  }
+
+  // ── Derived data ─────────────────────────────────────────────────────────────
 
   const rawDivisions = useMemo(() => {
     if (selectedPid === "all") return allDivisions;
@@ -818,12 +1425,18 @@ export default function FinancialsPage() {
       .filter((d) => d.items.length > 0 || d.name.toLowerCase().includes(q));
   }, [snapshotDivisions, search]);
 
-  const flatItems = useMemo(() => {
-    return filteredDivisions.flatMap((d) => d.items).sort((a, b) => a.code.localeCompare(b.code));
-  }, [filteredDivisions]);
+  const flatItems   = useMemo(() => filteredDivisions.flatMap((d) => d.items).sort((a, b) => a.code.localeCompare(b.code)), [filteredDivisions]);
+  const grand       = useMemo(() => sumDivisions(filteredDivisions), [filteredDivisions]);
+  const activeCols  = useMemo(() => COL_DEFS.filter((c) => VIEW_KEYS[view].includes(c.key)), [view]);
 
-  const grand = useMemo(() => sumDivisions(filteredDivisions), [filteredDivisions]);
-  const activeCols = useMemo(() => COL_DEFS.filter((c) => VIEW_KEYS[view].includes(c.key)), [view]);
+  // Live canonical figures: projects.budget, cost_entries sum, invoices sum
+  // These override the line-item table totals for the top-level KPI cards
+  const liveGrand = useMemo(() => ({
+    originalBudget: liveActuals?.project_budget  ?? grand.originalBudget,
+    committedCosts: liveActuals?.committed_costs  ?? grand.committedCosts,
+    directCosts:    liveActuals?.direct_costs     ?? grand.directCosts,
+    revisedBudget:  grand.revisedBudget,
+  }), [liveActuals, grand]);
 
   const isCollapsed = (code: string) => collapsed[code] !== false;
   const toggleDiv   = (code: string) => setCollapsed((p) => ({ ...p, [code]: !isCollapsed(code) }));
@@ -834,13 +1447,137 @@ export default function FinancialsPage() {
   const projectCount    = selectedPid === "all" ? projects.length : 1;
 
   const kpis = [
-    { label: "Original Budget", value: fmtMoney(grand.originalBudget),  sub: `${projectCount} project${projectCount !== 1 ? "s" : ""}`,                                                                       icon: DollarSign,  color: "border-blue-500/20 bg-blue-500/5",    iconColor: "text-blue-400"    },
-    { label: "Approved COs",    value: fmtMoney(grand.approvedCOs),      sub: grand.originalBudget > 0 ? `${((grand.approvedCOs / grand.originalBudget) * 100).toFixed(2)}% of budget` : "—",                icon: CheckCircle2, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400" },
-    { label: "Revised Budget",  value: fmtMoney(grand.revisedBudget),    sub: "Original + Mods + COs",                                                                                                         icon: TrendingUp,  color: "border-purple-500/20 bg-purple-500/5", iconColor: "text-purple-400"  },
-    { label: "Committed Costs", value: fmtMoney(grand.committedCosts),   sub: grand.revisedBudget > 0 ? `${((grand.committedCosts / grand.revisedBudget) * 100).toFixed(1)}% committed` : "—",               icon: AlertCircle, color: "border-orange-500/20 bg-orange-500/5",  iconColor: "text-orange-400"  },
+    { label: "Original Budget", value: fmtMoney(liveGrand.originalBudget), sub: `${projectCount} project${projectCount !== 1 ? "s" : ""}`,  icon: DollarSign,  color: "border-blue-500/20 bg-blue-500/5",     iconColor: "text-blue-400"    },
+    { label: "Approved COs",    value: fmtMoney(grand.approvedCOs),         sub: liveGrand.originalBudget > 0 ? `${((grand.approvedCOs / liveGrand.originalBudget) * 100).toFixed(2)}% of budget` : "—", icon: CheckCircle2, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400" },
+    { label: "Direct Costs",    value: fmtMoney(liveGrand.directCosts),     sub: liveGrand.originalBudget > 0 ? `${((liveGrand.directCosts / liveGrand.originalBudget) * 100).toFixed(1)}% of budget` : "—", icon: TrendingUp, color: "border-cyan-500/20 bg-cyan-500/5", iconColor: "text-cyan-400"  },
+    { label: "Committed Costs", value: fmtMoney(liveGrand.committedCosts),  sub: liveGrand.originalBudget > 0 ? `${((liveGrand.committedCosts / liveGrand.originalBudget) * 100).toFixed(1)}% committed` : "—", icon: AlertCircle, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400" },
   ];
 
-  // ── Sub-components ──────────────────────────────────────────────────────────
+  // ── Budget distribution bar ──────────────────────────────────────────────────
+
+  const BudgetDistributionCard = () => {
+    // Prefer live canonical figures; fall back to line-item totals
+    const baseBudget   = liveGrand.originalBudget  || grand.revisedBudget;
+    const committedAmt = liveGrand.committedCosts;
+    const directAmt    = liveGrand.directCosts;
+    if (loading || baseBudget === 0) return null;
+    const totalSpent  = committedAmt + directAmt;
+    const remaining   = Math.max(0, baseBudget - totalSpent);
+    const overrun     = Math.max(0, totalSpent - baseBudget);
+    const base        = baseBudget + overrun || 1;
+    const pctCommitted = (committedAmt / base) * 100;
+    const pctDirect    = (directAmt    / base) * 100;
+    const pctRemaining = (remaining / base) * 100;
+    const pctOverrun   = (overrun   / base) * 100;
+    const isOverrun    = overrun > 0;
+    const totalUsedPct = ((totalSpent / baseBudget) * 100).toFixed(1);
+
+    return (
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}
+        className="bg-card border border-border rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div>
+            <h3 className="font-semibold text-foreground">Budget Distribution</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Project budget {fmtMoney(baseBudget)} · Used {fmtMoney(totalSpent)} ({totalUsedPct}%)
+            </p>
+          </div>
+          {isOverrun ? (
+            <span className="text-xs px-3 py-1 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 font-medium">{pctOverrun.toFixed(1)}% over budget</span>
+          ) : (
+            <span className="text-xs px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">{(100 - Number(totalUsedPct)).toFixed(1)}% remaining</span>
+          )}
+        </div>
+        <div className="h-7 flex rounded-xl overflow-hidden gap-px bg-secondary">
+          {pctCommitted > 0 && (
+            <motion.div initial={{ width: 0 }} animate={{ width: `${pctCommitted}%` }} transition={{ duration: 0.8, delay: 0.3 }}
+              title={`Committed Costs — ${fmtCurrency(committedAmt)}`}
+              className="bg-orange-500 flex items-center justify-center text-[10px] text-white font-medium shrink-0">
+              {pctCommitted > 8 && `${pctCommitted.toFixed(0)}%`}
+            </motion.div>
+          )}
+          {pctDirect > 0 && (
+            <motion.div initial={{ width: 0 }} animate={{ width: `${pctDirect}%` }} transition={{ duration: 0.8, delay: 0.4 }}
+              title={`Direct Costs — ${fmtCurrency(directAmt)}`}
+              className="bg-blue-500 flex items-center justify-center text-[10px] text-white font-medium shrink-0">
+              {pctDirect > 5 && `${pctDirect.toFixed(0)}%`}
+            </motion.div>
+          )}
+          {isOverrun ? (
+            <motion.div initial={{ width: 0 }} animate={{ width: `${pctOverrun}%` }} transition={{ duration: 0.8, delay: 0.5 }}
+              title={`Overrun — ${fmtCurrency(overrun)}`}
+              className="bg-red-500 flex items-center justify-center text-[10px] text-white font-medium shrink-0">
+              {pctOverrun > 5 && `+${pctOverrun.toFixed(0)}%`}
+            </motion.div>
+          ) : (
+            <motion.div initial={{ width: 0 }} animate={{ width: `${pctRemaining}%` }} transition={{ duration: 0.8, delay: 0.5 }}
+              title={`Remaining — ${fmtCurrency(remaining)}`} className="bg-secondary min-w-0" />
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3 text-xs">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-sm bg-orange-500 shrink-0" />
+            <span className="text-muted-foreground">Committed <span className="text-foreground font-medium ml-1">{fmtMoney(committedAmt)}</span></span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-sm bg-blue-500 shrink-0" />
+            <span className="text-muted-foreground">Direct Costs <span className="text-foreground font-medium ml-1">{fmtMoney(directAmt)}</span></span>
+          </div>
+          {isOverrun ? (
+            <div className="flex items-center gap-1.5">
+              <div className="w-2.5 h-2.5 rounded-sm bg-red-500 shrink-0" />
+              <span className="text-muted-foreground">Overrun <span className="text-red-400 font-medium ml-1">{fmtMoney(overrun)}</span></span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <div className="w-2.5 h-2.5 rounded-sm bg-secondary border border-border/60 shrink-0" />
+              <span className="text-muted-foreground">Remaining <span className="text-emerald-400 font-medium ml-1">{fmtMoney(remaining)}</span></span>
+            </div>
+          )}
+          <div className="ml-auto text-muted-foreground">
+            Pending COs <span className="text-foreground font-medium">{fmtMoney(grand.pendingChanges)}</span>
+          </div>
+        </div>
+      </motion.div>
+    );
+  };
+
+  // ── Connected modules panel ──────────────────────────────────────────────────
+
+  const ConnectedModulesPanel = () => {
+    const burnPct = liveGrand.originalBudget > 0
+      ? (((liveGrand.committedCosts + liveGrand.directCosts) / liveGrand.originalBudget) * 100).toFixed(1)
+      : null;
+    const tiles: { icon: typeof TrendingUp; label: string; value: string; sub: string; href: string; color: string; bg: string; border: string }[] = [
+      { icon: TrendingUp,    label: "Cost & Budget",  value: burnPct !== null ? `${burnPct}% utilized` : "—",                                             sub: "Burn rate & cash flow",         href: "/cost",      color: "text-blue-400",    bg: "bg-blue-500/10",    border: "hover:border-blue-500/30"   },
+      { icon: ReceiptText,   label: "Payments",       value: invoiceSummary.pending > 0 ? fmtMoney(invoiceSummary.pendingAmt) : "Up to date",              sub: `${invoiceSummary.pending} pending · ${invoiceSummary.overdue} overdue`, href: "/payments",  color: invoiceSummary.overdue > 0 ? "text-red-400" : invoiceSummary.pending > 0 ? "text-amber-400" : "text-emerald-400", bg: invoiceSummary.overdue > 0 ? "bg-red-500/10" : invoiceSummary.pending > 0 ? "bg-amber-500/10" : "bg-emerald-500/10", border: "hover:border-orange-500/30" },
+      { icon: FileSpreadsheet, label: "EVM Dashboard", value: "CPI / SPI",                                                                               sub: "Earned value performance",      href: "/evm",       color: "text-cyan-400",  bg: "bg-cyan-500/10", border: "hover:border-cyan-500/30" },
+      { icon: FileText,      label: "Contracts",      value: liveGrand.committedCosts > 0 ? fmtMoney(liveGrand.committedCosts) : "—",                    sub: "Committed via invoices",        href: "/contracts", color: "text-teal-400",   bg: "bg-teal-500/10",   border: "hover:border-teal-500/30"   },
+    ];
+    return (
+      <div>
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2.5">Connected Modules</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {tiles.map((tile, i) => (
+            <Link key={i} href={tile.href}
+              className={`flex items-center gap-3 p-3.5 rounded-xl bg-card border border-border ${tile.border} transition-all group`}>
+              <div className={`w-9 h-9 rounded-xl ${tile.bg} flex items-center justify-center shrink-0`}>
+                <tile.icon className={`w-4 h-4 ${tile.color}`} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] text-muted-foreground">{tile.label}</p>
+                <p className={`text-sm font-semibold ${tile.color} truncate`}>{tile.value}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{tile.sub}</p>
+              </div>
+              <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
+            </Link>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // ── Table sub-components ─────────────────────────────────────────────────────
 
   const Cell = ({ col, val, bold }: { col: ColDef; val: number; bold?: boolean }) => (
     <span className={`${col.cellColor(val)}${bold ? " font-semibold" : ""}`}>{fmtCurrency(val)}</span>
@@ -849,14 +1586,14 @@ export default function FinancialsPage() {
   const TableHead = () => (
     <thead>
       <tr className="border-b border-border bg-secondary/30">
-        <th className="sticky left-0 z-10 bg-secondary/60 text-left py-3 px-4 text-xs font-semibold text-muted-foreground w-72 min-w-[288px]">
-          Description
-        </th>
+        <th className="sticky left-0 z-10 bg-secondary/60 text-left py-3 px-4 text-xs font-semibold text-muted-foreground w-72 min-w-[288px]">Description</th>
         {activeCols.map((c) => (
-          <th key={c.key} className={`py-3 px-4 text-right text-xs font-semibold ${c.hColor} whitespace-nowrap min-w-30`}>
-            {c.header}{c.header2 && <><br />{c.header2}</>}
+          <th key={c.key} title={COL_TOOLTIPS[c.key]}
+            className={`py-3 px-4 text-right text-xs font-semibold ${c.hColor} whitespace-nowrap min-w-30 cursor-help`}>
+            {c.header}
           </th>
         ))}
+        <th className="py-3 px-3 text-center text-xs font-semibold text-muted-foreground w-16 whitespace-nowrap">Actions</th>
       </tr>
     </thead>
   );
@@ -869,7 +1606,32 @@ export default function FinancialsPage() {
           <span className={`font-bold ${c.hColor}`}>{fmtCurrency(totals[c.key])}</span>
         </td>
       ))}
+      <td />
     </tr>
+  );
+
+  const ItemActions = ({ item }: { item: BudgetItem }) => (
+    <td className="py-2.5 px-3 text-center">
+      <div className="flex items-center justify-center gap-1">
+        <button
+          onClick={(e) => { e.stopPropagation(); openEditItem(item); }}
+          title="Edit"
+          className="p-1 rounded text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
+        >
+          <Edit2 className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); handleDeleteItem(item); }}
+          title="Delete"
+          disabled={deletingItemId === item.id}
+          className="p-1 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+        >
+          {deletingItemId === item.id
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : <Trash2 className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+    </td>
   );
 
   const DivisionBody = ({ divs }: { divs: BudgetDivision[] }) => (
@@ -885,16 +1647,17 @@ export default function FinancialsPage() {
                   <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0.15 }} className="inline-flex">
                     <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
                   </motion.span>
-                  <span className="font-semibold text-foreground text-[13px]">*{div.code} - {div.name}</span>
+                  <span className="font-semibold text-foreground text-[13px]">{div.code} — {div.name}</span>
                 </div>
               </td>
               {activeCols.map((c) => (
                 <td key={c.key} className="py-3 px-4 text-right text-[13px]"><Cell col={c} val={tot[c.key]} bold={c.bold} /></td>
               ))}
+              <td />
             </tr>
             {open && div.items.map((item) => (
-              <tr key={item.code} className="border-b border-border/30 hover:bg-secondary/20 transition-colors">
-                <td className="sticky left-0 z-10 bg-card hover:bg-secondary/20 transition-colors py-2.5 px-4">
+              <tr key={item.id || item.code} className="border-b border-border/30 hover:bg-secondary/20 transition-colors group">
+                <td className="sticky left-0 z-10 bg-card group-hover:bg-secondary/20 transition-colors py-2.5 px-4">
                   <div className="flex items-center gap-2 pl-7">
                     <span className="text-xs text-muted-foreground shrink-0">{item.code} -</span>
                     <span className="text-xs text-foreground">{item.description}</span>
@@ -903,6 +1666,7 @@ export default function FinancialsPage() {
                 {activeCols.map((c) => (
                   <td key={c.key} className="py-2.5 px-4 text-right text-xs"><Cell col={c} val={item[c.key]} /></td>
                 ))}
+                <ItemActions item={item} />
               </tr>
             ))}
             {open && (
@@ -915,6 +1679,7 @@ export default function FinancialsPage() {
                     <span className={`font-semibold ${c.hColor}`}>{fmtCurrency(tot[c.key])}</span>
                   </td>
                 ))}
+                <td />
               </tr>
             )}
           </Fragment>
@@ -926,8 +1691,8 @@ export default function FinancialsPage() {
   const CostCodeBody = () => (
     <>
       {flatItems.map((item) => (
-        <tr key={`${item.divCode}-${item.code}`} className="border-b border-border/30 hover:bg-secondary/20 transition-colors">
-          <td className="sticky left-0 z-10 bg-card hover:bg-secondary/20 transition-colors py-2.5 px-4">
+        <tr key={item.id || `${item.divCode}-${item.code}`} className="border-b border-border/30 hover:bg-secondary/20 transition-colors group">
+          <td className="sticky left-0 z-10 bg-card group-hover:bg-secondary/20 transition-colors py-2.5 px-4">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-blue-400 shrink-0 w-14">{item.code}</span>
               <span className="text-xs text-foreground">{item.description}</span>
@@ -937,6 +1702,7 @@ export default function FinancialsPage() {
           {activeCols.map((c) => (
             <td key={c.key} className="py-2.5 px-4 text-right text-xs"><Cell col={c} val={item[c.key]} /></td>
           ))}
+          <ItemActions item={item} />
         </tr>
       ))}
     </>
@@ -974,7 +1740,7 @@ export default function FinancialsPage() {
     </>
   );
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-0">
@@ -982,17 +1748,31 @@ export default function FinancialsPage() {
 
       <AnimatePresence>
         {showImport && (
-          <ImportModal
-            projects={projects}
-            onClose={() => setShowImport(false)}
-            onSuccess={() => { fetchData(); }}
+          <ImportModal projects={projects} onClose={() => setShowImport(false)} onSuccess={fetchData} />
+        )}
+        {showSync && (
+          <SyncModal projects={projects} onClose={() => setShowSync(false)} onSuccess={fetchData} />
+        )}
+        {showItemForm && (
+          <ItemFormModal
+            projectId={selectedPid}
+            item={editingItem}
+            onClose={() => { setShowItemForm(false); setEditingItem(null); }}
+            onSuccess={fetchData}
+          />
+        )}
+        {showBudgetSync && selectedPid !== "all" && (
+          <BudgetSyncModal
+            projectId={selectedPid}
+            onClose={() => setShowBudgetSync(false)}
+            onSuccess={fetchData}
           />
         )}
       </AnimatePresence>
 
       <div className="space-y-5 pt-5">
         {/* Header */}
-        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-3xl font-bold text-foreground">Financial Budget</h1>
             <p className="text-muted-foreground text-sm mt-1">
@@ -1000,7 +1780,7 @@ export default function FinancialsPage() {
               {selectedProject && <span className="ml-2 text-blue-400 font-medium">— {selectedProject.name}</span>}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {selectedPid !== "all" && (
               <Button variant="outline" size="sm" onClick={() => setSelectedPid("all")} className="border-border text-xs">
                 ← All Projects
@@ -1009,22 +1789,50 @@ export default function FinancialsPage() {
             <Button variant="outline" size="sm" onClick={fetchData} className="border-border">
               <RefreshCw className="w-4 h-4" />
             </Button>
-            <Button variant="outline" size="sm" className="border-border" onClick={() => setShowImport(true)}>
-              <Upload className="w-4 h-4 mr-2" />Import
+            <Button variant="outline" size="sm" className="border-border" onClick={() => setShowSync(true)}>
+              <Link2 className="w-4 h-4 mr-2" />Sync Modules
             </Button>
-            <Button className="gradient-blue text-white border-0" onClick={() => toast.success("Budget exported to CSV")}>
-              <Download className="w-4 h-4 mr-2" />Export
+            <Button className="gradient-blue text-white border-0" size="sm" onClick={() => setShowImport(true)}>
+              <Download className="w-4 h-4 mr-2" />Import
+            </Button>
+            <Button className="gradient-blue text-white border-0" onClick={handleExport}>
+              <Upload className="w-4 h-4 mr-2" />Export CSV
             </Button>
           </div>
         </motion.div>
 
-        {/* Fallback notice */}
+        {/* Fallback / no-data notice */}
         {usingFallback && !loading && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-400">
+            className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-400 flex-wrap">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-            No imported budget data — showing CSI-proportional estimates based on project budgets.
-            <button onClick={() => setShowImport(true)} className="underline hover:text-amber-300 ml-1">Import a file</button> to replace with real data.
+            <span>No imported budget data — showing CSI-proportional estimates based on project budgets.</span>
+            <button onClick={() => setShowImport(true)} className="underline hover:text-amber-300">Import a file</button>
+            <span className="text-muted-foreground">·</span>
+            <button onClick={() => setShowSync(true)} className="underline hover:text-amber-300">or sync from Cost Codes</button>
+          </motion.div>
+        )}
+
+        {/* Cost codes available hint */}
+        {!loading && liveActuals && liveActuals.cost_codes_count > 0 && usingFallback && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl bg-teal-500/5 border border-teal-500/20 text-xs text-teal-400 flex-wrap">
+            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+            <span>{liveActuals.cost_codes_count} cost codes found in the Construction module — import them as budget line items.</span>
+            <button onClick={() => setShowSync(true)} className="underline hover:text-teal-300">Sync now</button>
+          </motion.div>
+        )}
+
+        {/* Itemized budget vs. canonical project budget discrepancy */}
+        {!loading && selectedPid !== "all" && liveActuals && liveActuals.has_financial_items && !liveActuals.in_sync && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-400 flex-wrap">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            <span>
+              Line items total {fmtMoney(liveActuals.financial_items_total)}, but the project budget is {fmtMoney(liveActuals.project_budget)}
+              {" "}({liveActuals.discrepancy_pct.toFixed(1)}% difference).
+            </span>
+            <button onClick={() => setShowBudgetSync(true)} className="underline hover:text-amber-300">Review & Sync</button>
           </motion.div>
         )}
 
@@ -1047,9 +1855,14 @@ export default function FinancialsPage() {
           ))}
         </div>
 
+        {/* Budget Distribution */}
+        <BudgetDistributionCard />
+
+        {/* Connected Modules */}
+        <ConnectedModulesPanel />
+
         {/* Main card */}
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-card border border-border rounded-2xl overflow-hidden">
-
           {/* Budget / Change History tabs */}
           <div className="flex items-center border-b border-border px-4 gap-1">
             {([
@@ -1063,7 +1876,7 @@ export default function FinancialsPage() {
             ))}
           </div>
 
-          {/* ── BUDGET TAB ──────────────────────────────────────────────────── */}
+          {/* ── BUDGET TAB ── */}
           {activeTab === "budget" && (
             <>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-border bg-secondary/20">
@@ -1080,14 +1893,14 @@ export default function FinancialsPage() {
                   <span className="text-muted-foreground">View</span>
                   <select value={view} onChange={(e) => setView(e.target.value as ViewMode)}
                     className="bg-secondary border border-border rounded-lg px-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-blue-500">
-                    <option value="standard">Standard Budget</option>
-                    <option value="committed">Committed Costs View</option>
+                    <option value="standard">All Columns</option>
+                    <option value="committed">Committed Costs</option>
                     <option value="direct">Direct Costs Only</option>
                   </select>
                 </label>
                 <div className="w-px h-4 bg-border" />
                 <label className="flex items-center gap-1.5 text-xs">
-                  <span className="text-muted-foreground">Snapshots</span>
+                  <span className="text-muted-foreground">Snapshot</span>
                   <select value={snapshot} onChange={(e) => setSnapshot(e.target.value as SnapshotMode)}
                     className="bg-secondary border border-border rounded-lg px-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-blue-500">
                     <option value="current">Current</option>
@@ -1097,11 +1910,11 @@ export default function FinancialsPage() {
                 </label>
                 <div className="w-px h-4 bg-border" />
                 <label className="flex items-center gap-1.5 text-xs">
-                  <span className="text-muted-foreground">Group</span>
+                  <span className="text-muted-foreground">Group By</span>
                   <select value={group} onChange={(e) => setGroup(e.target.value as GroupMode)}
                     className="bg-secondary border border-border rounded-lg px-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-blue-500">
-                    <option value="division">Sub Job, Division</option>
-                    <option value="cost-code">Cost Code (Flat)</option>
+                    <option value="division">Division</option>
+                    <option value="cost-code">Cost Code (Flat List)</option>
                     <option value="project">Project</option>
                   </select>
                 </label>
@@ -1111,13 +1924,18 @@ export default function FinancialsPage() {
                     {snapshot === "original" ? "Viewing: Original" : "Viewing: Last Month"}
                   </span>
                 )}
+                <button
+                  onClick={openAddItem}
+                  className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />Add Item
+                </button>
                 <div className="flex items-center gap-1.5 bg-secondary border border-border rounded-lg px-2 py-1">
                   <Filter className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                   <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Add Filter"
                     className="text-xs bg-transparent outline-none text-foreground placeholder:text-muted-foreground w-24" />
                   {search && <button onClick={() => setSearch("")} className="text-muted-foreground hover:text-foreground leading-none">×</button>}
                 </div>
-                {search && <button onClick={() => setSearch("")} className="text-xs text-red-400 hover:text-red-300">Clear All</button>}
                 {group === "division" && (
                   <>
                     <div className="w-px h-4 bg-border" />
@@ -1132,9 +1950,29 @@ export default function FinancialsPage() {
 
               {loading ? (
                 <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-blue-400" /></div>
+              ) : usingFallback ? (
+                <div className="flex flex-col items-center justify-center h-64 gap-4 text-muted-foreground px-6">
+                  <PlusCircle className="w-10 h-10 opacity-20" />
+                  <p className="text-sm font-medium text-foreground/60">No budget line items yet</p>
+                  <p className="text-xs text-center max-w-sm">
+                    Budget line items live in the <strong>financial_budget_items</strong> table.
+                    Add items manually, import a file, or sync from your Construction cost codes.
+                  </p>
+                  <div className="flex items-center gap-3 flex-wrap justify-center">
+                    <button onClick={openAddItem} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors">
+                      <Plus className="w-3.5 h-3.5" />Add Line Item
+                    </button>
+                    <button onClick={() => setShowImport(true)} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-secondary border border-border hover:bg-secondary/80 transition-colors text-foreground">
+                      <Download className="w-3.5 h-3.5" />Import File
+                    </button>
+                    <button onClick={() => setShowSync(true)} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-teal-500/10 text-teal-400 border border-teal-500/20 hover:bg-teal-500/20 transition-colors">
+                      <Link2 className="w-3.5 h-3.5" />Sync from Modules
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full border-collapse text-sm" style={{ minWidth: group === "direct" ? 500 : 900 }}>
+                  <table className="w-full border-collapse text-sm" style={{ minWidth: view === "direct" ? 500 : 900 }}>
                     <TableHead />
                     <tbody>
                       {group === "division"  && <DivisionBody divs={filteredDivisions} />}
@@ -1148,7 +1986,7 @@ export default function FinancialsPage() {
             </>
           )}
 
-          {/* ── CHANGE HISTORY TAB ──────────────────────────────────────────── */}
+          {/* ── CHANGE HISTORY TAB ── */}
           {activeTab === "history" && (
             <div className="p-5 space-y-3">
               {loading ? (
@@ -1194,16 +2032,16 @@ export default function FinancialsPage() {
           context="Financial Budget"
           placeholder="Ask about budget line items, cost codes, variances..."
           pageSummaryData={{
-            originalBudget: fmtMoney(grand.originalBudget),
-            approvedCOs:    fmtMoney(grand.approvedCOs),
-            revisedBudget:  fmtMoney(grand.revisedBudget),
-            committedCosts: fmtMoney(grand.committedCosts),
-            directCosts:    fmtMoney(grand.directCosts),
-            viewMode:       view,
-            snapshotMode:   snapshot,
-            groupMode:      group,
+            originalBudget:  fmtMoney(grand.originalBudget),
+            approvedCOs:     fmtMoney(grand.approvedCOs),
+            revisedBudget:   fmtMoney(grand.revisedBudget),
+            committedCosts:  fmtMoney(grand.committedCosts),
+            directCosts:     fmtMoney(grand.directCosts),
+            viewMode:        view,
+            snapshotMode:    snapshot,
+            groupMode:       group,
             selectedProject: selectedProject?.name ?? "All Projects",
-            dataSource:     usingFallback ? "CSI proportional estimate" : "imported budget data",
+            dataSource:      usingFallback ? "CSI proportional estimate" : "imported budget data",
           }}
         />
       </div>

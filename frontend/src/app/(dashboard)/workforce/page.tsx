@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 
 const ResourceLevelingPage = dynamic(() => import("../resource-leveling/page"), { ssr: false });
@@ -24,10 +24,12 @@ import axios from "axios";
 import { toast } from "sonner";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 import ModuleChat from "@/components/shared/ModuleChat";
+import { MarkdownText } from "@/lib/renderMarkdown";
 import ModuleTabs from "@/components/shared/ModuleTabs";
 
 const WORKFORCE_MODULE_TABS = [
   { href: "/workforce", label: "Workforce" },
+  { href: "/team",      label: "Team" },
   { href: "/equipment", label: "Equipment" },
   { href: "/vendors", label: "Vendors" },
 ];
@@ -78,6 +80,10 @@ export default function WorkforcePage() {
   const [skillTargets, setSkillTargets] = useState<Record<string, number>>({});
   const [editingSkill, setEditingSkill] = useState<string | null>(null);
   const [editTargetValue, setEditTargetValue] = useState(70);
+  const [extractedWorkers, setExtractedWorkers] = useState<any[]>([]);
+  const [extractLoading, setExtractLoading] = useState(false);
+  const [addingExtracted, setAddingExtracted] = useState<string | null>(null);
+  const extractFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { fetchAll(); }, []);
 
@@ -123,6 +129,45 @@ export default function WorkforcePage() {
     } finally {
       setMlLoading(false);
     }
+  };
+
+  const handleExtractUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setExtractLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/workforce/extract-members`, formData);
+      const found = res.data.extracted_members ?? [];
+      setExtractedWorkers(found);
+      toast.success(found.length > 0 ? `Found ${found.length} worker(s) — review below.` : "No workers found in document.");
+    } catch { toast.error("Failed to extract workers from file"); }
+    finally { setExtractLoading(false); }
+  };
+
+  const addExtractedWorker = async (w: any, idx: number) => {
+    setAddingExtracted(String(idx));
+    try {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/workforce/workers`, w);
+      setExtractedWorkers(prev => prev.filter((_, i) => i !== idx));
+      toast.success(`${w.name} added`);
+      fetchAll();
+    } catch { toast.error(`Failed to add ${w.name}`); }
+    finally { setAddingExtracted(null); }
+  };
+
+  const addAllExtractedWorkers = async () => {
+    setAddingExtracted("all");
+    let added = 0;
+    for (const w of extractedWorkers) {
+      try { await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/workforce/workers`, w); added++; } catch { /* skip */ }
+    }
+    setExtractedWorkers([]);
+    toast.success(`Added ${added} worker(s)`);
+    fetchAll();
+    setAddingExtracted(null);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -268,12 +313,17 @@ export default function WorkforcePage() {
           <Button variant="outline" onClick={() => setOnboardingOpen(!onboardingOpen)}>
             <UserPlus className="w-4 h-4 mr-2 text-blue-400" />Onboard
           </Button>
+          <input ref={extractFileRef} type="file" className="hidden" accept=".pdf,.xlsx,.xls,.docx,.doc,.csv" onChange={handleExtractUpload} />
+          <Button className="gradient-blue text-white border-0" disabled={extractLoading} onClick={() => extractFileRef.current?.click()}>
+            {extractLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            Upload
+          </Button>
           <label className="cursor-pointer">
             <input type="file" className="hidden" accept=".pdf,.xlsx,.docx" onChange={handleFileUpload} />
-            <Button className="gradient-blue text-white border-0" asChild>
+            <Button variant="outline" asChild>
               <span>
                 {uploadLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-                Upload Data
+                Analyze
               </span>
             </Button>
           </label>
@@ -310,7 +360,7 @@ export default function WorkforcePage() {
             {
               label: "Avg Utilization", value: `${avgUtilization}%`,
               change: `${stats?.total_hours_today ?? 0}h logged today`,
-              trend: avgUtilization >= 70 ? "up" : "down", color: "border-purple-500/20 bg-purple-500/5",
+              trend: avgUtilization >= 70 ? "up" : "down", color: "border-cyan-500/20 bg-cyan-500/5",
             },
           ].map((kpi, i) => (
             <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
@@ -337,8 +387,8 @@ export default function WorkforcePage() {
           }`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
-                <Brain className="w-5 h-5 text-purple-400" />
+              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 flex items-center justify-center">
+                <Brain className="w-5 h-5 text-cyan-400" />
               </div>
               <div>
                 <p className="text-xs text-muted-foreground mb-0.5">AI Turnover Risk Prediction</p>
@@ -458,9 +508,56 @@ export default function WorkforcePage() {
             </Button>
             {plan && (
               <div className="mt-4 p-4 bg-secondary rounded-xl">
-                <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{plan}</p>
+                <MarkdownText text={plan} className="text-sm text-foreground leading-relaxed" />
               </div>
             )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Extracted workers review panel */}
+      <AnimatePresence>
+        {extractedWorkers.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="bg-card border border-emerald-500/30 rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+              <div>
+                <h3 className="font-semibold text-foreground">Workers Found in Document</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Review and add to your workforce</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={addAllExtractedWorkers} disabled={addingExtracted === "all"}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white border-0 h-7 px-3 text-xs">
+                  {addingExtracted === "all" ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <UserPlus className="w-3 h-3 mr-1" />}
+                  Add All ({extractedWorkers.length})
+                </Button>
+                <button onClick={() => setExtractedWorkers([])} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {extractedWorkers.map((w, idx) => (
+                <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
+                  <div className="w-8 h-8 rounded-full gradient-blue flex items-center justify-center text-white text-xs font-bold shrink-0">
+                    {w.name?.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{w.name}</p>
+                    <div className="flex flex-wrap gap-2 mt-0.5">
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">{w.role}</span>
+                      {w.trade && <span className="text-xs text-muted-foreground">{w.trade}</span>}
+                      {w.email && <span className="text-xs text-muted-foreground">{w.email}</span>}
+                      {w.phone && <span className="text-xs text-muted-foreground">{w.phone}</span>}
+                      <span className={`text-xs px-1.5 py-0.5 rounded border ${w.status === "active" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-orange-500/10 text-orange-400 border-orange-500/20"}`}>{w.status}</span>
+                    </div>
+                  </div>
+                  <Button size="sm" onClick={() => addExtractedWorker(w, idx)} disabled={addingExtracted === String(idx) || addingExtracted === "all"}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white border-0 h-7 px-3 text-xs shrink-0">
+                    {addingExtracted === String(idx) ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserPlus className="w-3 h-3 mr-1" />}
+                    Add
+                  </Button>
+                </div>
+              ))}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -659,7 +756,7 @@ export default function WorkforcePage() {
             <Users className="w-5 h-5 text-blue-400" />
             <h3 className="font-semibold text-foreground">AI Analysis</h3>
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{analysis}</p>
+          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
         </motion.div>
       )}
 
