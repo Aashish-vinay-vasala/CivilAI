@@ -95,7 +95,7 @@ ${text}`,
   return (
     <div className="space-y-6 max-w-3xl">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-3xl font-bold text-foreground">AI Meeting Transcription</h1>
+        <h1 className="text-4xl font-bold text-foreground">AI Meeting Transcription</h1>
         <p className="text-muted-foreground text-sm mt-1">Upload audio or record live → get structured meeting minutes</p>
       </motion.div>
 

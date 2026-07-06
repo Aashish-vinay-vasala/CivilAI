@@ -12,6 +12,7 @@ import {
   DollarSign,
   Shield,
   ChevronDown,
+  AlertTriangle,
 } from "lucide-react";
 import {
   AreaChart,
@@ -51,6 +52,7 @@ const reportTypes = [
   { id: "stakeholder", title: "Stakeholder Report",      desc: "Client-friendly plain English",  icon: Users,      color: "border-cyan-500/20 bg-cyan-500/5", iconColor: "text-cyan-400" },
   { id: "kpi",         title: "KPI Report",              desc: "Performance metrics & targets",  icon: DollarSign, color: "border-emerald-500/20 bg-emerald-500/5",iconColor: "text-emerald-400" },
   { id: "safety",      title: "Safety Report",           desc: "Incidents & compliance",         icon: Shield,     color: "border-red-500/20 bg-red-500/5",       iconColor: "text-red-400" },
+  { id: "risk",        title: "Risk Report",             desc: "Risk register & mitigation status", icon: AlertTriangle, color: "border-amber-500/20 bg-amber-500/5", iconColor: "text-amber-400" },
 ];
 
 export default function ReportsPage() {
@@ -184,6 +186,24 @@ export default function ReportsPage() {
           }
         );
         setReport(response.data.report);
+      } else if (type === "risk") {
+        const endSoon = p.end_date ? new Date(p.end_date).getTime() - Date.now() < 90 * 86400000 : false;
+        response = await axios.post(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/v1/reports/risk`,
+          {
+            project_name: p.name,
+            risks: [
+              ...(overrunPct > 0 ? [`Budget overrun of ${overrunPct}%`] : []),
+              ...(progress < 50 && endSoon ? [`Schedule risk — only ${progress}% complete with end date approaching`] : []),
+            ],
+            mitigation_status: {
+              Budget:   overrunPct > 0 ? "Under review" : "On track",
+              Schedule: progress >= 50 ? "On track" : "Monitoring",
+            },
+            new_risks: [],
+          }
+        );
+        setReport(response.data.report);
       }
       toast.success("Report generated!");
     } catch {
@@ -230,7 +250,7 @@ export default function ReportsPage() {
         className="flex items-center justify-between"
       >
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Reports</h1>
+          <h1 className="text-4xl font-bold text-foreground">Reports</h1>
           <p className="text-muted-foreground text-sm mt-1">
             AI-powered report generation & analytics
           </p>

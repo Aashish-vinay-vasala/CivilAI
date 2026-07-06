@@ -98,7 +98,7 @@ const selectCls = inputCls + " cursor-pointer";
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function SafetyPage() {
-  const { triggerRefresh } = useDataRefreshStore();
+  const { triggerRefresh, counters } = useDataRefreshStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const API = process.env.NEXT_PUBLIC_API_URL;
 
@@ -130,6 +130,12 @@ export default function SafetyPage() {
   const [analysis, setAnalysis]         = useState("");
   const [mlFormOpen, setMlFormOpen]     = useState(false);
   const [mlInput, setMlInput]           = useState(DEFAULT_ML_INPUT);
+  const [zoneRiskOpen, setZoneRiskOpen]     = useState(false);
+  const [zoneRiskLoading, setZoneRiskLoading] = useState(false);
+  const [zoneRiskResult, setZoneRiskResult] = useState<any>(null);
+  const [zoneRiskForm, setZoneRiskForm] = useState({
+    name: "", tasks: "", workers: 5, equipment: "", weather: "Clear",
+  });
 
   // forms
   const [newForm, setNewForm]   = useState({ ...BLANK_INCIDENT });
@@ -137,7 +143,11 @@ export default function SafetyPage() {
 
   // ── Fetch ────────────────────────────────────────────────────────────────────
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { fetchAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refresh when equipment/compliance change elsewhere — the inter-module
+  // alerts below (equipment at risk, permit violations) depend on them.
+  useEffect(() => { fetchAll(); }, [counters.equipment, counters.compliance]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchAll = async (input = mlInput) => {
     setStatsLoading(true);
@@ -236,6 +246,26 @@ export default function SafetyPage() {
       toast.error("Failed to generate report");
     } finally {
       setReportingId(null);
+    }
+  };
+
+  const runZoneRiskAssessment = async () => {
+    if (!zoneRiskForm.name.trim()) { toast.error("Zone name is required"); return; }
+    setZoneRiskLoading(true);
+    setZoneRiskResult(null);
+    try {
+      const res = await axios.post(`${API}/api/v1/safety/zone-risk`, {
+        name: zoneRiskForm.name,
+        tasks: zoneRiskForm.tasks.split(",").map(t => t.trim()).filter(Boolean),
+        workers: Number(zoneRiskForm.workers) || 0,
+        equipment: zoneRiskForm.equipment.split(",").map(t => t.trim()).filter(Boolean),
+        weather: zoneRiskForm.weather,
+      });
+      setZoneRiskResult(res.data.assessment?.assessment ?? res.data.assessment);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? "Failed to assess zone risk");
+    } finally {
+      setZoneRiskLoading(false);
     }
   };
 
@@ -390,7 +420,7 @@ export default function SafetyPage() {
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Safety & Risk</h1>
+          <h1 className="text-4xl font-bold text-foreground">Safety & Risk</h1>
           <p className="text-muted-foreground text-sm mt-1">
             AI-powered safety monitoring & incident management
           </p>
@@ -924,6 +954,98 @@ export default function SafetyPage() {
             ))}
           </div>
         )}
+      </motion.div>
+
+      {/* AI Zone Risk Assessment */}
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.55 }}
+        className="bg-card border border-border rounded-2xl p-6">
+        <button onClick={() => setZoneRiskOpen(v => !v)} className="w-full flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Brain className="w-4 h-4 text-blue-400" />
+            <h3 className="font-semibold text-foreground">AI Zone Risk Assessment</h3>
+          </div>
+          <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${zoneRiskOpen ? "rotate-180" : ""}`} />
+        </button>
+        <AnimatePresence>
+          {zoneRiskOpen && (
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
+              className="overflow-hidden">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4 mb-4">
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Zone Name *</label>
+                  <input type="text" placeholder="e.g. Zone A — 3rd Floor" value={zoneRiskForm.name}
+                    onChange={e => setZoneRiskForm(p => ({ ...p, name: e.target.value }))}
+                    className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Workers Present</label>
+                  <input type="number" min={0} value={zoneRiskForm.workers}
+                    onChange={e => setZoneRiskForm(p => ({ ...p, workers: Number(e.target.value) }))}
+                    className={inputCls} />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Weather</label>
+                  <select value={zoneRiskForm.weather}
+                    onChange={e => setZoneRiskForm(p => ({ ...p, weather: e.target.value }))}
+                    className={selectCls}>
+                    {["Clear","Rain","Wind","Heat","Snow","Storm"].map(w => <option key={w} value={w}>{w}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Equipment (comma-separated)</label>
+                  <input type="text" placeholder="Crane, Scaffolding" value={zoneRiskForm.equipment}
+                    onChange={e => setZoneRiskForm(p => ({ ...p, equipment: e.target.value }))}
+                    className={inputCls} />
+                </div>
+                <div className="col-span-2 lg:col-span-4">
+                  <label className="text-xs text-muted-foreground mb-1 block">Tasks (comma-separated)</label>
+                  <input type="text" placeholder="Welding, Working at height, Excavation" value={zoneRiskForm.tasks}
+                    onChange={e => setZoneRiskForm(p => ({ ...p, tasks: e.target.value }))}
+                    className={inputCls} />
+                </div>
+              </div>
+              <Button onClick={runZoneRiskAssessment} disabled={zoneRiskLoading} className="gradient-blue text-white border-0">
+                {zoneRiskLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Brain className="w-4 h-4 mr-2" />}
+                Assess Risk
+              </Button>
+
+              {zoneRiskResult && (
+                <div className={`mt-4 rounded-xl border p-4 ${
+                  zoneRiskResult.risk_level === "High"   ? "border-red-500/30 bg-red-500/5" :
+                  zoneRiskResult.risk_level === "Medium" ? "border-orange-500/30 bg-orange-500/5" :
+                                                            "border-emerald-500/30 bg-emerald-500/5"
+                }`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="font-medium text-foreground">{zoneRiskResult.zone || zoneRiskForm.name}</p>
+                    <span className={`text-xs px-3 py-1 rounded-full font-medium ${
+                      zoneRiskResult.risk_level === "High"   ? "bg-red-500/10 text-red-400" :
+                      zoneRiskResult.risk_level === "Medium" ? "bg-orange-500/10 text-orange-400" :
+                                                                "bg-emerald-500/10 text-emerald-400"
+                    }`}>
+                      {zoneRiskResult.risk_level} Risk · {zoneRiskResult.risk_score}/10
+                    </span>
+                  </div>
+                  {zoneRiskResult.hazards?.length > 0 && (
+                    <div className="mb-3">
+                      <p className="text-xs font-medium text-muted-foreground mb-1">Hazards</p>
+                      <ul className="text-sm text-muted-foreground list-disc list-inside space-y-0.5">
+                        {zoneRiskResult.hazards.map((h: string, i: number) => <li key={i}>{h}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {zoneRiskResult.recommendations?.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground mb-1">Recommendations</p>
+                      <ul className="text-sm text-muted-foreground list-disc list-inside space-y-0.5">
+                        {zoneRiskResult.recommendations.map((r: string, i: number) => <li key={i}>{r}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.div>
 
       {/* Inter-module alerts */}

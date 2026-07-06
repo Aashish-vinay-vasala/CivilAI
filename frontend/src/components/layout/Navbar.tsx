@@ -1,11 +1,11 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { Search, Moon, Sun, Menu, HelpCircle, Keyboard, Cpu } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Search, Moon, Sun, Menu, HelpCircle, Keyboard, Cpu, LogOut } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
-import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import NotificationCenter from "@/components/notifications/NotificationCenter";
 
@@ -55,20 +55,39 @@ interface NavbarProps {
   onMenuClick: () => void;
   onToggleHelp: () => void;
   onToggleShortcuts: () => void;
+  onOpenSearch: () => void;
 }
 
-export default function Navbar({ onMenuClick, onToggleHelp, onToggleShortcuts }: NavbarProps) {
+export default function Navbar({ onMenuClick, onToggleHelp, onToggleShortcuts, onOpenSearch }: NavbarProps) {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const pathname = usePathname();
-  const { user } = useAuth();
+  const router = useRouter();
+  const { user, profile, signOut } = useAuth();
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setMounted(true); }, []);
+
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
 
   const pageTitle = PAGE_TITLES[pathname] ?? pathname.slice(1).replace(/-/g, " ");
   const displayName = user?.user_metadata?.full_name ?? user?.email ?? "Admin";
   const initials = displayName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+  const roleLabel = profile?.role ? profile.role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "";
+
+  const handleSignOut = async () => {
+    setMenuOpen(false);
+    await signOut();
+    router.replace("/");
+  };
 
   return (
     <motion.header
@@ -97,14 +116,11 @@ export default function Navbar({ onMenuClick, onToggleHelp, onToggleShortcuts }:
         initial={{ opacity: 0, y: 4 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2 }}
-        className="hidden md:flex flex-col justify-center shrink-0"
+        className="hidden md:flex items-center shrink-0"
       >
-        <h1 className="text-[14px] font-semibold text-white leading-none capitalize tracking-tight">
+        <h1 className="text-[16px] font-semibold text-white leading-none capitalize tracking-tight">
           {pageTitle}
         </h1>
-        <p className="text-[10px] text-white/22 mt-0.5 font-mono tracking-wider">
-          civilai.platform
-        </p>
       </motion.div>
 
       {/* ── AI Status Pill — center ─────────────────────────────────────── */}
@@ -136,27 +152,21 @@ export default function Navbar({ onMenuClick, onToggleHelp, onToggleShortcuts }:
           <span className="font-display text-[10px] text-emerald-400 tracking-[0.15em]">
             AI Systems Online
           </span>
-
-          <span className="w-px h-3 bg-white/10" />
-
-          <span className="text-[10px] text-white/28 font-mono">
-            7 models active
-          </span>
         </motion.div>
       </div>
 
       {/* ── Right actions ─────────────────────────────────────────────────── */}
       <div className="flex items-center gap-1 ml-auto md:ml-0">
 
-        {/* Search */}
+        {/* Search — opens the Command Palette (Ctrl/Cmd+K) */}
         <div className="relative hidden sm:block" id="search-bar">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/25 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Search… (Ctrl+K)"
+          <button
+            type="button"
+            onClick={onOpenSearch}
             onFocus={() => setSearchFocused(true)}
             onBlur={() => setSearchFocused(false)}
-            className="h-8 pl-8 pr-3 text-[12px] text-white placeholder:text-white/22 rounded-lg outline-none transition-all"
+            className="h-8 pl-8 pr-3 text-[12px] text-left text-white/40 rounded-lg outline-none transition-all"
             style={{
               width: searchFocused ? "200px" : "156px",
               background: searchFocused ? "rgba(0,212,255,0.06)" : "rgba(255,255,255,0.04)",
@@ -164,7 +174,9 @@ export default function Navbar({ onMenuClick, onToggleHelp, onToggleShortcuts }:
               boxShadow: searchFocused ? "0 0 0 2px rgba(0,212,255,0.08)" : "none",
               transition: "all 0.22s ease",
             }}
-          />
+          >
+            Search… (Ctrl+K)
+          </button>
         </div>
 
         {/* Keyboard shortcuts */}
@@ -204,16 +216,45 @@ export default function Navbar({ onMenuClick, onToggleHelp, onToggleShortcuts }:
           </Button>
         )}
 
-        {/* User avatar */}
-        <div
-          className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[11px] font-bold cursor-pointer ml-1 shrink-0 transition-all hover:scale-105"
-          style={{
-            background: "linear-gradient(135deg, #00D4FF 0%, #1D4ED8 100%)",
-            boxShadow: "0 0 14px rgba(0,212,255,0.3)",
-          }}
-          title={displayName}
-        >
-          {initials}
+        {/* User avatar + menu */}
+        <div className="relative ml-1 shrink-0" ref={menuRef}>
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[11px] font-bold cursor-pointer transition-all hover:scale-105"
+            style={{
+              background: "linear-gradient(135deg, #00D4FF 0%, #1D4ED8 100%)",
+              boxShadow: "0 0 14px rgba(0,212,255,0.3)",
+            }}
+            title={displayName}
+          >
+            {initials}
+          </button>
+          <AnimatePresence>
+            {menuOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+                className="absolute right-0 top-full mt-2 z-50 rounded-xl overflow-hidden shadow-2xl"
+                style={{ background: "rgba(4,11,25,0.98)", border: "1px solid rgba(0,212,255,0.15)", minWidth: "200px" }}
+              >
+                <div className="px-4 py-3 border-b border-white/[0.06]">
+                  <p className="text-sm text-white font-medium truncate">{displayName}</p>
+                  <p className="text-xs text-white/40 truncate">{user?.email}</p>
+                  {roleLabel && (
+                    <span className="inline-block mt-1.5 text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                      {roleLabel}
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={handleSignOut}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Sign Out
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
     </motion.header>

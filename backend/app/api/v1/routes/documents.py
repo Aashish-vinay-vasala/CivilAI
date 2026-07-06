@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi.responses import Response
 from pydantic import BaseModel
 from app.ocr.document_processor import process_document
 from app.core.guardrails import guard_text
@@ -9,6 +10,9 @@ from app.services.storage_service import (
     save_document_to_db,
     get_documents_from_db,
     list_documents,
+    get_document,
+    delete_document,
+    get_content_type,
 )
 from app.ai.groq_client import client as groq_client
 from app.ai.accounting_extractor import extract_accounting_data
@@ -131,6 +135,28 @@ def list_storage(bucket: str = "documents"):
         return {"status": "success", "files": files}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/storage/{bucket}/{filename}/download")
+def download_storage_file(bucket: str, filename: str):
+    """Backend-proxied download — streams the raw file bytes through the API."""
+    file_bytes = get_document(filename, bucket)
+    if file_bytes is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return Response(
+        content=file_bytes,
+        media_type=get_content_type(ext),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.delete("/storage/{bucket}/{filename}")
+def delete_storage_file(bucket: str, filename: str):
+    ok = delete_document(filename, bucket)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to delete file")
+    return {"status": "success", "deleted": filename}
 
 
 class AskPayload(BaseModel):

@@ -13,7 +13,6 @@ import { useTheme } from "next-themes";
 import { useSupabaseSync } from "@/hooks/useSupabaseSync";
 import CommandPalette, { useCommandPalette } from "@/components/command/CommandPalette";
 import ErrorBoundary from "@/components/layout/ErrorBoundary";
-import FloatingChatWidget from "@/components/shared/FloatingChatWidget";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -28,10 +27,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     onToggleSidebar: () => setSidebarCollapsed((v) => !v),
     onToggleTheme: () => setTheme(theme === "dark" ? "light" : "dark"),
     onOpenHelp: () => setHelpOpen((v) => !v),
-    onSearch: () => {
-      const input = document.querySelector<HTMLInputElement>("#search-bar input");
-      input?.focus();
-    },
+    onSearch: () => setCmdOpen(true),
   });
 
   const { active: tourActive, complete: completeTour } = useOnboardingTour();
@@ -40,13 +36,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const displayName = user?.user_metadata?.full_name ?? user?.email ?? "Admin";
   useSupabaseSync(user?.id ?? null, displayName);
 
-  const getStoredUser = () => {
-    try { return localStorage.getItem("civilai_dummy_user"); } catch { return null; }
-  };
-
   useEffect(() => {
     if (loading) return;
-    if (!user && !getStoredUser()) {
+    if (!user) {
       router.replace("/");
     }
   }, [user, loading, router]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -64,9 +56,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (loading) return spinner;
 
-  // React state not committed yet but localStorage confirms user is logged in
-  if (!user && getStoredUser()) return spinner;
-
   if (!user) return null;
 
   return (
@@ -83,6 +72,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           onMenuClick={() => setMobileSidebarOpen(true)}
           onToggleHelp={() => setHelpOpen((v) => !v)}
           onToggleShortcuts={() => setShortcutsOpen((v) => !v)}
+          onOpenSearch={() => setCmdOpen(true)}
         />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           <ErrorBoundary>{children}</ErrorBoundary>
@@ -99,8 +89,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <OnboardingTour active={tourActive} onComplete={completeTour} />
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
-
-      <FloatingChatWidget />
     </div>
   );
 }

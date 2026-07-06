@@ -11,6 +11,7 @@ from app.ai.safety_analyzer import (
 )
 from app.ocr.document_processor import process_document
 from app.services.ml_service import get_safety_stats
+from app.services.db_service import create_safety_incident
 from supabase import create_client
 from app.config import settings
 import uuid
@@ -98,8 +99,8 @@ def create_incident(body: IncidentCreate):
         }
         if body.project_id:
             data["project_id"] = body.project_id
-        res = supabase.table("safety_incidents").insert(data).execute()
-        return {"status": "success", "incident": res.data[0] if res.data else data}
+        inserted = create_safety_incident(data)
+        return {"status": "success", "incident": inserted[0] if inserted else data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

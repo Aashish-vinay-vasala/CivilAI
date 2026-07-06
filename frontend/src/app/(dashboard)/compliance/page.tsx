@@ -17,6 +17,8 @@ import {
   Pencil,
   X,
   Save,
+  Building2,
+  Globe,
 } from "lucide-react";
 import {
   RadarChart,
@@ -37,6 +39,7 @@ import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
 import { MarkdownText } from "@/lib/renderMarkdown";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 const DOCS_TABS = [
   { href: "/documents",  label: "Documents" },
@@ -98,6 +101,7 @@ const EMPTY_STATS: Stats = {
 };
 
 export default function CompliancePage() {
+  const { triggerRefresh } = useDataRefreshStore();
   const [stats, setStats] = useState<Stats>(EMPTY_STATS);
   const [permits, setPermits] = useState<Permit[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
@@ -117,6 +121,22 @@ export default function CompliancePage() {
   });
   const [permitResult, setPermitResult] = useState("");
   const [permitLoading, setPermitLoading] = useState(false);
+
+  // AI building code compliance checker
+  const [codeCheckOpen, setCodeCheckOpen] = useState(false);
+  const [codeCheckForm, setCodeCheckForm] = useState({
+    project_name: "", project_type: "", location: "",
+    building_height: 0, occupancy_type: "", construction_type: "",
+    special_features: "",
+  });
+  const [codeCheckResult, setCodeCheckResult] = useState("");
+  const [codeCheckLoading, setCodeCheckLoading] = useState(false);
+
+  // AI regulatory change tracker
+  const [regCheckOpen, setRegCheckOpen] = useState(false);
+  const [regCheckForm, setRegCheckForm] = useState({ region: "", project_type: "" });
+  const [regCheckResult, setRegCheckResult] = useState("");
+  const [regCheckLoading, setRegCheckLoading] = useState(false);
 
   // Add permit form
   const [addOpen, setAddOpen] = useState(false);
@@ -205,6 +225,7 @@ export default function CompliancePage() {
       toast.success(`"${permit.name}" added to register`);
       setExtractedPermits(prev => prev.filter((_, i) => i !== idx));
       fetchAll();
+      triggerRefresh("compliance");
     } catch {
       toast.error("Failed to add permit");
     } finally {
@@ -228,6 +249,45 @@ export default function CompliancePage() {
     }
   };
 
+  const runCodeCheck = async () => {
+    setCodeCheckLoading(true);
+    try {
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/compliance/code-check`,
+        {
+          ...codeCheckForm,
+          special_features: codeCheckForm.special_features.split(",").map(s => s.trim()).filter(Boolean),
+        }
+      );
+      setCodeCheckResult(response.data.compliance_report);
+      toast.success("Code compliance report ready");
+    } catch {
+      toast.error("Failed to check code compliance");
+    } finally {
+      setCodeCheckLoading(false);
+    }
+  };
+
+  const runRegulatoryCheck = async () => {
+    if (!regCheckForm.region || !regCheckForm.project_type) {
+      toast.error("Region and project type are required");
+      return;
+    }
+    setRegCheckLoading(true);
+    try {
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/compliance/regulatory-check`,
+        regCheckForm
+      );
+      setRegCheckResult(response.data.regulatory_info);
+      toast.success("Regulatory report ready");
+    } catch {
+      toast.error("Failed to fetch regulatory info");
+    } finally {
+      setRegCheckLoading(false);
+    }
+  };
+
   const savePermit = async () => {
     if (!addForm.name || !addForm.type) {
       toast.error("Name and type are required");
@@ -243,6 +303,7 @@ export default function CompliancePage() {
       setAddOpen(false);
       setAddForm({ name: "", type: "Building Permit", status: "Pending", expiry_date: "", risk_level: "medium", issued_by: "" });
       fetchAll();
+      triggerRefresh("compliance");
     } catch {
       toast.error("Failed to save permit");
     } finally {
@@ -259,6 +320,7 @@ export default function CompliancePage() {
       );
       toast.success("Status updated");
       fetchAll();
+      triggerRefresh("compliance");
     } catch {
       toast.error("Failed to update status");
     }
@@ -270,6 +332,7 @@ export default function CompliancePage() {
       await axios.delete(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/compliance/permits/${id}`);
       toast.success("Permit deleted");
       fetchAll();
+      triggerRefresh("compliance");
     } catch {
       toast.error("Failed to delete");
     } finally {
@@ -303,7 +366,7 @@ export default function CompliancePage() {
         className="flex items-center justify-between flex-wrap gap-3"
       >
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Compliance</h1>
+          <h1 className="text-4xl font-bold text-foreground">Compliance</h1>
           <p className="text-muted-foreground text-sm mt-1">
             AI-powered compliance & permit management
             {stats.total_permits > 0 && (
@@ -325,6 +388,14 @@ export default function CompliancePage() {
           <Button variant="outline" onClick={() => setPermitOpen(!permitOpen)}>
             <FileText className="w-4 h-4 mr-2 text-blue-400" />
             Generate Application
+          </Button>
+          <Button variant="outline" onClick={() => setCodeCheckOpen(!codeCheckOpen)}>
+            <Building2 className="w-4 h-4 mr-2 text-cyan-400" />
+            Code Check
+          </Button>
+          <Button variant="outline" onClick={() => setRegCheckOpen(!regCheckOpen)}>
+            <Globe className="w-4 h-4 mr-2 text-amber-400" />
+            Regulatory Check
           </Button>
           <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.xlsx,.docx" onChange={handleFileUpload} />
           <Button className="gradient-blue text-white border-0" disabled={loading} onClick={() => fileInputRef.current?.click()}>
@@ -458,6 +529,77 @@ export default function CompliancePage() {
           {permitResult && (
             <div className="mt-4 p-4 bg-secondary rounded-xl">
               <MarkdownText text={permitResult} className="text-sm text-foreground leading-relaxed" />
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* AI Building Code Compliance Checker */}
+      {codeCheckOpen && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-cyan-500/30 rounded-2xl p-6"
+        >
+          <h3 className="font-semibold text-foreground mb-4">AI Building Code Compliance Check</h3>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <input placeholder="Project name" value={codeCheckForm.project_name}
+              onChange={(e) => setCodeCheckForm({ ...codeCheckForm, project_name: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+            <input placeholder="Project type (e.g. Commercial)" value={codeCheckForm.project_type}
+              onChange={(e) => setCodeCheckForm({ ...codeCheckForm, project_type: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+            <input placeholder="Location" value={codeCheckForm.location}
+              onChange={(e) => setCodeCheckForm({ ...codeCheckForm, location: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+            <input type="number" placeholder="Building height (m)" value={codeCheckForm.building_height || ""}
+              onChange={(e) => setCodeCheckForm({ ...codeCheckForm, building_height: parseFloat(e.target.value) || 0 })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+            <input placeholder="Occupancy type (e.g. Office)" value={codeCheckForm.occupancy_type}
+              onChange={(e) => setCodeCheckForm({ ...codeCheckForm, occupancy_type: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+            <input placeholder="Construction type (e.g. Steel frame)" value={codeCheckForm.construction_type}
+              onChange={(e) => setCodeCheckForm({ ...codeCheckForm, construction_type: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+            <input placeholder="Special features (comma-separated)" value={codeCheckForm.special_features}
+              onChange={(e) => setCodeCheckForm({ ...codeCheckForm, special_features: e.target.value })}
+              className="col-span-2 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+          </div>
+          <Button onClick={runCodeCheck} disabled={codeCheckLoading} className="bg-cyan-500 hover:bg-cyan-600 text-white border-0">
+            {codeCheckLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Building2 className="w-4 h-4 mr-2" />}
+            Check Compliance
+          </Button>
+          {codeCheckResult && (
+            <div className="mt-4 p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
+              <MarkdownText text={codeCheckResult} className="text-sm text-foreground leading-relaxed" />
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* AI Regulatory Change Tracker */}
+      {regCheckOpen && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-amber-500/30 rounded-2xl p-6"
+        >
+          <h3 className="font-semibold text-foreground mb-4">AI Regulatory Requirements Tracker</h3>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <input placeholder="Region (e.g. California, USA)" value={regCheckForm.region}
+              onChange={(e) => setRegCheckForm({ ...regCheckForm, region: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500" />
+            <input placeholder="Project type (e.g. Residential)" value={regCheckForm.project_type}
+              onChange={(e) => setRegCheckForm({ ...regCheckForm, project_type: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500" />
+          </div>
+          <Button onClick={runRegulatoryCheck} disabled={regCheckLoading} className="bg-amber-500 hover:bg-amber-600 text-white border-0">
+            {regCheckLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Globe className="w-4 h-4 mr-2" />}
+            Get Regulatory Info
+          </Button>
+          {regCheckResult && (
+            <div className="mt-4 p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl">
+              <MarkdownText text={regCheckResult} className="text-sm text-foreground leading-relaxed" />
             </div>
           )}
         </motion.div>

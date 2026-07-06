@@ -1,5 +1,5 @@
 import logging
-from app.ai.groq_client import chat as groq_chat, _FAST_MODEL
+from app.ai.groq_client import chat as groq_chat, chat_stream as groq_chat_stream, _FAST_MODEL
 
 logger = logging.getLogger("civilai.copilot")
 
@@ -59,17 +59,32 @@ Content guidelines:
 """
 
 
-def get_copilot_response(
+def _build_messages(
     user_message: str,
     chat_history: list | None = None,
     extra_context: str = "",
-) -> str:
+    web_context: str = "",
+) -> list[dict]:
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     if extra_context:
         messages.append({
             "role": "system",
             "content": f"Live project data retrieved from the database for this query:\n{extra_context}",
+        })
+
+    if web_context:
+        messages.append({
+            "role": "system",
+            "content": (
+                "Live public web search results for this query (from the internet, may be more "
+                "current than your training data). These are general web pages, NOT this project's "
+                "private data — only use a result if it is genuinely relevant and helpful to the "
+                "user's question. Silently ignore any result that is off-topic, irrelevant, or a "
+                "generic listing/directory page rather than an authoritative source; do not mention "
+                "or cite irrelevant results just because they were retrieved. When you do use a "
+                "result, cite it inline as a markdown link, e.g. [Title](URL):\n" + web_context
+            ),
         })
 
     for item in (chat_history or []):
@@ -79,11 +94,35 @@ def get_copilot_response(
             messages.append({"role": role, "content": content})
 
     messages.append({"role": "user", "content": user_message})
+    return messages
 
+
+def get_copilot_response(
+    user_message: str,
+    chat_history: list | None = None,
+    extra_context: str = "",
+    web_context: str = "",
+) -> str:
+    messages = _build_messages(user_message, chat_history, extra_context, web_context)
     try:
         return groq_chat(messages, model=_FAST_MODEL)
     except Exception as exc:
         logger.error("Copilot LLM call failed: %s", exc)
+        raise RuntimeError(f"CivilAI Copilot is temporarily unavailable: {exc}") from exc
+
+
+def get_copilot_response_stream(
+    user_message: str,
+    chat_history: list | None = None,
+    extra_context: str = "",
+    web_context: str = "",
+):
+    """Same as get_copilot_response but yields text deltas as they arrive from Groq."""
+    messages = _build_messages(user_message, chat_history, extra_context, web_context)
+    try:
+        yield from groq_chat_stream(messages, model=_FAST_MODEL)
+    except Exception as exc:
+        logger.error("Copilot streaming LLM call failed: %s", exc)
         raise RuntimeError(f"CivilAI Copilot is temporarily unavailable: {exc}") from exc
 
 

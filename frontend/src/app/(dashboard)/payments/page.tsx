@@ -37,6 +37,7 @@ import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import { MarkdownText } from "@/lib/renderMarkdown";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 import {
   INVOICE_STATUSES,
   type InvoiceStatus,
@@ -73,6 +74,7 @@ function fmtMoney(v: number) {
 
 
 export default function PaymentsPage({ projectId: filterProjectId }: { projectId?: string } = {}) {
+  const { triggerRefresh } = useDataRefreshStore();
   const [dataLoading, setDataLoading] = useState(true);
   const [kpis, setKpis] = useState<PaymentKpis | null>(null);
   const [monthlyData, setMonthlyData] = useState<any[]>([]);
@@ -108,6 +110,12 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
   const [extractLoading, setExtractLoading]       = useState(false);
   const [addingExtracted, setAddingExtracted]     = useState<string | null>(null);
   const extractFileRef = useRef<HTMLInputElement>(null);
+
+  const [cashflowForm, setCashflowForm] = useState({
+    current_balance: 0,
+    expected_payments: [{ description: "", amount: 0 }],
+    planned_expenses: [{ description: "", amount: 0 }],
+  });
 
   useEffect(() => { fetchPayments(); }, [filterProjectId]);
 
@@ -145,6 +153,7 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
       setShowAddModal(false);
       setAddForm({ invoice_number: "", contractor: "", amount: "", due_date: "", status: "pending", description: "" });
       fetchPayments();
+      triggerRefresh("payments");
     } catch {
       toast.error("Failed to add invoice");
     } finally {
@@ -160,6 +169,7 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
       toast.success(`Invoice marked as ${status}`);
       // Refresh KPIs after status change
       fetchPayments();
+      triggerRefresh("payments");
     } catch {
       toast.error("Failed to update invoice");
     } finally {
@@ -174,6 +184,7 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
       setInvoices((prev) => prev.filter((inv) => inv.id !== id));
       toast.success("Invoice deleted");
       fetchPayments();
+      triggerRefresh("payments");
     } catch {
       toast.error("Failed to delete invoice");
     } finally {
@@ -238,6 +249,43 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
     }
   };
 
+  const handleForecast = async () => {
+    setAiLoading(true);
+    setResult("");
+    try {
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/payments/forecast`,
+        {
+          project_name: reminderForm.project_name || "All Projects",
+          current_balance: cashflowForm.current_balance,
+          expected_payments: cashflowForm.expected_payments.filter(p => p.description.trim()),
+          planned_expenses: cashflowForm.planned_expenses.filter(p => p.description.trim()),
+        }
+      );
+      setResult(response.data.forecast);
+      toast.success("Cash flow forecast generated!");
+    } catch {
+      toast.error("Failed to generate forecast");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const addForecastRow = (field: "expected_payments" | "planned_expenses") => {
+    setCashflowForm(p => ({ ...p, [field]: [...p[field], { description: "", amount: 0 }] }));
+  };
+
+  const updateForecastRow = (field: "expected_payments" | "planned_expenses", idx: number, key: "description" | "amount", value: string) => {
+    setCashflowForm(p => ({
+      ...p,
+      [field]: p[field].map((row, i) => i === idx ? { ...row, [key]: key === "amount" ? parseFloat(value) || 0 : value } : row),
+    }));
+  };
+
+  const removeForecastRow = (field: "expected_payments" | "planned_expenses", idx: number) => {
+    setCashflowForm(p => ({ ...p, [field]: p[field].filter((_, i) => i !== idx) }));
+  };
+
   const handleExtractUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -264,6 +312,7 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
       setExtractedInvoices(prev => prev.filter((_, i) => i !== idx));
       toast.success(`Invoice ${inv.invoice_number} added`);
       fetchPayments();
+      triggerRefresh("payments");
     } catch { toast.error(`Failed to add invoice`); }
     finally { setAddingExtracted(null); }
   };
@@ -283,6 +332,7 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
     setExtractedInvoices([]);
     toast.success(`Added ${added} invoice(s)`);
     fetchPayments();
+    if (added > 0) triggerRefresh("payments");
     setAddingExtracted(null);
   };
 
@@ -321,7 +371,7 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
         className="flex items-center justify-between"
       >
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Payment Tracker</h1>
+          <h1 className="text-4xl font-bold text-foreground">Payment Tracker</h1>
           <p className="text-muted-foreground text-sm mt-1">
             AI-powered payment monitoring &amp; cash flow management
             {filterProjectId && (
@@ -440,7 +490,7 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
 
       {/* Main Tabs */}
       <div className="flex gap-2">
-        {["overview", "reminder"].map((tab) => (
+        {["overview", "reminder", "forecast"].map((tab) => (
           <button
             key={tab}
             onClick={() => { setActiveTab(tab); setResult(""); }}
@@ -450,7 +500,7 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
                 : "bg-secondary text-muted-foreground hover:text-foreground"
             }`}
           >
-            {tab === "reminder" ? "Payment Reminder" : "Overview"}
+            {tab === "reminder" ? "Payment Reminder" : tab === "forecast" ? "Cash Flow Forecast" : "Overview"}
           </button>
         ))}
       </div>
@@ -857,6 +907,71 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
               ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               : <FileText className="w-4 h-4 mr-2" />}
             Generate Reminder
+          </Button>
+        </motion.div>
+      )}
+
+      {activeTab === "forecast" && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6 space-y-4"
+        >
+          <h3 className="font-semibold text-foreground">AI 90-Day Cash Flow Forecast</h3>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1.5 block">Current Balance ($)</label>
+            <input
+              type="number"
+              value={cashflowForm.current_balance || ""}
+              onChange={(e) => setCashflowForm({ ...cashflowForm, current_balance: parseFloat(e.target.value) || 0 })}
+              className={inputClass}
+            />
+          </div>
+
+          {(["expected_payments", "planned_expenses"] as const).map((field) => (
+            <div key={field}>
+              <label className="text-xs text-muted-foreground mb-1.5 block">
+                {field === "expected_payments" ? "Expected Payments (incoming)" : "Planned Expenses (outgoing)"}
+              </label>
+              <div className="space-y-2">
+                {cashflowForm[field].map((row, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input
+                      placeholder="Description"
+                      value={row.description}
+                      onChange={(e) => updateForecastRow(field, i, "description", e.target.value)}
+                      className={`${inputClass} flex-1`}
+                    />
+                    <input
+                      type="number"
+                      placeholder="Amount"
+                      value={row.amount || ""}
+                      onChange={(e) => updateForecastRow(field, i, "amount", e.target.value)}
+                      className={`${inputClass} w-32`}
+                    />
+                    {cashflowForm[field].length > 1 && (
+                      <button onClick={() => removeForecastRow(field, i)} className="text-muted-foreground hover:text-red-400 p-1 shrink-0">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => addForecastRow(field)} className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 mt-2">
+                <Plus className="w-3.5 h-3.5" /> Add row
+              </button>
+            </div>
+          ))}
+
+          <Button
+            onClick={handleForecast}
+            disabled={aiLoading}
+            className="gradient-blue text-white border-0"
+          >
+            {aiLoading
+              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              : <TrendingUp className="w-4 h-4 mr-2" />}
+            Generate Forecast
           </Button>
         </motion.div>
       )}

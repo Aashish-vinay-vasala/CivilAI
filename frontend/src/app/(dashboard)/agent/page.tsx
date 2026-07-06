@@ -839,7 +839,7 @@ export default function AgentPage() {
             <Wand2 className="w-5 h-5 text-cyan-400" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-white">AI Agent</h1>
+            <h1 className="text-4xl font-bold text-white">AI Agent</h1>
             <p className="text-xs text-muted-foreground">LangGraph ReAct · 18 live-data tools · SSE streaming</p>
           </div>
         </div>

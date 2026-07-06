@@ -1,5 +1,7 @@
 import { create } from "zustand";
-import { supabase } from "@/lib/supabase";
+import axios from "axios";
+
+const API = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export type NotificationType = "info" | "warning" | "success" | "error";
 
@@ -58,39 +60,39 @@ export const useNotificationStore = create<NotificationStore>()((set, get) => ({
   setUserId: (id) => set({ userId: id }),
   setNotifications: (ns) => set({ notifications: ns }),
 
+  // Kept the original method name (fetchFromSupabase) so callers don't need to
+  // change — it now goes through the backend rather than querying Supabase directly.
   fetchFromSupabase: async () => {
     const userId = get().userId;
     if (!userId) return;
-    const { data, error } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(50);
-    if (!error && data) {
-      set({ notifications: (data as DbRow[]).map(rowToNotification) });
-    }
+    try {
+      const res = await axios.get(`${API}/api/v1/notifications`, { params: { user_id: userId, limit: 50 } });
+      const rows: DbRow[] = res.data.notifications ?? [];
+      set({ notifications: rows.map(rowToNotification) });
+    } catch { /* silent — notification bell just stays empty */ }
   },
 
   addNotification: async (n) => {
     const userId = get().userId;
     if (!userId) return;
-    // Insert — real-time subscription will push it into local state automatically
-    await supabase.from("notifications").insert({
-      user_id: userId,
-      type: n.type,
-      title: n.title,
-      message: n.message,
-      module: n.module ?? null,
-      read: false,
-    });
+    // Insert — the Supabase Realtime subscription (useSupabaseSync) will push
+    // it into local state automatically.
+    try {
+      await axios.post(`${API}/api/v1/notifications`, {
+        user_id: userId,
+        type: n.type,
+        title: n.title,
+        message: n.message,
+        module: n.module ?? null,
+      });
+    } catch { /* silent */ }
   },
 
   markRead: async (id) => {
     set((s) => ({
       notifications: s.notifications.map((n) => n.id === id ? { ...n, read: true } : n),
     }));
-    await supabase.from("notifications").update({ read: true }).eq("id", id);
+    try { await axios.patch(`${API}/api/v1/notifications/${id}/read`); } catch { /* silent */ }
   },
 
   markAllRead: async () => {
@@ -99,19 +101,19 @@ export const useNotificationStore = create<NotificationStore>()((set, get) => ({
     set((s) => ({
       notifications: s.notifications.map((n) => ({ ...n, read: true })),
     }));
-    await supabase.from("notifications").update({ read: true }).eq("user_id", userId).eq("read", false);
+    try { await axios.patch(`${API}/api/v1/notifications/read-all`, null, { params: { user_id: userId } }); } catch { /* silent */ }
   },
 
   remove: async (id) => {
     set((s) => ({ notifications: s.notifications.filter((n) => n.id !== id) }));
-    await supabase.from("notifications").delete().eq("id", id);
+    try { await axios.delete(`${API}/api/v1/notifications/${id}`); } catch { /* silent */ }
   },
 
   clearAll: async () => {
     const userId = get().userId;
     if (!userId) return;
     set({ notifications: [] });
-    await supabase.from("notifications").delete().eq("user_id", userId);
+    try { await axios.delete(`${API}/api/v1/notifications`, { params: { user_id: userId } }); } catch { /* silent */ }
   },
 
   unreadCount: () => get().notifications.filter((n) => !n.read).length,

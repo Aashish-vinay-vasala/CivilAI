@@ -749,7 +749,7 @@ export default function PreConstructionPage() {
                 <active.icon className="w-5 h-5 text-blue-400" />
               </div>
               <div>
-                <h1 className="text-white text-xl font-bold">{active.label}</h1>
+                <h1 className="text-white text-4xl font-bold">{active.label}</h1>
                 <p className="text-white/30 text-sm">
                   {activeId === "documents"    && "Upload your tender package — AI reads and summarises everything"}
                   {activeId === "requirements" && "AI extracts every item that must be priced, organised by trade"}

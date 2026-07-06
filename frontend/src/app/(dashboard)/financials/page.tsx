@@ -8,12 +8,14 @@ import {
   Loader2, Clock, CheckCircle2, AlertCircle, FileSpreadsheet, History,
   ReceiptText, FolderOpen, Upload, X, AlertTriangle, CheckCheck, FileText,
   Building2, ChevronDown, Sparkles, Link2, Plus, Edit2, Trash2, PlusCircle,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 const PROJECT_TABS = [
   { href: "/cost",        label: "Cost & Budget" },
@@ -279,6 +281,148 @@ function applySnapshot(divs: BudgetDivision[], mode: SnapshotMode): BudgetDivisi
       return { ...i, committedCosts: i.committedCosts * 0.82, directCosts: i.directCosts * 0.79 };
     }),
   }));
+}
+
+// ─── Validate File Modal ──────────────────────────────────────────────────────
+// Quick, free (no AI cost) pre-flight check of a CSV/XLSX's column headers,
+// separate from the full Import wizard which always runs AI extraction.
+
+interface ValidateResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  row_count: number;
+  column_mapping: { file_header: string; canonical: string }[];
+  preview: Record<string, unknown>[];
+}
+
+function ValidateModal({ onClose }: { onClose: () => void }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [checking, setChecking] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const [result, setResult] = useState<ValidateResult | null>(null);
+
+  async function pickFile(f: File) {
+    setFileName(f.name);
+    setResult(null);
+    setChecking(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const res = await axios.post(`${API}/api/v1/financials/import/validate`, fd);
+      setResult(res.data);
+    } catch {
+      toast.error("Validation failed — check the file is a readable CSV or Excel file");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className="bg-card border border-border rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl"
+      >
+        <div className="flex items-center justify-between p-5 border-b border-border">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-cyan-500/10 flex items-center justify-center">
+              <ShieldCheck className="w-4 h-4 text-cyan-400" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">Validate File</h2>
+              <p className="text-xs text-muted-foreground">Check column headers before importing — no AI, no DB writes</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <input ref={fileInputRef} type="file" className="hidden" accept=".csv,.xlsx,.xls"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) pickFile(f); }} />
+          <button onClick={() => fileInputRef.current?.click()}
+            className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-2xl border-2 border-dashed border-border hover:border-cyan-500/50 hover:bg-cyan-500/5 transition-colors">
+            {checking ? <Loader2 className="w-6 h-6 animate-spin text-cyan-400" /> : <FileSpreadsheet className="w-6 h-6 text-muted-foreground" />}
+            <span className="text-sm text-foreground font-medium">{fileName || "Choose a CSV or Excel file"}</span>
+            <span className="text-xs text-muted-foreground">Only column headers are checked — nothing is saved</span>
+          </button>
+
+          {result && (
+            <div className="space-y-3">
+              <div className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium ${
+                result.valid ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"
+              }`}>
+                {result.valid ? <CheckCheck className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                {result.valid ? `Valid — ${result.row_count} row(s) recognized` : "File has errors"}
+              </div>
+
+              {result.errors.length > 0 && (
+                <ul className="space-y-1">
+                  {result.errors.map((e, i) => (
+                    <li key={i} className="text-xs text-red-400 flex items-start gap-1.5">
+                      <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />{e}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {result.warnings.length > 0 && (
+                <ul className="space-y-1">
+                  {result.warnings.map((w, i) => (
+                    <li key={i} className="text-xs text-amber-400 flex items-start gap-1.5">
+                      <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{w}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {result.column_mapping.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Recognized Columns</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {result.column_mapping.map((m, i) => (
+                      <span key={i} className="text-xs px-2 py-1 rounded-lg bg-secondary text-foreground">
+                        "{m.file_header}" → {m.canonical}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {result.preview.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Preview (first {result.preview.length} rows)</p>
+                  <div className="overflow-x-auto rounded-xl border border-border">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-secondary/60">
+                          {Object.keys(result.preview[0]).map((k) => (
+                            <th key={k} className="text-left px-2.5 py-1.5 text-muted-foreground font-medium whitespace-nowrap">{k}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.preview.map((row, i) => (
+                          <tr key={i} className="border-t border-border">
+                            {Object.values(row).map((v, j) => (
+                              <td key={j} className="px-2.5 py-1.5 text-foreground whitespace-nowrap">{String(v)}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <Button variant="outline" size="sm" onClick={onClose} className="w-full border-border">Close</Button>
+        </div>
+      </motion.div>
+    </div>
+  );
 }
 
 // ─── Import Modal ─────────────────────────────────────────────────────────────
@@ -1204,12 +1348,14 @@ function ItemFormModal({
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function FinancialsPage() {
+  const { counters, triggerRefresh } = useDataRefreshStore();
   const [activeTab,    setActiveTab]    = useState<"budget"|"history">("budget");
   const [loading,      setLoading]      = useState(true);
   const [projects,     setProjects]     = useState<ProjectInfo[]>([]);
   const [allDivisions, setAllDivisions] = useState<BudgetDivision[]>([]);
   const [history,      setHistory]      = useState<ChangeHistoryEntry[]>([]);
   const [showImport,   setShowImport]   = useState(false);
+  const [showValidate, setShowValidate] = useState(false);
   const [showSync,     setShowSync]     = useState(false);
   const [showBudgetSync, setShowBudgetSync] = useState(false);
   const [showItemForm, setShowItemForm] = useState(false);
@@ -1330,6 +1476,15 @@ export default function FinancialsPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Refresh when cost entries or invoices change elsewhere — the budget
+  // rollups above are derived from both.
+  useEffect(() => { fetchData(); }, [counters.cost, counters.payments]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleDataChanged = useCallback(() => {
+    fetchData();
+    triggerRefresh("financials");
+  }, [fetchData, triggerRefresh]);
+
   // ── Export: generate CSV client-side from current data ───────────────────────
 
   const handleExport = useCallback(() => {
@@ -1342,43 +1497,11 @@ export default function FinancialsPage() {
       return;
     }
 
-    const headers = [
-      "code", "description", "div_code", "div_name",
-      "original_budget", "budget_mods", "approved_cos", "revised_budget",
-      "pending_changes", "projected_budget", "committed_costs", "direct_costs",
-    ];
-    const rows: string[] = [headers.join(",")];
-
-    for (const div of divsToExport) {
-      for (const item of div.items) {
-        rows.push([
-          item.code,
-          `"${item.description.replace(/"/g, '""')}"`,
-          div.code,
-          `"${div.name.replace(/"/g, '""')}"`,
-          item.originalBudget.toFixed(2),
-          item.budgetMods.toFixed(2),
-          item.approvedCOs.toFixed(2),
-          item.revisedBudget.toFixed(2),
-          item.pendingChanges.toFixed(2),
-          item.projectedBudget.toFixed(2),
-          item.committedCosts.toFixed(2),
-          item.directCosts.toFixed(2),
-        ].join(","));
-      }
-    }
-
-    const csv = rows.join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `financial_budget_${selectedPid}_${new Date().toISOString().slice(0,10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast.success(`Exported ${rows.length - 1} line items to CSV`);
+    // Server-side export — pulls the full DB record for this project rather than
+    // just what's currently loaded/paginated on the client.
+    const url = `${API}/api/v1/financials/export${selectedPid !== "all" ? `?project_id=${selectedPid}` : ""}`;
+    window.open(url, "_blank");
+    toast.success("Exporting budget to CSV…");
   }, [selectedPid, projects, allDivisions]);
 
   // ── Item CRUD ─────────────────────────────────────────────────────────────────
@@ -1400,7 +1523,7 @@ export default function FinancialsPage() {
     try {
       await axios.delete(`${API}/api/v1/financials/items/${item.id}`);
       toast.success("Line item deleted");
-      fetchData();
+      handleDataChanged();
     } catch {
       toast.error("Delete failed");
     } finally {
@@ -1748,24 +1871,27 @@ export default function FinancialsPage() {
 
       <AnimatePresence>
         {showImport && (
-          <ImportModal projects={projects} onClose={() => setShowImport(false)} onSuccess={fetchData} />
+          <ImportModal projects={projects} onClose={() => setShowImport(false)} onSuccess={handleDataChanged} />
+        )}
+        {showValidate && (
+          <ValidateModal onClose={() => setShowValidate(false)} />
         )}
         {showSync && (
-          <SyncModal projects={projects} onClose={() => setShowSync(false)} onSuccess={fetchData} />
+          <SyncModal projects={projects} onClose={() => setShowSync(false)} onSuccess={handleDataChanged} />
         )}
         {showItemForm && (
           <ItemFormModal
             projectId={selectedPid}
             item={editingItem}
             onClose={() => { setShowItemForm(false); setEditingItem(null); }}
-            onSuccess={fetchData}
+            onSuccess={handleDataChanged}
           />
         )}
         {showBudgetSync && selectedPid !== "all" && (
           <BudgetSyncModal
             projectId={selectedPid}
             onClose={() => setShowBudgetSync(false)}
-            onSuccess={fetchData}
+            onSuccess={handleDataChanged}
           />
         )}
       </AnimatePresence>
@@ -1774,7 +1900,7 @@ export default function FinancialsPage() {
         {/* Header */}
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-3xl font-bold text-foreground">Financial Budget</h1>
+            <h1 className="text-4xl font-bold text-foreground">Financial Budget</h1>
             <p className="text-muted-foreground text-sm mt-1">
               CSI division breakdown · budget vs committed vs direct costs
               {selectedProject && <span className="ml-2 text-blue-400 font-medium">— {selectedProject.name}</span>}
@@ -1791,6 +1917,9 @@ export default function FinancialsPage() {
             </Button>
             <Button variant="outline" size="sm" className="border-border" onClick={() => setShowSync(true)}>
               <Link2 className="w-4 h-4 mr-2" />Sync Modules
+            </Button>
+            <Button variant="outline" size="sm" className="border-border" onClick={() => setShowValidate(true)}>
+              <ShieldCheck className="w-4 h-4 mr-2 text-cyan-400" />Validate File
             </Button>
             <Button className="gradient-blue text-white border-0" size="sm" onClick={() => setShowImport(true)}>
               <Download className="w-4 h-4 mr-2" />Import

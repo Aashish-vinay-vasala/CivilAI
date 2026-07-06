@@ -70,3 +70,7 @@ Desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Local tooling
+.claude/
+**/mlflow.db

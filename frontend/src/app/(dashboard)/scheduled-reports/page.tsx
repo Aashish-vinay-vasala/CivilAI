@@ -83,7 +83,7 @@ export default function ScheduledReportsPage() {
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Scheduled Reports</h1>
+          <h1 className="text-4xl font-bold text-foreground">Scheduled Reports</h1>
           <p className="text-muted-foreground text-sm mt-1">Automate email reports to your team</p>
         </div>
         <button onClick={() => setShowCreate(true)}

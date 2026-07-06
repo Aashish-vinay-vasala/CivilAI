@@ -524,7 +524,7 @@ export default function AnomalyPage() {
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Anomaly Detection</h1>
+          <h1 className="text-4xl font-bold text-foreground">Anomaly Detection</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Real-time cross-module anomaly detection — cost, schedule, equipment, safety
             {isPortfolio && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400">Portfolio — {projects.length} projects</span>}

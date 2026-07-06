@@ -10,7 +10,16 @@ export type DataType =
   | "vendors"
   | "contracts"
   | "compliance"
-  | "projects";
+  | "projects"
+  | "procurement"
+  | "payments"
+  | "financials"
+  | "accounting"
+  | "review"
+  | "support"
+  | "notifications"
+  | "tenders"
+  | "voice";
 
 interface DataRefreshStore {
   counters: Record<DataType, number>;
@@ -30,6 +39,15 @@ export const useDataRefreshStore = create<DataRefreshStore>()((set) => ({
     contracts: 0,
     compliance: 0,
     projects: 0,
+    procurement: 0,
+    payments: 0,
+    financials: 0,
+    accounting: 0,
+    review: 0,
+    support: 0,
+    notifications: 0,
+    tenders: 0,
+    voice: 0,
   },
   triggerRefresh: (type) =>
     set((s) => ({ counters: { ...s.counters, [type]: s.counters[type] + 1 } })),

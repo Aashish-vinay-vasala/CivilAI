@@ -7,7 +7,7 @@
  *   1. Web Speech API streams live interim transcript while user speaks
  *   2. MediaRecorder captures audio (webm/opus) in parallel
  *   3. On stop: audio blob → POST /api/v1/voice/voice-chat → JSON {transcript, response}
- *   4. Browser SpeechSynthesis speaks the response
+ *   4. Response text → POST /api/v1/voice/speak → Groq PlayAI TTS MP3, played back
  *   5. onResult(transcript, response) is called for the parent to show the exchange
  *
  * Usage:
@@ -23,6 +23,16 @@ import { Mic, MicOff, Loader2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWebSpeechSTT } from "@/hooks/useWebSpeechSTT";
+import { supabase } from "@/lib/supabase";
+
+// The voice routes require an authenticated session (require_module_access on the
+// backend), but these calls use plain `fetch` rather than the axios instance the
+// app's auth interceptor patches — so the bearer token has to be attached by hand.
+async function authHeader(): Promise<HeadersInit> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 interface Props {
   chatHistory?: { role: string; content: string }[];
@@ -52,7 +62,7 @@ export default function VoiceButton({
   const recorderRef       = useRef<MediaRecorder | null>(null);
   const chunksRef         = useRef<Blob[]>([]);
   const streamRef         = useRef<MediaStream | null>(null);
-  const uttRef            = useRef<SpeechSynthesisUtterance | null>(null);
+  const audioRef          = useRef<HTMLAudioElement | null>(null);
 
   const setS = (s: State) => { stateRef.current = s; setState(s); };
 
@@ -79,23 +89,37 @@ export default function VoiceButton({
       form.append("chat_history", JSON.stringify(chatHistory));
       form.append("session_id",   sessionId);
 
-      const res  = await fetch(`${API}/api/v1/voice/voice-chat`, { method: "POST", body: form });
+      const res  = await fetch(`${API}/api/v1/voice/voice-chat`, {
+        method: "POST", body: form, headers: await authHeader(),
+      });
       const data = await res.json();
 
       if (!res.ok) throw new Error(data.detail ?? res.statusText);
 
       const { transcript, response } = data as { transcript: string; response: string };
 
-      // Speak the response using browser TTS
-      if (typeof window !== "undefined" && response) {
-        window.speechSynthesis.cancel();
-        const utt       = new SpeechSynthesisUtterance(response);
-        utt.rate        = 1.0;
-        utt.onend       = () => setS("idle");
-        utt.onerror     = () => setS("idle");
-        uttRef.current  = utt;
+      // Speak the response using Groq PlayAI TTS
+      if (response) {
+        audioRef.current?.pause();
         setS("playing");
-        window.speechSynthesis.speak(utt);
+        try {
+          const ttsForm = new FormData();
+          ttsForm.append("text", response.slice(0, 1000));
+          ttsForm.append("voice", "autumn");
+          const ttsRes = await fetch(`${API}/api/v1/voice/speak`, {
+            method: "POST", body: ttsForm, headers: await authHeader(),
+          });
+          if (!ttsRes.ok) throw new Error("TTS request failed");
+          const blob  = await ttsRes.blob();
+          const url   = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audioRef.current = audio;
+          audio.onended = () => { URL.revokeObjectURL(url); setS("idle"); };
+          audio.onerror = () => { URL.revokeObjectURL(url); setS("idle"); };
+          await audio.play();
+        } catch {
+          setS("idle");
+        }
       } else {
         setS("idle");
       }
@@ -110,7 +134,7 @@ export default function VoiceButton({
 
   const startRecording = useCallback(async () => {
     if (stateRef.current !== "idle") return;
-    window.speechSynthesis.cancel();
+    audioRef.current?.pause();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -149,7 +173,7 @@ export default function VoiceButton({
     if (s === "idle")      return startRecording();
     if (s === "recording") return stopRecording();
     if (s === "playing") {
-      window.speechSynthesis.cancel();
+      audioRef.current?.pause();
       setS("idle");
     }
   };

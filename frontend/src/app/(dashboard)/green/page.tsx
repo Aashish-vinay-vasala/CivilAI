@@ -155,7 +155,7 @@ export default function GreenPage() {
         className="flex items-center justify-between"
       >
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Green Monitor</h1>
+          <h1 className="text-4xl font-bold text-foreground">Green Monitor</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Sustainability, ESG & carbon tracking
           </p>

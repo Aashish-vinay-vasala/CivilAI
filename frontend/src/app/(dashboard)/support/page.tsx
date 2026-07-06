@@ -5,9 +5,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   HeadphonesIcon, Plus, Send, Loader2, CheckCircle2, Clock,
   AlertCircle, ChevronRight, Bot, User, Shield, Tag, Zap,
-  RefreshCw, X, MessageSquare,
+  RefreshCw, X, MessageSquare, BarChart3,
 } from "lucide-react";
 import axios from "axios";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
+import { useRoleStore } from "@/lib/stores/roleStore";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -273,9 +275,134 @@ function ThreadBubble({ msg }: { msg: Message }) {
   );
 }
 
+// ── Stats Dashboard ────────────────────────────────────────────────────────────
+
+interface SupportStats {
+  total: number;
+  ai_resolved: number;
+  by_status: Record<string, number>;
+  by_category: Record<string, number>;
+  by_priority: Record<string, number>;
+}
+
+function StatBreakdown({ title, data, labels, colorFor }: {
+  title: string; data: Record<string, number>; labels?: Record<string, string>;
+  colorFor: (key: string) => string;
+}) {
+  const entries = Object.entries(data).sort(([, a], [, b]) => b - a);
+  const max = Math.max(1, ...entries.map(([, v]) => v));
+  return (
+    <div>
+      <p className="text-[11px] text-white/40 mb-2 uppercase tracking-wide">{title}</p>
+      <div className="space-y-2">
+        {entries.length === 0 ? (
+          <p className="text-[12px] text-white/20">No data yet</p>
+        ) : entries.map(([key, value]) => (
+          <div key={key} className="flex items-center gap-2">
+            <span className="text-[12px] text-white/60 w-28 shrink-0 truncate">{labels?.[key] ?? key}</span>
+            <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+              <div className={`h-full rounded-full ${colorFor(key)}`} style={{ width: `${(value / max) * 100}%` }} />
+            </div>
+            <span className="text-[12px] text-white/70 w-6 text-right shrink-0">{value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatsModal({ onClose }: { onClose: () => void }) {
+  const [stats, setStats] = useState<SupportStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await axios.get(`${API}/api/v1/support/stats`);
+        setStats(res.data);
+      } catch (e: unknown) {
+        setError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed to load stats.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const resolvedPct = stats && stats.total > 0 ? Math.round((stats.ai_resolved / stats.total) * 100) : 0;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(8px)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <motion.div
+        initial={{ scale: 0.95, y: 16 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 16 }}
+        className="w-full max-w-2xl rounded-2xl p-6 space-y-5"
+        style={{ background: "rgba(4,11,25,0.98)", border: "1px solid rgba(0,212,255,0.15)", boxShadow: "0 24px 64px rgba(0,0,0,0.6)" }}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-5 h-5 text-cyan-400" />
+            <h2 className="text-white font-semibold">Support Dashboard</h2>
+          </div>
+          <button onClick={onClose} className="text-white/30 hover:text-white/70 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center h-40">
+            <Loader2 className="w-6 h-6 animate-spin text-cyan-500/40" />
+          </div>
+        ) : error ? (
+          <p className="text-red-400 text-[12px] flex items-center gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
+          </p>
+        ) : stats && (
+          <>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-xl p-4" style={{ background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.15)" }}>
+                <p className="text-[11px] text-white/40 mb-1">Total Tickets</p>
+                <p className="text-2xl font-bold text-white">{stats.total}</p>
+              </div>
+              <div className="rounded-xl p-4" style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)" }}>
+                <p className="text-[11px] text-white/40 mb-1">AI Auto-Resolved</p>
+                <p className="text-2xl font-bold text-emerald-400">{stats.ai_resolved}</p>
+              </div>
+              <div className="rounded-xl p-4" style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)" }}>
+                <p className="text-[11px] text-white/40 mb-1">Resolution Rate</p>
+                <p className="text-2xl font-bold text-amber-400">{resolvedPct}%</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-5 pt-1">
+              <StatBreakdown title="By Status" data={stats.by_status}
+                labels={{ open: "Open", in_progress: "In Progress", resolved: "Resolved", closed: "Closed" }}
+                colorFor={(k) => ({
+                  open: "bg-cyan-400", in_progress: "bg-blue-400", resolved: "bg-emerald-400", closed: "bg-white/30",
+                }[k] ?? "bg-white/30")} />
+              <StatBreakdown title="By Priority" data={stats.by_priority}
+                colorFor={(k) => ({
+                  low: "bg-emerald-400", medium: "bg-amber-400", high: "bg-orange-400", urgent: "bg-red-400",
+                }[k] ?? "bg-white/30")} />
+              <StatBreakdown title="By Category" data={stats.by_category}
+                labels={categoryLabels}
+                colorFor={() => "bg-cyan-400"} />
+            </div>
+          </>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function SupportPage() {
+  const { triggerRefresh } = useDataRefreshStore();
   const [tickets, setTickets]           = useState<Ticket[]>([]);
   const [selected, setSelected]         = useState<Ticket | null>(null);
   const [messages, setMessages]         = useState<Message[]>([]);
@@ -286,9 +413,11 @@ export default function SupportPage() {
   const [loadingTickets, setLoadingTickets] = useState(true);
   const [loadingMsgs, setLoadingMsgs]   = useState(false);
   const [showNewForm, setShowNewForm]   = useState(false);
+  const [showStats, setShowStats]       = useState(false);
   const [filterStatus, setFilterStatus] = useState("all");
   const [aiTyping, setAiTyping]         = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const { can } = useRoleStore();
 
   async function loadTickets() {
     setLoadingTickets(true);
@@ -364,6 +493,7 @@ export default function SupportPage() {
     setShowNewForm(false);
     setTickets((p) => [ticket, ...p]);
     setSelected(ticket);
+    triggerRefresh("support");
   }
 
   const filtered = filterStatus === "all"
@@ -395,6 +525,15 @@ export default function SupportPage() {
               >
                 <RefreshCw className="w-3.5 h-3.5" />
               </button>
+              {can("canManageUsers") && (
+                <button
+                  onClick={() => setShowStats(true)}
+                  className="p-1.5 rounded-lg text-white/30 hover:text-white/70 transition-colors"
+                  title="Support Dashboard"
+                >
+                  <BarChart3 className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button
                 onClick={() => setShowNewForm(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all"
@@ -555,7 +694,7 @@ export default function SupportPage() {
                 {selected.ai_resolved && (
                   <div
                     className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold"
-                    style={{ background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.2)", color: "#a78bfa" }}
+                    style={{ background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.2)", color: "#34d399" }}
                   >
                     <Zap className="w-3 h-3" /> AI Resolved
                   </div>
@@ -659,6 +798,11 @@ export default function SupportPage() {
             onCreated={handleTicketCreated}
           />
         )}
+      </AnimatePresence>
+
+      {/* Stats dashboard modal */}
+      <AnimatePresence>
+        {showStats && <StatsModal onClose={() => setShowStats(false)} />}
       </AnimatePresence>
     </div>
   );

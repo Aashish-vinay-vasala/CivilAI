@@ -21,6 +21,10 @@ import {
   Brain,
   Plus,
   X,
+  Pencil,
+  CalendarClock,
+  Clock,
+  Sparkles,
 } from "lucide-react";
 import {
   BarChart,
@@ -37,6 +41,7 @@ import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
 import { MarkdownText } from "@/lib/renderMarkdown";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 const WORKFORCE_MODULE_TABS = [
   { href: "/workforce", label: "Workforce" },
@@ -51,6 +56,7 @@ const emptyEquipment = {
 };
 
 export default function EquipmentPage() {
+  const { triggerRefresh } = useDataRefreshStore();
   const [subTab, setSubTab] = useState("overview");
   const [loading, setLoading] = useState(false);
   const [analysis, setAnalysis] = useState("");
@@ -83,6 +89,33 @@ export default function EquipmentPage() {
   const [extractLoading, setExtractLoading] = useState(false);
   const [addingExtracted, setAddingExtracted] = useState<string | null>(null);
   const extractFileRef = useRef<HTMLInputElement>(null);
+
+  // Edit equipment modal
+  const [editTarget, setEditTarget] = useState<any>(null);
+  const [editForm, setEditForm] = useState({ ...emptyEquipment });
+  const [saving, setSaving] = useState(false);
+
+  // Detailed AI failure report (LLM narrative, separate from the quick ML score above)
+  const [detailedReportOpen, setDetailedReportOpen] = useState(false);
+  const [detailedReport, setDetailedReport] = useState("");
+  const [detailedLoading, setDetailedLoading] = useState(false);
+  const [lastMaintenance, setLastMaintenance] = useState("");
+  const [condition, setCondition] = useState("Good");
+  const [knownIssues, setKnownIssues] = useState("");
+
+  // Maintenance schedule generator
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [schedule, setSchedule] = useState("");
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+
+  // Downtime impact analysis
+  const [downtimeOpen, setDowntimeOpen] = useState(false);
+  const [downtimeLoading, setDowntimeLoading] = useState(false);
+  const [downtimeAnalysis, setDowntimeAnalysis] = useState("");
+  const [downtimeForm, setDowntimeForm] = useState({
+    equipment_id: "", equipment_type: "", downtime_hours: 0,
+    affected_tasks: "", repair_cost: 0, project_name: "",
+  });
 
   useEffect(() => {
     fetchEquipmentData();
@@ -163,6 +196,7 @@ export default function EquipmentPage() {
       setShowAdd(false);
       setNewEquipment({ ...emptyEquipment });
       fetchEquipmentList();
+      triggerRefresh("equipment");
     } catch (e: any) {
       toast.error(e?.response?.data?.detail ?? "Failed to add equipment");
     } finally {
@@ -176,8 +210,100 @@ export default function EquipmentPage() {
       await axios.delete(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/equipment/${id}`);
       toast.success("Equipment deleted");
       fetchEquipmentList();
+      triggerRefresh("equipment");
     } catch {
       toast.error("Failed to delete equipment");
+    }
+  };
+
+  const openEdit = (eq: any) => {
+    setEditTarget(eq);
+    setEditForm({
+      name: eq.name || "", equipment_code: eq.equipment_code || "",
+      equipment_type: eq.equipment_type || "", health_score: eq.health_score ?? 80,
+      status: eq.status || "Operational", next_service: eq.next_service || "",
+    });
+  };
+
+  const handleUpdateEquipment = async () => {
+    if (!editTarget) return;
+    setSaving(true);
+    try {
+      await axios.patch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/equipment/${editTarget.id}`,
+        editForm
+      );
+      toast.success("Equipment updated");
+      setEditTarget(null);
+      fetchEquipmentList();
+    } catch {
+      toast.error("Failed to update equipment");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fetchDetailedReport = async () => {
+    setDetailedLoading(true);
+    try {
+      const res = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/equipment/predict-failure`,
+        {
+          equipment_id: equipment.equipment_id || "unspecified",
+          equipment_type: equipment.equipment_type,
+          age_years: equipment.age_years,
+          last_maintenance: lastMaintenance,
+          operating_hours: equipment.operating_hours,
+          condition,
+          known_issues: knownIssues.split(",").map(s => s.trim()).filter(Boolean),
+        }
+      );
+      setDetailedReport(res.data.prediction);
+      toast.success("Detailed AI report ready");
+    } catch {
+      toast.error("Failed to generate detailed report");
+    } finally {
+      setDetailedLoading(false);
+    }
+  };
+
+  const fetchMaintenanceSchedule = async () => {
+    if (equipmentList.length === 0) { toast.error("Add equipment to the register first"); return; }
+    setScheduleLoading(true);
+    try {
+      const res = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/equipment/maintenance-schedule`,
+        { equipment_list: equipmentList.map(e => ({
+            name: e.name, equipment_type: e.equipment_type, health_score: e.health_score,
+            status: e.status, next_service: e.next_service,
+          })) }
+      );
+      setSchedule(res.data.schedule);
+      toast.success("Maintenance schedule generated");
+    } catch {
+      toast.error("Failed to generate schedule");
+    } finally {
+      setScheduleLoading(false);
+    }
+  };
+
+  const fetchDowntimeAnalysis = async () => {
+    if (!downtimeForm.equipment_id) { toast.error("Select equipment first"); return; }
+    setDowntimeLoading(true);
+    try {
+      const res = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/equipment/downtime-analysis`,
+        {
+          ...downtimeForm,
+          affected_tasks: downtimeForm.affected_tasks.split(",").map(s => s.trim()).filter(Boolean),
+        }
+      );
+      setDowntimeAnalysis(res.data.analysis);
+      toast.success("Downtime analysis ready");
+    } catch {
+      toast.error("Failed to analyze downtime");
+    } finally {
+      setDowntimeLoading(false);
     }
   };
 
@@ -204,6 +330,7 @@ export default function EquipmentPage() {
       setExtractedEquipment(prev => prev.filter((_, i) => i !== idx));
       toast.success(`${eq.name} added`);
       fetchEquipmentList();
+      triggerRefresh("equipment");
     } catch { toast.error(`Failed to add ${eq.name}`); }
     finally { setAddingExtracted(null); }
   };
@@ -217,6 +344,7 @@ export default function EquipmentPage() {
     setExtractedEquipment([]);
     toast.success(`Added ${added} item(s)`);
     fetchEquipmentList();
+    if (added > 0) triggerRefresh("equipment");
     setAddingExtracted(null);
   };
 
@@ -355,10 +483,64 @@ export default function EquipmentPage() {
         </div>
       )}
 
+      {/* Edit Equipment Modal */}
+      {editTarget && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+            className="bg-card border border-border rounded-2xl p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="font-semibold text-foreground text-lg">Edit Equipment</h3>
+              <button onClick={() => setEditTarget(null)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <input className={inputClass} placeholder="Equipment name *"
+                value={editForm.name}
+                onChange={(e) => setEditForm(p => ({ ...p, name: e.target.value }))} />
+              <div className="grid grid-cols-2 gap-3">
+                <input className={inputClass} placeholder="Code (e.g. EQ001)"
+                  value={editForm.equipment_code}
+                  onChange={(e) => setEditForm(p => ({ ...p, equipment_code: e.target.value }))} />
+                <input className={inputClass} placeholder="Type (e.g. Crane)"
+                  value={editForm.equipment_type}
+                  onChange={(e) => setEditForm(p => ({ ...p, equipment_type: e.target.value }))} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <input className={inputClass} type="number" placeholder="Health score (0-100)"
+                  value={editForm.health_score}
+                  onChange={(e) => setEditForm(p => ({ ...p, health_score: parseInt(e.target.value) || 0 }))} />
+                <select className={inputClass} value={editForm.status}
+                  onChange={(e) => setEditForm(p => ({ ...p, status: e.target.value }))}>
+                  <option>Operational</option>
+                  <option>Needs Service</option>
+                  <option>Critical</option>
+                  <option>Inactive</option>
+                </select>
+              </div>
+              <input className={inputClass} placeholder="Next service date (e.g. Jul 15)"
+                value={editForm.next_service}
+                onChange={(e) => setEditForm(p => ({ ...p, next_service: e.target.value }))} />
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setEditTarget(null)}
+                className="flex-1 px-4 py-2 rounded-xl bg-secondary text-muted-foreground text-sm hover:text-foreground">
+                Cancel
+              </button>
+              <button onClick={handleUpdateEquipment} disabled={saving}
+                className="flex-1 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium flex items-center justify-center gap-2">
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
+                Save Changes
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Equipment</h1>
+          <h1 className="text-4xl font-bold text-foreground">Equipment</h1>
           <p className="text-muted-foreground text-sm mt-1">AI-powered equipment health &amp; maintenance</p>
         </div>
         <div className="flex gap-2">
@@ -369,6 +551,14 @@ export default function EquipmentPage() {
           <Button variant="outline" onClick={() => setPredictOpen(!predictOpen)}>
             <Activity className="w-4 h-4 mr-2 text-blue-400" />
             Predict Failure
+          </Button>
+          <Button variant="outline" onClick={() => setScheduleOpen(!scheduleOpen)}>
+            <CalendarClock className="w-4 h-4 mr-2 text-emerald-400" />
+            Maintenance Schedule
+          </Button>
+          <Button variant="outline" onClick={() => setDowntimeOpen(!downtimeOpen)}>
+            <Clock className="w-4 h-4 mr-2 text-orange-400" />
+            Log Downtime
           </Button>
           <input ref={extractFileRef} type="file" className="hidden" accept=".pdf,.xlsx,.xls,.docx,.doc,.csv" onChange={handleExtractUpload} />
           <Button className="gradient-blue text-white border-0" disabled={extractLoading} onClick={() => extractFileRef.current?.click()}>
@@ -441,6 +631,20 @@ export default function EquipmentPage() {
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
           className="bg-card border border-blue-500/30 rounded-2xl p-6">
           <h3 className="font-semibold text-foreground mb-4">AI Failure Predictor</h3>
+          {equipmentList.length > 0 && (
+            <select
+              onChange={(e) => {
+                const eq = equipmentList.find((x: any) => x.id === e.target.value);
+                if (eq) setEquipment(p => ({ ...p, equipment_id: eq.id, equipment_type: eq.equipment_type || "" }));
+              }}
+              defaultValue=""
+              className="w-full mb-3 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">Or pick from your register…</option>
+              {equipmentList.map((eq: any) => (
+                <option key={eq.id} value={eq.id}>{eq.name}</option>
+              ))}
+            </select>
+          )}
           <div className="grid grid-cols-3 gap-4 mb-4">
             <input placeholder="Equipment type" value={equipment.equipment_type}
               onChange={(e) => setEquipment({ ...equipment, equipment_type: e.target.value })}
@@ -454,11 +658,115 @@ export default function EquipmentPage() {
           </div>
           <Button onClick={predictFailure} disabled={predictLoading} className="gradient-blue text-white border-0">
             {predictLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Activity className="w-4 h-4 mr-2" />}
-            Predict Failure
+            Quick Prediction
           </Button>
           {prediction && (
             <div className="mt-4 p-4 bg-secondary rounded-xl">
               <pre className="text-sm text-foreground leading-relaxed">{prediction}</pre>
+            </div>
+          )}
+
+          {/* Detailed AI report — narrative version, needs a couple more fields */}
+          <div className="mt-5 pt-5 border-t border-border">
+            <button onClick={() => setDetailedReportOpen(v => !v)}
+              className="flex items-center gap-2 text-sm font-medium text-cyan-400 hover:text-cyan-300 transition-colors">
+              <Sparkles className="w-4 h-4" />
+              {detailedReportOpen ? "Hide detailed AI report" : "Get detailed AI report (warning signs, preventive actions, cost impact)"}
+            </button>
+            {detailedReportOpen && (
+              <div className="mt-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <input type="date" value={lastMaintenance} onChange={(e) => setLastMaintenance(e.target.value)}
+                    className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                  <select value={condition} onChange={(e) => setCondition(e.target.value)}
+                    className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                    <option>Good</option>
+                    <option>Fair</option>
+                    <option>Poor</option>
+                  </select>
+                </div>
+                <input placeholder="Known issues (comma-separated)" value={knownIssues}
+                  onChange={(e) => setKnownIssues(e.target.value)}
+                  className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                <Button onClick={fetchDetailedReport} disabled={detailedLoading}
+                  className="bg-cyan-500 hover:bg-cyan-600 text-white border-0">
+                  {detailedLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                  Generate Detailed Report
+                </Button>
+                {detailedReport && (
+                  <div className="p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
+                    <MarkdownText text={detailedReport} className="text-sm text-muted-foreground leading-relaxed" />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Maintenance Schedule */}
+      {scheduleOpen && (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-emerald-500/30 rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-semibold text-foreground">AI Maintenance Schedule</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Generated from all {equipmentList.length} item(s) in your register</p>
+            </div>
+            <Button onClick={fetchMaintenanceSchedule} disabled={scheduleLoading}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white border-0">
+              {scheduleLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CalendarClock className="w-4 h-4 mr-2" />}
+              Generate Schedule
+            </Button>
+          </div>
+          {schedule && (
+            <div className="p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-xl">
+              <MarkdownText text={schedule} className="text-sm text-muted-foreground leading-relaxed" />
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* Downtime Impact Analysis */}
+      {downtimeOpen && (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-orange-500/30 rounded-2xl p-6">
+          <h3 className="font-semibold text-foreground mb-4">Downtime Impact Analysis</h3>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <select value={downtimeForm.equipment_id}
+              onChange={(e) => {
+                const eq = equipmentList.find((x: any) => x.id === e.target.value);
+                setDowntimeForm(p => ({ ...p, equipment_id: e.target.value, equipment_type: eq?.equipment_type || "" }));
+              }}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-orange-500">
+              <option value="">Select equipment…</option>
+              {equipmentList.map((eq: any) => (
+                <option key={eq.id} value={eq.id}>{eq.name}</option>
+              ))}
+            </select>
+            <input type="number" placeholder="Downtime hours" value={downtimeForm.downtime_hours || ""}
+              onChange={(e) => setDowntimeForm(p => ({ ...p, downtime_hours: parseFloat(e.target.value) || 0 }))}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-orange-500" />
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <input type="number" placeholder="Repair cost ($)" value={downtimeForm.repair_cost || ""}
+              onChange={(e) => setDowntimeForm(p => ({ ...p, repair_cost: parseFloat(e.target.value) || 0 }))}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-orange-500" />
+            <input placeholder="Project name" value={downtimeForm.project_name}
+              onChange={(e) => setDowntimeForm(p => ({ ...p, project_name: e.target.value }))}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-orange-500" />
+          </div>
+          <input placeholder="Affected tasks (comma-separated)" value={downtimeForm.affected_tasks}
+            onChange={(e) => setDowntimeForm(p => ({ ...p, affected_tasks: e.target.value }))}
+            className="w-full mb-3 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-orange-500" />
+          <Button onClick={fetchDowntimeAnalysis} disabled={downtimeLoading}
+            className="bg-orange-500 hover:bg-orange-600 text-white border-0">
+            {downtimeLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Clock className="w-4 h-4 mr-2" />}
+            Analyze Impact
+          </Button>
+          {downtimeAnalysis && (
+            <div className="mt-4 p-4 bg-orange-500/5 border border-orange-500/20 rounded-xl">
+              <MarkdownText text={downtimeAnalysis} className="text-sm text-muted-foreground leading-relaxed" />
             </div>
           )}
         </motion.div>
@@ -561,6 +869,10 @@ export default function EquipmentPage() {
                 <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${getStatusColor(eq.status || "Operational")}`}>
                   {eq.status || "Operational"}
                 </span>
+                <button onClick={() => openEdit(eq)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-lg hover:bg-blue-500/10">
+                  <Pencil className="w-3.5 h-3.5 text-blue-400" />
+                </button>
                 <button onClick={() => handleDeleteEquipment(eq.id, eq.name)}
                   className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-lg hover:bg-red-500/10">
                   <X className="w-3.5 h-3.5 text-red-400" />

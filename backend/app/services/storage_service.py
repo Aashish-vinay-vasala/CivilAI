@@ -1,6 +1,7 @@
 import logging
 from supabase import create_client
 from app.config import settings
+from app.services.db_service import create_document
 import uuid
 import os
 
@@ -114,8 +115,8 @@ def save_document_to_db(
         if project_id:
             data["project_id"] = project_id
 
-        response = supabase.table("documents").insert(data).execute()
-        return {"success": True, "data": response.data}
+        inserted = create_document(data)
+        return {"success": True, "data": inserted}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

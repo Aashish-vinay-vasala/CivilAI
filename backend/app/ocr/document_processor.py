@@ -141,7 +141,7 @@ def process_document(file_bytes: bytes, filename: str, prompt: str = None) -> di
     elif ext in ("docx", "doc"):
         text = extract_word(file_bytes)
 
-    elif ext in ("png", "jpg", "jpeg"):
+    elif ext in ("png", "jpg", "jpeg", "webp"):
         text = analyze_image(file_bytes, "Extract all text and data from this image")
 
     elif ext == "csv":

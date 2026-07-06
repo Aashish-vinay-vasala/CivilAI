@@ -22,6 +22,10 @@ import {
   Download,
   Eye,
   Database,
+  FolderOpen,
+  Calculator,
+  AlertTriangle,
+  Trash2,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -108,6 +112,18 @@ export default function DocumentsPage() {
   const [ragMessages, setRagMessages] = useState<RagMessage[]>([]);
   const [ragInput, setRagInput] = useState("");
   const [ragLoading, setRagLoading] = useState(false);
+
+  // Storage browser
+  const [storageOpen, setStorageOpen] = useState(false);
+  const [storageBucket, setStorageBucket] = useState<"documents" | "blueprints">("documents");
+  const [storageFiles, setStorageFiles] = useState<any[]>([]);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [deletingFile, setDeletingFile] = useState<string | null>(null);
+
+  // Quick financial extract
+  const [finExtractOpen, setFinExtractOpen] = useState(false);
+  const [finExtractLoading, setFinExtractLoading] = useState(false);
+  const [finExtractResult, setFinExtractResult] = useState<any>(null);
 
   useEffect(() => {
     fetchDocs();
@@ -203,6 +219,73 @@ export default function DocumentsPage() {
     } finally { setRagLoading(false); }
   };
 
+  const fetchStorage = async (bucket: "documents" | "blueprints") => {
+    setStorageLoading(true);
+    try {
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/documents/storage/${bucket}`);
+      setStorageFiles(res.data.files || []);
+    } catch {
+      toast.error("Failed to load storage bucket");
+      setStorageFiles([]);
+    } finally {
+      setStorageLoading(false);
+    }
+  };
+
+  const toggleStorage = () => {
+    const next = !storageOpen;
+    setStorageOpen(next);
+    if (next) fetchStorage(storageBucket);
+  };
+
+  const downloadStorageFile = (bucket: string, filename: string) => {
+    window.open(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/documents/storage/${bucket}/${filename}/download`, "_blank");
+  };
+
+  const deleteStorageFile = async (bucket: string, filename: string) => {
+    setDeletingFile(filename);
+    try {
+      await axios.delete(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/documents/storage/${bucket}/${filename}`);
+      setStorageFiles(prev => prev.filter((f: any) => f.name !== filename));
+      toast.success("File deleted");
+    } catch {
+      toast.error("Failed to delete file");
+    } finally {
+      setDeletingFile(null);
+    }
+  };
+
+  const switchBucket = (bucket: "documents" | "blueprints") => {
+    setStorageBucket(bucket);
+    fetchStorage(bucket);
+  };
+
+  const handleFinExtractUpload = async (file: File) => {
+    setFinExtractLoading(true);
+    setFinExtractResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/documents/extract-accounting`,
+        formData
+      );
+      setFinExtractResult(res.data);
+      toast.success("Financial data extracted!");
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? "Failed to extract financial data");
+    } finally {
+      setFinExtractLoading(false);
+    }
+  };
+
+  const fmtBytes = (bytes?: number) => {
+    if (!bytes) return "—";
+    if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+    if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB`;
+    return `${bytes} B`;
+  };
+
   const getCategoryAction = (category: string): { href: string; label: string } | null => {
     switch (category) {
       case "Invoice":
@@ -229,6 +312,9 @@ export default function DocumentsPage() {
     }
   };
 
+  const publicUrl = (bucket: string, filename: string) =>
+    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${bucket}/${filename}`;
+
   const allDocs = realDocs.length > 0
     ? realDocs.map((doc: any) => ({
         name: doc.original_name || doc.filename,
@@ -237,8 +323,9 @@ export default function DocumentsPage() {
         size: "—",
         date: new Date(doc.created_at).toLocaleDateString(),
         category: DOC_TYPE_LABEL[doc.doc_type?.toLowerCase()] ?? "General",
+        fileUrl: doc.filename && doc.bucket ? publicUrl(doc.bucket, doc.filename) : null,
       }))
-    : fallbackDocs;
+    : fallbackDocs.map((d) => ({ ...d, fileUrl: null as string | null }));
 
   const filtered = allDocs.filter(d => {
     const matchSearch = d.name.toLowerCase().includes(search.toLowerCase());
@@ -251,7 +338,7 @@ export default function DocumentsPage() {
       <ModuleTabs tabs={DOCS_TABS} />
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-3xl font-bold text-foreground">Document Intelligence</h1>
+        <h1 className="text-4xl font-bold text-foreground">Document Intelligence</h1>
         <p className="text-muted-foreground text-sm mt-1">
           Upload any construction document — contracts, blueprints, BOQ, reports — and chat with AI
         </p>
@@ -341,6 +428,25 @@ export default function DocumentsPage() {
   accept=".pdf,.xlsx,.xls,.docx,.png,.jpg,.jpeg"
   onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
 />
+              <Button
+                variant="outline"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFinExtractOpen(true);
+                  document.getElementById("fin-extract-upload")?.click();
+                }}
+              >
+                {finExtractLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Calculator className="w-4 h-4 mr-2 text-cyan-400" />}
+                Quick Financial Extract
+              </Button>
+              <input
+                id="fin-extract-upload"
+                type="file"
+                className="hidden"
+                accept=".pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg,.csv,.txt"
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFinExtractUpload(f); }}
+              />
             </div>
           </div>
 
@@ -369,6 +475,57 @@ export default function DocumentsPage() {
               ))}
             </div>
           </div>
+
+          {/* Quick Financial Extract result */}
+          {finExtractOpen && (
+            <div className="bg-card border border-cyan-500/30 rounded-2xl p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <Calculator className="w-4 h-4 text-cyan-400" />
+                <p className="text-sm font-medium text-foreground">Quick Financial Extract</p>
+                <button onClick={() => { setFinExtractOpen(false); setFinExtractResult(null); }} className="ml-auto text-muted-foreground hover:text-foreground">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              {finExtractLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
+                </div>
+              ) : finExtractResult ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs px-2.5 py-1 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-medium">
+                      {DOC_TYPE_LABEL[finExtractResult.document_class] ?? finExtractResult.document_class}
+                    </span>
+                    {finExtractResult.currency && <span className="text-xs text-muted-foreground">{finExtractResult.currency}</span>}
+                  </div>
+                  {finExtractResult.summary && (
+                    <p className="text-xs text-muted-foreground leading-relaxed">{finExtractResult.summary}</p>
+                  )}
+                  {finExtractResult.key_figures?.length > 0 && (
+                    <div className="grid grid-cols-2 gap-2">
+                      {finExtractResult.key_figures.map((kf: any, i: number) => (
+                        <div key={i} className="rounded-lg px-3 py-2 bg-secondary/50">
+                          <p className="text-[10px] text-muted-foreground uppercase">{kf.label}</p>
+                          <p className="text-sm font-mono font-semibold text-foreground">
+                            {kf.suffix === "%" ? `${kf.value}%` : kf.value}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {finExtractResult.warnings?.length > 0 && (
+                    <div className="flex items-start gap-2 text-amber-400 text-xs bg-amber-500/8 border border-amber-500/20 rounded-xl px-3 py-2">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <div>{finExtractResult.warnings.join(" · ")}</div>
+                    </div>
+                  )}
+                  <a href="/accounting" className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 pt-1">
+                    Open full breakdown in Accounting Extract <ChevronRight className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+              ) : null}
+            </div>
+          )}
         </motion.div>
 
         {/* Document Chat */}
@@ -593,16 +750,78 @@ export default function DocumentsPage() {
               </span>
             )}
           </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-            <input
-              placeholder="Search documents..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-8 pr-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-blue-500 w-48"
-            />
+          <div className="flex items-center gap-2">
+            <button onClick={toggleStorage}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
+                storageOpen ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" : "bg-secondary text-muted-foreground border-border hover:text-foreground"
+              }`}>
+              <FolderOpen className="w-3.5 h-3.5" /> Browse Storage
+            </button>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+              <input
+                placeholder="Search documents..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-8 pr-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-blue-500 w-48"
+              />
+            </div>
           </div>
         </div>
+
+        {/* Raw storage bucket browser */}
+        {storageOpen && (
+          <div className="mb-4 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex gap-1 p-1 rounded-lg bg-secondary/60 w-fit">
+                {(["documents", "blueprints"] as const).map((b) => (
+                  <button key={b} onClick={() => switchBucket(b)}
+                    className={`px-3 py-1 rounded-md text-xs font-medium capitalize transition-colors ${
+                      storageBucket === b ? "bg-cyan-500/20 text-cyan-400" : "text-muted-foreground hover:text-foreground"
+                    }`}>
+                    {b}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs text-muted-foreground">{storageFiles.length} file(s) in bucket</span>
+            </div>
+            {storageLoading ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="w-5 h-5 animate-spin text-cyan-400" />
+              </div>
+            ) : storageFiles.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-4">No files in this bucket</p>
+            ) : (
+              <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                {storageFiles.map((f: any, i: number) => (
+                  <div key={f.id || i} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-card/60">
+                    <FileText className="w-3.5 h-3.5 text-cyan-400/70 shrink-0" />
+                    <span className="text-xs text-foreground flex-1 truncate">{f.name}</span>
+                    <span className="text-[10px] text-muted-foreground">{fmtBytes(f.metadata?.size)}</span>
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                      {f.updated_at ? new Date(f.updated_at).toLocaleDateString() : "—"}
+                    </span>
+                    <a href={publicUrl(storageBucket, f.name)} target="_blank" rel="noreferrer"
+                      className="text-cyan-400/70 hover:text-cyan-400">
+                      <Eye className="w-3.5 h-3.5" />
+                    </a>
+                    <button onClick={() => downloadStorageFile(storageBucket, f.name)}
+                      className="text-cyan-400/70 hover:text-cyan-400">
+                      <Download className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={() => deleteStorageFile(storageBucket, f.name)}
+                      disabled={deletingFile === f.name}
+                      className="text-red-400/70 hover:text-red-400">
+                      {deletingFile === f.name
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Category Filter */}
         <div className="flex gap-2 mb-4 flex-wrap">
@@ -669,11 +888,16 @@ export default function DocumentsPage() {
                         </a>
                       ) : null;
                     })()}
-                    <Button variant="ghost" size="icon" className="w-7 h-7">
+                    <Button variant="ghost" size="icon" className="w-7 h-7" disabled={!doc.fileUrl}
+                      onClick={() => doc.fileUrl && window.open(doc.fileUrl, "_blank")} title={doc.fileUrl ? "View original file" : "No file available"}>
                       <Eye className="w-3.5 h-3.5" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="w-7 h-7">
-                      <Download className="w-3.5 h-3.5" />
+                    <Button variant="ghost" size="icon" className="w-7 h-7" disabled={!doc.fileUrl} asChild={!!doc.fileUrl}>
+                      {doc.fileUrl ? (
+                        <a href={doc.fileUrl} download title="Download">
+                          <Download className="w-3.5 h-3.5" />
+                        </a>
+                      ) : <Download className="w-3.5 h-3.5" />}
                     </Button>
                   </div>
                 </motion.div>

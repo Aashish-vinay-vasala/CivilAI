@@ -11,6 +11,7 @@ import {
   Upload,
   Loader2,
   Brain,
+  Sparkles,
 } from "lucide-react";
 import {
   AreaChart,
@@ -39,6 +40,7 @@ import {
   BURN_CHART_COLORS,
   CASHFLOW_CHART_COLORS,
 } from "@/lib/constants";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 const EVMPage       = dynamic(() => import("../evm/page"),      { ssr: false });
 const PaymentsPage  = dynamic(() => import("../payments/page"), { ssr: false });
@@ -73,6 +75,7 @@ function fmtMoney(v: number) {
 }
 
 export default function CostPage() {
+  const { counters } = useDataRefreshStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [subTab, setSubTab] = useState("overview");
   const [loading, setLoading] = useState(false);
@@ -86,9 +89,20 @@ export default function CostPage() {
   const [allProjects, setAllProjects] = useState<any[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("all");
 
+  // AI cash flow narrative forecast
+  const [forecastOpen, setForecastOpen] = useState(false);
+  const [forecastForm, setForecastForm] = useState({ completion_percentage: 0, monthly_burn_rate: 0 });
+  const [forecastResult, setForecastResult] = useState("");
+  const [forecastLoading, setForecastLoading] = useState(false);
+
   useEffect(() => {
     fetchRealData();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-fetch when cost entries change elsewhere (e.g. added/deleted on the EVM page)
+  useEffect(() => {
+    fetchRealData();
+  }, [counters.cost]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const computeKpis = (projects: any[], filterProjectId: string) => {
     const filtered = filterProjectId === "all" ? projects : projects.filter((p) => p.id === filterProjectId);
@@ -104,6 +118,13 @@ export default function CostPage() {
   useEffect(() => {
     if (allProjects.length > 0) computeKpis(allProjects, selectedProjectId);
   }, [selectedProjectId, allProjects]);
+
+  // Pre-fill the burn rate field from the actual burn chart once it loads
+  useEffect(() => {
+    if (burnChartData.length === 0) return;
+    const avgActual = burnChartData.reduce((s, d) => s + (d.actual || 0), 0) / burnChartData.length;
+    setForecastForm((p) => ({ ...p, monthly_burn_rate: Math.round(avgActual * 1000) }));
+  }, [burnChartData]);
 
   const fetchRealData = async () => {
     setMlLoading(true);
@@ -196,6 +217,32 @@ export default function CostPage() {
     }
   };
 
+  const runCashflowForecast = async () => {
+    const project = selectedProjectId !== "all" ? allProjects.find((p) => p.id === selectedProjectId) : null;
+    if (!project) { toast.error("Select a specific project first"); return; }
+    setForecastLoading(true);
+    setForecastResult("");
+    try {
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/cost/cashflow-forecast`,
+        {
+          project_name: project.name,
+          total_budget: project.total_budget || 0,
+          spent_to_date: project.spent_to_date || 0,
+          completion_percentage: forecastForm.completion_percentage,
+          monthly_burn_rate: forecastForm.monthly_burn_rate,
+          pending_payments: [],
+        }
+      );
+      setForecastResult(response.data.forecast);
+      toast.success("Cash flow forecast ready");
+    } catch {
+      toast.error("Failed to generate forecast");
+    } finally {
+      setForecastLoading(false);
+    }
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -247,7 +294,7 @@ export default function CostPage() {
         className="flex items-center justify-between flex-wrap gap-3"
       >
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Cost & Budget</h1>
+          <h1 className="text-4xl font-bold text-foreground">Cost & Budget</h1>
           <p className="text-muted-foreground text-sm mt-1">
             AI-powered cost intelligence &amp; forecasting
           </p>
@@ -265,6 +312,10 @@ export default function CostPage() {
               ))}
             </select>
           )}
+          <Button variant="outline" onClick={() => setForecastOpen(!forecastOpen)}>
+            <Sparkles className="w-4 h-4 mr-2 text-cyan-400" />
+            AI Cashflow Forecast
+          </Button>
           <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.xlsx,.xls,.docx" onChange={handleFileUpload} />
           <Button className="gradient-blue text-white border-0" onClick={() => fileInputRef.current?.click()}>
             {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
@@ -272,6 +323,43 @@ export default function CostPage() {
           </Button>
         </div>
       </motion.div>
+
+      {/* AI Cash Flow Narrative Forecast */}
+      {forecastOpen && (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-cyan-500/30 rounded-2xl p-6">
+          <h3 className="font-semibold text-foreground mb-1">AI Cash Flow Forecast</h3>
+          <p className="text-xs text-muted-foreground mb-4">
+            {selectedProjectId === "all"
+              ? "Select a specific project above to generate a narrative cash flow forecast"
+              : `Forecasting for ${allProjects.find((p) => p.id === selectedProjectId)?.name ?? "the selected project"}`}
+          </p>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Completion (%)</label>
+              <input type="number" min={0} max={100} value={forecastForm.completion_percentage || ""}
+                onChange={(e) => setForecastForm(p => ({ ...p, completion_percentage: parseFloat(e.target.value) || 0 }))}
+                className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Monthly Burn Rate ($)</label>
+              <input type="number" value={forecastForm.monthly_burn_rate || ""}
+                onChange={(e) => setForecastForm(p => ({ ...p, monthly_burn_rate: parseFloat(e.target.value) || 0 }))}
+                className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+            </div>
+          </div>
+          <Button onClick={runCashflowForecast} disabled={forecastLoading || selectedProjectId === "all"}
+            className="bg-cyan-500 hover:bg-cyan-600 text-white border-0">
+            {forecastLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+            Generate Forecast
+          </Button>
+          {forecastResult && (
+            <div className="mt-4 p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
+              <MarkdownText text={forecastResult} className="text-sm text-foreground leading-relaxed" />
+            </div>
+          )}
+        </motion.div>
+      )}
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -458,7 +546,7 @@ export default function CostPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
               <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+              <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={{ fill: "rgba(0,212,255,0.06)" }} />
               <Bar dataKey="inflow"  fill={CASHFLOW_CHART_COLORS.inflow}  radius={[6, 6, 0, 0]} name="Inflow" />
               <Bar dataKey="outflow" fill={CASHFLOW_CHART_COLORS.outflow} radius={[6, 6, 0, 0]} name="Outflow" />
             </BarChart>

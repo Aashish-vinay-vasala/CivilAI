@@ -72,6 +72,12 @@ export default function ContractsPage() {
   const [rfiResult, setRfiResult] = useState("");
   const [rfiLoading, setRfiLoading] = useState(false);
 
+  const [changeOrderOpen, setChangeOrderOpen] = useState(false);
+  const [changeOrderText, setChangeOrderText] = useState("");
+  const [changeOrderResult, setChangeOrderResult] = useState("");
+  const [changeOrderReviewId, setChangeOrderReviewId] = useState<string | null>(null);
+  const [changeOrderLoading, setChangeOrderLoading] = useState(false);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -114,6 +120,26 @@ export default function ContractsPage() {
     }
   };
 
+  const analyzeChangeOrder = async () => {
+    if (!changeOrderText.trim()) { toast.error("Describe the change order first"); return; }
+    setChangeOrderLoading(true);
+    setChangeOrderResult("");
+    setChangeOrderReviewId(null);
+    try {
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/contracts/change-order`,
+        { text: changeOrderText }
+      );
+      setChangeOrderResult(response.data.analysis);
+      if (response.data.requires_review) setChangeOrderReviewId(response.data.review_id);
+      toast.success("Change order analyzed!");
+    } catch {
+      toast.error("Failed to analyze change order");
+    } finally {
+      setChangeOrderLoading(false);
+    }
+  };
+
   const getRiskBadge = (risk: string) => {
     switch (risk) {
       case "High": return "bg-red-500/10 text-red-400 border-red-500/20";
@@ -131,7 +157,7 @@ export default function ContractsPage() {
         className="flex items-center justify-between"
       >
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Contracts</h1>
+          <h1 className="text-4xl font-bold text-foreground">Contracts</h1>
           <p className="text-muted-foreground text-sm mt-1">
             AI-powered contract intelligence & risk analysis
           </p>
@@ -140,6 +166,10 @@ export default function ContractsPage() {
           <Button variant="outline" onClick={() => setRfiOpen(!rfiOpen)}>
             <FileText className="w-4 h-4 mr-2 text-blue-400" />
             Generate RFI
+          </Button>
+          <Button variant="outline" onClick={() => setChangeOrderOpen(!changeOrderOpen)}>
+            <ShieldAlert className="w-4 h-4 mr-2 text-amber-400" />
+            Change Order
           </Button>
           <label className="cursor-pointer">
             <input type="file" className="hidden" accept=".pdf,.docx" onChange={handleFileUpload} />
@@ -223,6 +253,47 @@ export default function ContractsPage() {
           {rfiResult && (
             <div className="mt-4 p-4 bg-secondary rounded-xl">
               <MarkdownText text={rfiResult} className="text-sm text-foreground leading-relaxed" />
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* Change Order Analyzer */}
+      {changeOrderOpen && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-amber-500/30 rounded-2xl p-6"
+        >
+          <h3 className="font-semibold text-foreground mb-4">AI Change Order Analysis</h3>
+          <p className="text-xs text-muted-foreground mb-3">
+            Change orders always require project director sign-off — this analysis is automatically sent to the Human Review Queue.
+          </p>
+          <textarea
+            placeholder="Describe the proposed change order (scope, cost impact, schedule impact...)"
+            value={changeOrderText}
+            onChange={(e) => setChangeOrderText(e.target.value)}
+            rows={4}
+            className="w-full mb-4 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none"
+          />
+          <Button onClick={analyzeChangeOrder} disabled={changeOrderLoading} className="bg-amber-500 hover:bg-amber-600 text-white border-0">
+            {changeOrderLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ShieldAlert className="w-4 h-4 mr-2" />}
+            Analyze Change Order
+          </Button>
+          {changeOrderReviewId && (
+            <div className="mt-4 flex items-center gap-3 px-4 py-3 rounded-2xl bg-orange-500/10 border border-orange-500/30">
+              <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
+              <p className="text-sm text-orange-300 flex-1">
+                Sent to the Human Review Queue for director sign-off.
+              </p>
+              <a href="/review" className="text-xs font-medium text-orange-300 hover:text-orange-200 flex items-center gap-1 shrink-0">
+                View Queue <ChevronRight className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          )}
+          {changeOrderResult && (
+            <div className="mt-4 p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl">
+              <MarkdownText text={changeOrderResult} className="text-sm text-foreground leading-relaxed" />
             </div>
           )}
         </motion.div>

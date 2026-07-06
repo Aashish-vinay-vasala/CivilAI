@@ -35,27 +35,31 @@ interface Turn {
   status:     "success" | "blocked" | "error";
 }
 
-// ── Browser TTS ────────────────────────────────────────────────────────────────
+// ── Groq PlayAI TTS ──────────────────────────────────────────────────────────────
 
-function getBrowserVoices(): SpeechSynthesisVoice[] {
-  if (typeof window === "undefined") return [];
-  return window.speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
-}
-
-function speakText(
+async function speakViaBackend(
   text: string,
-  voice: SpeechSynthesisVoice | null,
+  voice: string | null,
+  audioRef: React.MutableRefObject<HTMLAudioElement | null>,
   onEnd: () => void,
-): void {
-  window.speechSynthesis.cancel();
-  const utt   = new SpeechSynthesisUtterance(text);
-  if (voice) utt.voice = voice;
-  utt.rate    = 1.0;
-  utt.pitch   = 1.0;
-  utt.volume  = 1.0;
-  utt.onend   = onEnd;
-  utt.onerror = onEnd;
-  window.speechSynthesis.speak(utt);
+): Promise<void> {
+  audioRef.current?.pause();
+  try {
+    const form = new FormData();
+    form.append("text", text.slice(0, 1000));
+    form.append("voice", voice || "autumn");
+    const res = await fetch(`${API}/api/v1/voice/speak`, { method: "POST", body: form });
+    if (!res.ok) throw new Error("TTS request failed");
+    const blob  = await res.blob();
+    const url   = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
+    await audio.play();
+  } catch {
+    onEnd();
+  }
 }
 
 // ── Waveform ───────────────────────────────────────────────────────────────────
@@ -239,7 +243,7 @@ function UploadPanel({
 
 // ── Diarization panel ────────────────────────────────────────────────────────
 
-const SPEAKER_COLORS = ["#00D4FF", "#A78BFA", "#34D399", "#F59E0B", "#F472B6", "#60A5FA"];
+const SPEAKER_COLORS = ["#00D4FF", "#34D399", "#F59E0B", "#60A5FA", "#14B8A6", "#EF4444"];
 
 type DiarizeSeg  = { speaker: string; start: number; end: number };
 type DialogueTurn = { speaker: string; start: number; end: number; text: string };
@@ -1174,34 +1178,48 @@ type TranscriptionRecord = {
   id: string; filename: string; transcript: string; minutes: string;
   pdf_url: string; pdf_path: string; audio_url: string; created_at: string;
 };
+type ChatMsg = { role: "user" | "assistant"; content: string };
+type ChatSessionRecord = {
+  id: string; label: string; messages: ChatMsg[]; created_at: string;
+};
+type ChatTranscriptRecord = {
+  id: string; label: string; messages: ChatMsg[];
+  pdf_url: string; pdf_path: string; created_at: string;
+};
 
 function HistoryPanel() {
-  const [sessions,       setSessions]       = useState<VoiceSession[]>([]);
-  const [meetings,       setMeetings]       = useState<MeetingRecord[]>([]);
-  const [vadRecs,        setVadRecs]        = useState<VadRecord[]>([]);
-  const [transcriptions, setTranscriptions] = useState<TranscriptionRecord[]>([]);
-  const [loading,        setLoading]        = useState(true);
-  const [expandedId,     setExpandedId]     = useState<string | null>(null);
+  const [sessions,        setSessions]        = useState<VoiceSession[]>([]);
+  const [meetings,        setMeetings]        = useState<MeetingRecord[]>([]);
+  const [vadRecs,         setVadRecs]         = useState<VadRecord[]>([]);
+  const [transcriptions,  setTranscriptions]  = useState<TranscriptionRecord[]>([]);
+  const [chatSessions,    setChatSessions]    = useState<ChatSessionRecord[]>([]);
+  const [chatTranscripts, setChatTranscripts] = useState<ChatTranscriptRecord[]>([]);
+  const [loading,         setLoading]         = useState(true);
+  const [expandedId,      setExpandedId]      = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: s }, { data: m }, { data: v }, { data: t }] = await Promise.all([
-      supabase.from("voice_sessions").select("*").order("created_at", { ascending: false }).limit(30),
+    const [sessionsRes, { data: m }, { data: v }, { data: t }, chatSessionsRes, { data: ct }] = await Promise.all([
+      fetch(`${API}/api/v1/voice/sessions`).then(r => r.json()).catch(() => ({ sessions: [] })),
       supabase.from("meeting_recordings").select("*").order("created_at", { ascending: false }).limit(30),
       supabase.from("vad_recordings").select("*").order("created_at", { ascending: false }).limit(30),
       supabase.from("transcription_recordings").select("*").order("created_at", { ascending: false }).limit(30),
+      fetch(`${API}/api/v1/copilot/sessions`).then(r => r.json()).catch(() => ({ sessions: [] })),
+      supabase.from("copilot_chat_transcripts").select("*").order("created_at", { ascending: false }).limit(30),
     ]);
-    setSessions((s ?? []) as VoiceSession[]);
+    setSessions((sessionsRes.sessions ?? []) as VoiceSession[]);
     setMeetings((m ?? []) as MeetingRecord[]);
     setVadRecs((v ?? []) as VadRecord[]);
     setTranscriptions((t ?? []) as TranscriptionRecord[]);
+    setChatSessions((chatSessionsRes.sessions ?? []) as ChatSessionRecord[]);
+    setChatTranscripts((ct ?? []) as ChatTranscriptRecord[]);
     setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
   const deleteSession = async (id: string) => {
-    await supabase.from("voice_sessions").delete().eq("id", id);
+    try { await fetch(`${API}/api/v1/voice/sessions/${id}`, { method: "DELETE" }); } catch {}
     setSessions(p => p.filter(s => s.id !== id));
   };
 
@@ -1221,6 +1239,17 @@ function HistoryPanel() {
     if (pdfPath) await supabase.storage.from("transcription-reports").remove([pdfPath]);
     await supabase.from("transcription_recordings").delete().eq("id", id);
     setTranscriptions(p => p.filter(t => t.id !== id));
+  };
+
+  const deleteChatSession = async (id: string) => {
+    try { await fetch(`${API}/api/v1/copilot/sessions/${id}`, { method: "DELETE" }); } catch {}
+    setChatSessions(p => p.filter(s => s.id !== id));
+  };
+
+  const deleteChatTranscript = async (id: string, pdfPath: string) => {
+    if (pdfPath) await supabase.storage.from("chat-transcripts").remove([pdfPath]);
+    await supabase.from("copilot_chat_transcripts").delete().eq("id", id);
+    setChatTranscripts(p => p.filter(c => c.id !== id));
   };
 
   const fmt = (iso: string) => new Date(iso).toLocaleString();
@@ -1514,6 +1543,109 @@ function HistoryPanel() {
           </div>
         ))}
       </div>
+
+      {/* ── Copilot Chat Sessions (floating widget, auto-saved) ── */}
+      <div className="space-y-2">
+        <p className="text-[11px] font-semibold text-white/30 uppercase tracking-wider">
+          Copilot Chat Sessions ({chatSessions.length})
+        </p>
+        {chatSessions.length === 0 && (
+          <p className="text-sm text-white/25 py-4 text-center">No chat sessions yet — talk to the CivilAI assistant widget on any page.</p>
+        )}
+        {chatSessions.map(s => (
+          <div key={s.id} className="rounded-2xl overflow-hidden"
+            style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center gap-3 px-4 py-3">
+              <Bot className="w-4 h-4 text-cyan-400/60 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-white/70 truncate">{s.label || "Chat session"}</p>
+                <p className="text-[10px] text-white/30">{fmt(s.created_at)} · {s.messages?.length ?? 0} message{s.messages?.length !== 1 ? "s" : ""}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button onClick={() => toggle(s.id)}
+                  className="px-2.5 py-1.5 rounded-lg text-xs text-white/40 hover:text-white/70 transition-colors flex items-center gap-1">
+                  <ChevronRight className={cn("w-3.5 h-3.5 transition-transform", expandedId === s.id && "rotate-90")} />
+                  {expandedId === s.id ? "Hide" : "View"}
+                </button>
+                <button onClick={() => deleteChatSession(s.id)}
+                  className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+            {expandedId === s.id && (
+              <div className="border-t border-white/[0.06] px-4 pb-4 pt-3 space-y-3 max-h-72 overflow-y-auto">
+                {(s.messages ?? []).map((m, i) => (
+                  <div key={i} className={cn("flex", m.role === "user" ? "justify-end" : "")}>
+                    <div className={cn("max-w-[80%] text-xs px-3 py-2 rounded-xl text-white/70",
+                      m.role === "user" ? "rounded-tr-none" : "rounded-tl-none text-white/50")}
+                      style={m.role === "user"
+                        ? { background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.12)" }
+                        : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      {renderContent(m.content)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* ── Chat Transcripts (PDF exports from the widget) ── */}
+      <div className="space-y-2">
+        <p className="text-[11px] font-semibold text-white/30 uppercase tracking-wider">
+          Chat Transcripts ({chatTranscripts.length})
+        </p>
+        {chatTranscripts.length === 0 && (
+          <p className="text-sm text-white/25 py-4 text-center">No saved chat PDFs yet — use "Download PDF" in the assistant widget.</p>
+        )}
+        {chatTranscripts.map(c => (
+          <div key={c.id} className="rounded-2xl overflow-hidden"
+            style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center gap-3 px-4 py-3">
+              <FileText className="w-4 h-4 text-blue-400 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-white/80 font-medium truncate">{c.label || "Chat transcript"}</p>
+                <p className="text-[10px] text-white/30">{fmt(c.created_at)} · {c.messages?.length ?? 0} message{c.messages?.length !== 1 ? "s" : ""}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {c.pdf_url && (
+                  <a href={c.pdf_url} target="_blank" rel="noreferrer"
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                    style={{ background: "rgba(52,211,153,0.12)", border: "1px solid rgba(52,211,153,0.25)", color: "#34D399" }}>
+                    <Download className="w-3 h-3" /> PDF
+                  </a>
+                )}
+                <button onClick={() => toggle(c.id)}
+                  className="px-2.5 py-1.5 rounded-lg text-xs text-white/40 hover:text-white/70 transition-colors flex items-center gap-1">
+                  <ChevronRight className={cn("w-3.5 h-3.5 transition-transform", expandedId === c.id && "rotate-90")} />
+                  {expandedId === c.id ? "Hide" : "View"}
+                </button>
+                <button onClick={() => deleteChatTranscript(c.id, c.pdf_path)}
+                  className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+            {expandedId === c.id && (
+              <div className="border-t border-white/[0.06] px-4 pb-4 pt-3 space-y-3 max-h-72 overflow-y-auto">
+                {(c.messages ?? []).map((m, i) => (
+                  <div key={i} className={cn("flex", m.role === "user" ? "justify-end" : "")}>
+                    <div className={cn("max-w-[80%] text-xs px-3 py-2 rounded-xl text-white/70",
+                      m.role === "user" ? "rounded-tr-none" : "rounded-tl-none text-white/50")}
+                      style={m.role === "user"
+                        ? { background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.12)" }
+                        : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      {renderContent(m.content)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1527,8 +1659,8 @@ export default function VoicePage() {
   const [recState,    setRecState]   = useState<RecordState>("idle");
   const [turns,       setTurns]      = useState<Turn[]>([]);
   const [error,       setError]      = useState("");
-  const [voices,      setVoices]     = useState<SpeechSynthesisVoice[]>([]);
-  const [voice,       setVoice]      = useState<SpeechSynthesisVoice | null>(null);
+  const [voices,      setVoices]     = useState<string[]>([]);
+  const [voice,       setVoice]      = useState<string | null>(null);
   const [showPicker,  setShowPicker] = useState(false);
   const [liveText,    setLiveText]   = useState("");
 
@@ -1538,6 +1670,7 @@ export default function VoicePage() {
   const streamRef    = useRef<MediaStream | null>(null);
   const scrollRef    = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string>(crypto.randomUUID());
+  const audioRef     = useRef<HTMLAudioElement | null>(null);
 
   const setRec = (s: RecordState) => { recStateRef.current = s; setRecState(s); };
 
@@ -1547,27 +1680,35 @@ export default function VoicePage() {
     onFinal:   (t) => setLiveText(t),
   });
 
-  // Load browser voices
+  // Load available Groq PlayAI TTS voices from the backend
   useEffect(() => {
-    const load = () => {
-      const v = getBrowserVoices();
-      if (v.length) { setVoices(v); setVoice(v[0]); }
-    };
-    load();
-    window.speechSynthesis.onvoiceschanged = load;
+    (async () => {
+      try {
+        const res  = await fetch(`${API}/api/v1/voice/voices`);
+        const data = await res.json();
+        const v: string[] = data.voices ?? [];
+        if (v.length) { setVoices(v); setVoice(v[0]); }
+      } catch { /* backend unreachable — voice picker stays empty */ }
+    })();
   }, []);
 
   useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: "smooth" }); }, [turns]);
 
-  // Auto-save voice session to Supabase after each turn (debounced 1s)
+  // Auto-save voice session via the backend after each turn (debounced 1s)
   useEffect(() => {
     if (turns.length === 0) return;
     const timer = setTimeout(async () => {
-      await supabase.from("voice_sessions").upsert({
-        id:    sessionIdRef.current,
-        label: turns[0].transcript.slice(0, 80),
-        turns,
-      });
+      try {
+        await fetch(`${API}/api/v1/voice/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id:    sessionIdRef.current,
+            label: turns[0].transcript.slice(0, 80),
+            turns,
+          }),
+        });
+      } catch { /* silent — auto-save best-effort */ }
     }, 1000);
     return () => clearTimeout(timer);
   }, [turns]);
@@ -1602,7 +1743,7 @@ export default function VoicePage() {
       };
 
       setRec("playing");
-      speakText(response, voice, () => setRec("idle"));
+      speakViaBackend(response, voice, audioRef, () => setRec("idle"));
 
       setTurns((prev) => [...prev, {
         id: crypto.randomUUID(), transcript, response,
@@ -1618,7 +1759,7 @@ export default function VoicePage() {
 
   const startRecording = useCallback(async () => {
     if (recStateRef.current !== "idle") return;
-    window.speechSynthesis.cancel();
+    audioRef.current?.pause();
     setError("");
     setLiveText("");
     try {
@@ -1654,7 +1795,7 @@ export default function VoicePage() {
     const s = recStateRef.current;
     if (s === "idle")      return startRecording();
     if (s === "recording") return stopRecording();
-    if (s === "playing")   { window.speechSynthesis.cancel(); setRec("idle"); }
+    if (s === "playing")   { audioRef.current?.pause(); setRec("idle"); }
   };
 
   const statusLabel: Record<RecordState, string> = {
@@ -1670,9 +1811,9 @@ export default function VoicePage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Voice Assistant</h1>
+          <h1 className="text-4xl font-bold text-white">Voice Assistant</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Groq Whisper STT · Web Speech live preview · Browser TTS
+            Groq Whisper STT · Web Speech live preview · Groq PlayAI TTS
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1688,7 +1829,7 @@ export default function VoicePage() {
           <div className="relative">
             <Button variant="outline" size="sm" onClick={() => setShowPicker((v) => !v)} className="gap-2 text-xs max-w-[160px] truncate">
               <Settings2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span className="truncate">{voice?.name ?? "Default voice"}</span>
+              <span className="truncate capitalize">{voice ?? "Default voice"}</span>
               <ChevronDown className="w-3 h-3 shrink-0" />
             </Button>
             <AnimatePresence>
@@ -1700,12 +1841,11 @@ export default function VoicePage() {
                 >
                   <div className="py-1 max-h-64 overflow-y-auto flex flex-col">
                     {voices.map((v) => (
-                      <button key={v.name} onClick={() => { setVoice(v); setShowPicker(false); }}
-                        className={cn("block w-full text-left px-4 py-2 text-xs transition-colors",
-                          v.name === voice?.name ? "text-cyan-400 bg-cyan-500/10" : "text-white/60 hover:text-white hover:bg-white/4"
+                      <button key={v} onClick={() => { setVoice(v); setShowPicker(false); }}
+                        className={cn("block w-full text-left px-4 py-2 text-xs capitalize transition-colors",
+                          v === voice ? "text-cyan-400 bg-cyan-500/10" : "text-white/60 hover:text-white hover:bg-white/4"
                         )}>
-                        {v.name}
-                        <span className="text-white/25 ml-1">({v.lang})</span>
+                        {v}
                       </button>
                     ))}
                   </div>
@@ -1834,8 +1974,8 @@ export default function VoicePage() {
           </motion.button>
         </div>
 
-        <p className="text-[10px] text-white/20">
-          {voice ? `Voice: ${voice.name}` : "No browser voice loaded"}
+        <p className="text-[10px] text-white/20 capitalize">
+          {voice ? `Voice: ${voice}` : "No TTS voice loaded"}
           {!stt.isSupported && " · Live preview unavailable in this browser"}
         </p>
       </div>

@@ -1,5 +1,7 @@
 import { create } from "zustand";
-import { supabase } from "@/lib/supabase";
+import axios from "axios";
+
+const API = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export interface Tender {
   id: string;
@@ -28,40 +30,48 @@ export const useTenderStore = create<TenderStore>()((set, get) => ({
 
   fetch: async (userId) => {
     set({ loading: true });
-    const { data, error } = await supabase
-      .from("tenders")
-      .select("*")
-      .eq("user_id", userId)
-      .order("updated_at", { ascending: false });
-    if (!error && data) set({ tenders: data as Tender[] });
-    set({ loading: false });
+    try {
+      const res = await axios.get(`${API}/api/v1/tenders`, { params: { user_id: userId } });
+      set({ tenders: (res.data.tenders ?? []) as Tender[] });
+    } catch (e) {
+      console.error("[tenderStore] fetch error:", e);
+    } finally {
+      set({ loading: false });
+    }
   },
 
   save: async (userId, data) => {
-    const { data: row, error } = await supabase
-      .from("tenders")
-      .insert({ user_id: userId, ...data })
-      .select()
-      .single();
-    if (!error && row) {
-      set((s) => ({ tenders: [row as Tender, ...s.tenders] }));
-      return row as Tender;
+    try {
+      const res = await axios.post(`${API}/api/v1/tenders`, { user_id: userId, ...data });
+      const row = res.data.tender as Tender | null;
+      if (row) {
+        set((s) => ({ tenders: [row, ...s.tenders] }));
+        return row;
+      }
+      return null;
+    } catch (e) {
+      console.error("[tenderStore] save error:", e);
+      return null;
     }
-    console.error("[tenderStore] save error:", error?.message);
-    return null;
   },
 
   update: async (id, data) => {
-    const { error } = await supabase.from("tenders").update(data).eq("id", id);
-    if (!error) {
+    try {
+      await axios.patch(`${API}/api/v1/tenders/${id}`, data);
       set((s) => ({
         tenders: s.tenders.map((t) => t.id === id ? { ...t, ...data } : t),
       }));
+    } catch (e) {
+      console.error("[tenderStore] update error:", e);
     }
   },
 
   remove: async (id) => {
-    await supabase.from("tenders").delete().eq("id", id);
-    set((s) => ({ tenders: s.tenders.filter((t) => t.id !== id) }));
+    try {
+      await axios.delete(`${API}/api/v1/tenders/${id}`);
+      set((s) => ({ tenders: s.tenders.filter((t) => t.id !== id) }));
+    } catch (e) {
+      console.error("[tenderStore] remove error:", e);
+    }
   },
 }));

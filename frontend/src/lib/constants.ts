@@ -18,11 +18,12 @@ export const STATUS_BADGE: Record<InvoiceStatus, string> = {
 
 // Recharts tooltip style — shared across all pages
 export const CHART_TOOLTIP_STYLE: React.CSSProperties = {
-  backgroundColor: "#0f172a",
-  border:          "1px solid #1e293b",
+  backgroundColor: "rgba(4,11,25,0.95)",
+  border:          "1px solid rgba(0,212,255,0.15)",
   borderRadius:    "12px",
-  color:           "#f8fafc",
+  color:           "#e2e8f0",
   fontSize:        "12px",
+  boxShadow:       "0 8px 32px rgba(0,0,0,0.5)",
 };
 
 // Burn-rate chart colours (budget line = blue, actual spend = amber)

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, Suspense } from "react";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
-import { Send, Bot, User, Loader2, RefreshCw, Hash, X, FileText, Image, AudioLines } from "lucide-react";
+import { Send, Bot, User, Loader2, RefreshCw, Hash, X, FileText, Image, AudioLines, Scale, Plus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import VoiceButton from "@/components/shared/VoiceButton";
@@ -18,8 +18,16 @@ const SESSION_KEY = "civilai_copilot_session";
 
 const COPILOT_TABS = [
   { id: "chat",    label: "Chat" },
+  { id: "compare", label: "Compare" },
   { id: "writing", label: "Writing Assistant" },
 ];
+
+interface CompareAttr { key: string; value: string }
+interface CompareItem { name: string; attrs: CompareAttr[] }
+
+function emptyCompareItem(label: string): CompareItem {
+  return { name: label, attrs: [{ key: "", value: "" }] };
+}
 
 const SUGGESTIONS = [
   "What are the main causes of construction delays?",
@@ -31,10 +39,13 @@ const SUGGESTIONS = [
 ];
 
 interface Message {
-  id:        string;
-  role:      "user" | "assistant";
-  content:   string;
-  timestamp: string;
+  id:         string;
+  role:       "user" | "assistant";
+  content:    string;
+  timestamp:  string;
+  confidence?: number;
+  domain?:     string;
+  followUp?:   string;
 }
 
 function renderContent(text: string) {
@@ -45,7 +56,7 @@ function renderContent(text: string) {
   );
 }
 
-function Bubble({ msg }: { msg: Message }) {
+function Bubble({ msg, onFollowUp }: { msg: Message; onFollowUp?: (text: string) => void }) {
   const isUser = msg.role === "user";
   return (
     <motion.div
@@ -71,6 +82,28 @@ function Bubble({ msg }: { msg: Message }) {
         )}>
           <p className="whitespace-pre-wrap">{renderContent(msg.content)}</p>
         </div>
+        {!isUser && (msg.domain || msg.confidence !== undefined) && (
+          <div className="flex items-center gap-2 flex-wrap pl-1">
+            {msg.domain && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 capitalize">
+                {msg.domain}
+              </span>
+            )}
+            {msg.confidence !== undefined && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                {Math.round(msg.confidence * 100)}% confidence
+              </span>
+            )}
+          </div>
+        )}
+        {!isUser && msg.followUp && (
+          <button
+            onClick={() => onFollowUp?.(msg.followUp!)}
+            className="ml-1 text-xs text-blue-400 hover:text-blue-300 hover:underline text-left"
+          >
+            → {msg.followUp}
+          </button>
+        )}
         <p className={cn("text-[10px] text-muted-foreground", isUser ? "text-right pr-1" : "pl-1")}>
           {msg.timestamp}
         </p>
@@ -109,11 +142,18 @@ export default function CopilotPage() {
   const [sessionId,   setSessionId]   = useState("");
   const [msgCount,    setMsgCount]    = useState(0);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [structuredMode, setStructuredMode] = useState(false);
   const bottomRef    = useRef<HTMLDivElement>(null);
   const inputRef     = useRef<HTMLTextAreaElement>(null);
   const docInputRef  = useRef<HTMLInputElement>(null);
   const imgInputRef  = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
+
+  // Compare tab
+  const [compareContext, setCompareContext] = useState("Risk Analysis");
+  const [compareItems, setCompareItems] = useState<CompareItem[]>([emptyCompareItem("Item A"), emptyCompareItem("Item B")]);
+  const [compareResult, setCompareResult] = useState("");
+  const [compareLoading, setCompareLoading] = useState(false);
 
   const AUDIO_EXTS = new Set(["mp3", "wav", "webm", "m4a", "ogg", "flac", "mp4"]);
   const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
@@ -124,6 +164,13 @@ export default function CopilotPage() {
     return FileText;
   };
 
+  const welcomeMessage = (): Message => ({
+    id:        "welcome",
+    role:      "assistant",
+    content:   "Hello! I'm CivilAI Copilot, your AI assistant for construction management. I remember our conversations across sessions — ask me anything about scheduling, cost, safety, contracts, or workforce.",
+    timestamp: new Date().toLocaleTimeString(),
+  });
+
   useEffect(() => {
     let sid = "";
     try { sid = localStorage.getItem(SESSION_KEY) ?? ""; } catch {}
@@ -132,12 +179,25 @@ export default function CopilotPage() {
       try { localStorage.setItem(SESSION_KEY, sid); } catch {}
     }
     setSessionId(sid);
-    setMessages([{
-      id:        "welcome",
-      role:      "assistant",
-      content:   "Hello! I'm CivilAI Copilot, your AI assistant for construction management. I remember our conversations across sessions — ask me anything about scheduling, cost, safety, contracts, or workforce.",
-      timestamp: new Date().toLocaleTimeString(),
-    }]);
+
+    (async () => {
+      try {
+        const res = await fetch(`${API}/api/v1/copilot/sessions/${sid}/history`);
+        const data = await res.json();
+        const history: { role: "user" | "assistant"; content: string; created_at?: string }[] = data.messages || [];
+        if (history.length > 0) {
+          setMessages(history.map((m) => ({
+            id:        crypto.randomUUID(),
+            role:      m.role,
+            content:   m.content,
+            timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString() : "",
+          })));
+          setMsgCount(Math.floor(history.length / 2));
+          return;
+        }
+      } catch { /* fall through to welcome message */ }
+      setMessages([welcomeMessage()]);
+    })();
   }, []);
 
   useEffect(() => {
@@ -175,6 +235,13 @@ export default function CopilotPage() {
         form.append("session_id", sessionId);
         const res = await fetch(`${API}/api/v1/copilot/upload`, { method: "POST", body: form });
         data = await res.json();
+      } else if (structuredMode) {
+        const res = await fetch(`${API}/api/v1/copilot/structured`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ message: msg, session_id: sessionId }),
+        });
+        data = await res.json();
       } else {
         const res = await fetch(`${API}/api/v1/copilot/chat`, {
           method:  "POST",
@@ -190,10 +257,13 @@ export default function CopilotPage() {
         try { localStorage.setItem(SESSION_KEY, sid); } catch {}
       }
       setMessages((prev) => [...prev, {
-        id:        crypto.randomUUID(),
-        role:      "assistant",
-        content:   data.response ?? "Sorry, I couldn't generate a response.",
-        timestamp: new Date().toLocaleTimeString(),
+        id:         crypto.randomUUID(),
+        role:       "assistant",
+        content:    data.answer ?? data.response ?? "Sorry, I couldn't generate a response.",
+        timestamp:  new Date().toLocaleTimeString(),
+        confidence: data.confidence,
+        domain:     data.domain,
+        followUp:   data.follow_up ?? undefined,
       }]);
       setMsgCount((c) => c + 1);
     } catch {
@@ -236,6 +306,63 @@ export default function CopilotPage() {
     }
   };
 
+  const addCompareItem = () => {
+    setCompareItems((prev) => [...prev, emptyCompareItem(`Item ${String.fromCharCode(65 + prev.length)}`)]);
+  };
+
+  const removeCompareItem = (idx: number) => {
+    setCompareItems((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const updateCompareItemName = (idx: number, name: string) => {
+    setCompareItems((prev) => prev.map((it, i) => i === idx ? { ...it, name } : it));
+  };
+
+  const addCompareAttr = (idx: number) => {
+    setCompareItems((prev) => prev.map((it, i) => i === idx ? { ...it, attrs: [...it.attrs, { key: "", value: "" }] } : it));
+  };
+
+  const updateCompareAttr = (idx: number, attrIdx: number, field: "key" | "value", val: string) => {
+    setCompareItems((prev) => prev.map((it, i) => i === idx
+      ? { ...it, attrs: it.attrs.map((a, ai) => ai === attrIdx ? { ...a, [field]: val } : a) }
+      : it));
+  };
+
+  const removeCompareAttr = (idx: number, attrIdx: number) => {
+    setCompareItems((prev) => prev.map((it, i) => i === idx
+      ? { ...it, attrs: it.attrs.filter((_, ai) => ai !== attrIdx) }
+      : it));
+  };
+
+  const runCompare = async () => {
+    const items = compareItems
+      .filter((it) => it.name.trim())
+      .map((it) => ({
+        name: it.name.trim(),
+        data: Object.fromEntries(it.attrs.filter((a) => a.key.trim()).map((a) => [a.key.trim(), a.value])),
+      }));
+    if (items.length < 2) {
+      setCompareResult("");
+      return;
+    }
+    setCompareLoading(true);
+    setCompareResult("");
+    try {
+      const res = await fetch(`${API}/api/v1/copilot/compare`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ context: compareContext, items }),
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setCompareResult(data.response ?? "No comparison generated.");
+    } catch {
+      setCompareResult("Sorry, the comparison failed. Please try again.");
+    } finally {
+      setCompareLoading(false);
+    }
+  };
+
   const tabBar = (
     <div className="flex gap-0 border-b border-border shrink-0">
       {COPILOT_TABS.map((t) => (
@@ -253,6 +380,94 @@ export default function CopilotPage() {
       ))}
     </div>
   );
+
+  if (subTab === "compare") {
+    return (
+      <div className="space-y-6">
+        {tabBar}
+        <div className="pt-6 space-y-4">
+          <div>
+            <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
+              <Scale className="w-5 h-5 text-blue-400" /> Compare Items
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Get an AI-generated side-by-side comparison of 2 or more projects, runs, or datasets.
+            </p>
+          </div>
+
+          <input
+            placeholder="Comparison context (e.g. Risk Analysis, Cost Overrun, Vendor Performance)"
+            value={compareContext}
+            onChange={(e) => setCompareContext(e.target.value)}
+            className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {compareItems.map((item, idx) => (
+              <div key={idx} className="bg-card border border-border rounded-2xl p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    value={item.name}
+                    onChange={(e) => updateCompareItemName(idx, e.target.value)}
+                    placeholder="Item name"
+                    className="flex-1 px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm font-medium text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {compareItems.length > 2 && (
+                    <button onClick={() => removeCompareItem(idx)} className="text-muted-foreground hover:text-red-400 p-1">
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  {item.attrs.map((attr, attrIdx) => (
+                    <div key={attrIdx} className="flex items-center gap-2">
+                      <input
+                        value={attr.key}
+                        onChange={(e) => updateCompareAttr(idx, attrIdx, "key", e.target.value)}
+                        placeholder="Field (e.g. risk_score)"
+                        className="flex-1 px-2.5 py-1.5 bg-secondary border border-border rounded-lg text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <input
+                        value={attr.value}
+                        onChange={(e) => updateCompareAttr(idx, attrIdx, "value", e.target.value)}
+                        placeholder="Value"
+                        className="flex-1 px-2.5 py-1.5 bg-secondary border border-border rounded-lg text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      {item.attrs.length > 1 && (
+                        <button onClick={() => removeCompareAttr(idx, attrIdx)} className="text-muted-foreground hover:text-red-400 p-1 shrink-0">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => addCompareAttr(idx)}
+                  className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300">
+                  <Plus className="w-3.5 h-3.5" /> Add field
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Button variant="outline" onClick={addCompareItem}>
+              <Plus className="w-4 h-4 mr-2" /> Add Item
+            </Button>
+            <Button onClick={runCompare} disabled={compareLoading} className="gradient-blue text-white border-0">
+              {compareLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+              Compare
+            </Button>
+          </div>
+
+          {compareResult && (
+            <div className="bg-card border border-blue-500/20 rounded-2xl p-6">
+              <p className="whitespace-pre-wrap text-sm text-foreground leading-relaxed">{renderContent(compareResult)}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (subTab !== "chat") {
     return (
@@ -276,22 +491,34 @@ export default function CopilotPage() {
             <Bot className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-foreground">AI Copilot</h1>
+            <h1 className="text-4xl font-bold text-foreground">AI Copilot</h1>
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               <p className="text-xs text-muted-foreground">Groq LLaMA 3.3 · Persistent memory</p>
             </div>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={clearSession}
-          title="New conversation"
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <RefreshCw className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant={structuredMode ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setStructuredMode((v) => !v)}
+            title="Structured mode — confidence score, domain tag, follow-up suggestion"
+            className={structuredMode ? "gradient-blue text-white border-0 text-xs" : "text-muted-foreground hover:text-foreground text-xs"}
+          >
+            <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+            Structured
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={clearSession}
+            title="New conversation"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
       {/* Session info strip */}
@@ -309,7 +536,9 @@ export default function CopilotPage() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2">
-        {messages.map((msg) => <Bubble key={msg.id} msg={msg} />)}
+        {messages.map((msg) => (
+          <Bubble key={msg.id} msg={msg} onFollowUp={(text) => { setInput(text); inputRef.current?.focus(); }} />
+        ))}
 
         {loading && <TypingDots />}
 

@@ -14,6 +14,8 @@ import {
   Pencil,
   Check,
   X,
+  Scale,
+  CalendarClock,
 } from "lucide-react";
 import {
   AreaChart,
@@ -88,6 +90,22 @@ export default function ProcurementPage() {
   const [poResult, setPoResult] = useState("");
   const [poLoading, setPoLoading] = useState(false);
 
+  // Compare Suppliers
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+  const [compareRequirements, setCompareRequirements] = useState({ budget_priority: "medium", quality_priority: "high", delivery_priority: "medium" });
+  const [compareResult, setCompareResult] = useState("");
+  const [compareLoading, setCompareLoading] = useState(false);
+
+  // Demand Forecast
+  const [demandOpen, setDemandOpen] = useState(false);
+  const [demandForm, setDemandForm] = useState({
+    project_name: "", project_type: "", total_area: 0,
+    start_date: "", end_date: "", key_materials: "",
+  });
+  const [demandResult, setDemandResult] = useState("");
+  const [demandLoading, setDemandLoading] = useState(false);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -124,6 +142,53 @@ export default function ProcurementPage() {
     }
   };
 
+  const toggleSupplier = (name: string) => {
+    setSelectedSuppliers((prev) => prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]);
+  };
+
+  const runCompareSuppliers = async () => {
+    if (selectedSuppliers.length < 2) { toast.error("Select at least 2 suppliers to compare"); return; }
+    setCompareLoading(true);
+    setCompareResult("");
+    try {
+      const selected = suppliers.filter((s) => selectedSuppliers.includes(s.name));
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/procurement/compare-suppliers`,
+        { suppliers: selected, requirements: compareRequirements }
+      );
+      setCompareResult(response.data.comparison);
+      toast.success("Supplier comparison ready!");
+    } catch {
+      toast.error("Failed to compare suppliers");
+    } finally {
+      setCompareLoading(false);
+    }
+  };
+
+  const runDemandForecast = async () => {
+    if (!demandForm.project_name || !demandForm.project_type) {
+      toast.error("Project name and type are required");
+      return;
+    }
+    setDemandLoading(true);
+    setDemandResult("");
+    try {
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/procurement/demand-forecast`,
+        {
+          ...demandForm,
+          key_materials: demandForm.key_materials.split(",").map((s) => s.trim()).filter(Boolean),
+        }
+      );
+      setDemandResult(response.data.forecast);
+      toast.success("Material demand forecast ready!");
+    } catch {
+      toast.error("Failed to forecast demand");
+    } finally {
+      setDemandLoading(false);
+    }
+  };
+
   const startEdit = (i: number) => { setEditingIdx(i); setEditItem({ ...items[i] }); };
   const saveEdit = () => {
     if (editingIdx === null) return;
@@ -155,7 +220,7 @@ export default function ProcurementPage() {
         className="flex items-center justify-between"
       >
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Procurement</h1>
+          <h1 className="text-4xl font-bold text-foreground">Procurement</h1>
           <p className="text-muted-foreground text-sm mt-1">
             AI-powered procurement & supplier management
           </p>
@@ -164,6 +229,14 @@ export default function ProcurementPage() {
           <Button variant="outline" onClick={() => setPoOpen(!poOpen)}>
             <Package className="w-4 h-4 mr-2 text-blue-400" />
             Generate PO
+          </Button>
+          <Button variant="outline" onClick={() => setCompareOpen(!compareOpen)}>
+            <Scale className="w-4 h-4 mr-2 text-cyan-400" />
+            Compare Suppliers
+          </Button>
+          <Button variant="outline" onClick={() => setDemandOpen(!demandOpen)}>
+            <CalendarClock className="w-4 h-4 mr-2 text-emerald-400" />
+            Demand Forecast
           </Button>
           <label className="cursor-pointer">
             <input type="file" className="hidden" accept=".pdf,.xlsx,.docx" onChange={handleFileUpload} />
@@ -321,6 +394,87 @@ export default function ProcurementPage() {
           {poResult && (
             <div className="mt-4 p-4 bg-secondary rounded-xl">
               <MarkdownText text={poResult} className="text-sm text-foreground leading-relaxed" />
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* Compare Suppliers */}
+      {compareOpen && (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-cyan-500/30 rounded-2xl p-6">
+          <h3 className="font-semibold text-foreground mb-4">AI Supplier Comparison</h3>
+          <p className="text-xs text-muted-foreground mb-3">Select 2 or more suppliers from your register to compare</p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {suppliers.map((s) => (
+              <button key={s.name} onClick={() => toggleSupplier(s.name)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
+                  selectedSuppliers.includes(s.name)
+                    ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/30"
+                    : "bg-secondary text-muted-foreground border-border hover:text-foreground"
+                }`}>
+                {s.name}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            {(["budget_priority", "quality_priority", "delivery_priority"] as const).map((key) => (
+              <div key={key}>
+                <label className="text-xs text-muted-foreground mb-1.5 block capitalize">{key.replace("_", " ")}</label>
+                <select value={compareRequirements[key]}
+                  onChange={(e) => setCompareRequirements({ ...compareRequirements, [key]: e.target.value })}
+                  className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+            ))}
+          </div>
+          <Button onClick={runCompareSuppliers} disabled={compareLoading} className="bg-cyan-500 hover:bg-cyan-600 text-white border-0">
+            {compareLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Scale className="w-4 h-4 mr-2" />}
+            Compare Selected Suppliers
+          </Button>
+          {compareResult && (
+            <div className="mt-4 p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
+              <MarkdownText text={compareResult} className="text-sm text-foreground leading-relaxed" />
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* Demand Forecast */}
+      {demandOpen && (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-emerald-500/30 rounded-2xl p-6">
+          <h3 className="font-semibold text-foreground mb-4">AI Material Demand Forecast</h3>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <input placeholder="Project name" value={demandForm.project_name}
+              onChange={(e) => setDemandForm({ ...demandForm, project_name: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            <input placeholder="Project type (e.g. Commercial)" value={demandForm.project_type}
+              onChange={(e) => setDemandForm({ ...demandForm, project_type: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            <input type="number" placeholder="Total area (sqm)" value={demandForm.total_area || ""}
+              onChange={(e) => setDemandForm({ ...demandForm, total_area: parseFloat(e.target.value) || 0 })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            <input placeholder="Key materials (comma-separated)" value={demandForm.key_materials}
+              onChange={(e) => setDemandForm({ ...demandForm, key_materials: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            <input type="date" value={demandForm.start_date}
+              onChange={(e) => setDemandForm({ ...demandForm, start_date: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            <input type="date" value={demandForm.end_date}
+              onChange={(e) => setDemandForm({ ...demandForm, end_date: e.target.value })}
+              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          <Button onClick={runDemandForecast} disabled={demandLoading} className="bg-emerald-500 hover:bg-emerald-600 text-white border-0">
+            {demandLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CalendarClock className="w-4 h-4 mr-2" />}
+            Forecast Demand
+          </Button>
+          {demandResult && (
+            <div className="mt-4 p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-xl">
+              <MarkdownText text={demandResult} className="text-sm text-foreground leading-relaxed" />
             </div>
           )}
         </motion.div>

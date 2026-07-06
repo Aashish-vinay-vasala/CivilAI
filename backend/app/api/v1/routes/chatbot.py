@@ -18,6 +18,7 @@ from pydantic import BaseModel, field_validator
 from app.ai.copilot import get_copilot_response
 from app.ai.chatbot_memory import get_history, add_message, clear_session
 from app.ai.memory_mem0 import mem0_context, mem0_add
+from app.ai.memory_zep import zep_context, zep_add_messages
 from app.core.guardrails import sanitize_prompt, validate_output
 from app.core.llama_guard import check_input
 from app.services.voice_db_service import build_module_context
@@ -62,12 +63,14 @@ async def widget_chat(body: WidgetMessage):
 
     # Pull relevant long-term memories (non-blocking thread call)
     memory_ctx = await asyncio.to_thread(mem0_context, body.message, session_id)
+    zep_ctx = await zep_context(session_id, body.message)
+    combined_ctx = "\n\n".join(c for c in (memory_ctx, zep_ctx) if c)
 
     effective_msg = body.message
     if body.context:
         effective_msg = f"[Context: {body.context}] {effective_msg}"
-    if memory_ctx:
-        effective_msg = f"{memory_ctx}\n\n{effective_msg}"
+    if combined_ctx:
+        effective_msg = f"{combined_ctx}\n\n{effective_msg}"
 
     # Fetch live project data from all relevant modules
     try:
@@ -94,11 +97,9 @@ async def widget_chat(body: WidgetMessage):
     add_message(session_id, "assistant", reply,        channel=body.channel)
 
     # Store this turn in long-term memory (fire-and-forget — doesn't delay response)
-    asyncio.create_task(asyncio.to_thread(
-        mem0_add,
-        [{"role": "user", "content": body.message}, {"role": "assistant", "content": reply}],
-        session_id,
-    ))
+    turn_messages = [{"role": "user", "content": body.message}, {"role": "assistant", "content": reply}]
+    asyncio.create_task(asyncio.to_thread(mem0_add, turn_messages, session_id))
+    asyncio.create_task(zep_add_messages(session_id, turn_messages))
 
     return WidgetResponse(reply=reply, session_id=session_id)
 

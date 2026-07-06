@@ -8,11 +8,11 @@ import {
   Settings, LayoutDashboard, DollarSign, Users,
   FileText, Boxes, BarChart3, Bot, Building2,
   ChevronLeft, ChevronRight, X, Calendar, HardHat,
-  Shield, Brain, ClipboardList, FolderOpen, Pin, PinOff,
-  Zap, HeadphonesIcon, Calculator, Mic, Wand2,
+  Shield, ClipboardList, FolderOpen, Pin, PinOff,
+  Zap, HeadphonesIcon, Mic, Wand2, ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useRoleStore, ROLE_LABELS } from "@/lib/stores/roleStore";
+import { useRoleStore, ROLE_LABELS, RolePermissions } from "@/lib/stores/roleStore";
 import { useAuth } from "@/lib/auth";
 import { usePinnedStore } from "@/lib/stores/pinnedStore";
 
@@ -21,7 +21,7 @@ interface NavItem {
   icon: React.ElementType;
   label: string;
   badge?: string;
-  dot?: "online" | "warning";
+  requires?: keyof RolePermissions;
 }
 interface NavGroup { label: string; items: NavItem[] }
 
@@ -29,7 +29,7 @@ const navGroups: NavGroup[] = [
   {
     label: "Workspace",
     items: [
-      { href: "/dashboard",    icon: LayoutDashboard, label: "Dashboard",    dot: "online" },
+      { href: "/dashboard",    icon: LayoutDashboard, label: "Dashboard" },
       { href: "/projects",     icon: FolderOpen,      label: "Projects" },
       { href: "/cost",         icon: DollarSign,      label: "Cost & Budget" },
       { href: "/scheduling",   icon: Calendar,        label: "Scheduling" },
@@ -37,24 +37,23 @@ const navGroups: NavGroup[] = [
       { href: "/workforce",    icon: Users,           label: "Workforce" },
       { href: "/safety",       icon: Shield,          label: "Safety" },
       { href: "/documents",    icon: FileText,        label: "Documents" },
-      { href: "/accounting",   icon: Calculator,      label: "Accounting Extract" },
       { href: "/bim",          icon: Boxes,           label: "Site & BIM" },
     ],
   },
   {
     label: "Intelligence",
     items: [
-      { href: "/copilot",  icon: Bot,            label: "AI Copilot",  badge: "AI" },
-      { href: "/agent",    icon: Wand2,          label: "AI Agent",    badge: "NEW" },
-      { href: "/voice",    icon: Mic,            label: "Voice Bot",   badge: "NEW" },
+      { href: "/copilot",  icon: Bot,            label: "AI Copilot" },
+      { href: "/agent",    icon: Wand2,          label: "AI Agent" },
+      { href: "/voice",    icon: Mic,            label: "Voice Bot" },
       { href: "/analytics",  icon: BarChart3,     label: "Analytics" },
-      { href: "/predictive", icon: Brain,         label: "Predictive" },
       { href: "/reports",    icon: ClipboardList, label: "Reports" },
     ],
   },
   {
     label: "System",
     items: [
+      { href: "/review",   icon: ShieldCheck,    label: "Review Queue", requires: "canApproveContracts" },
       { href: "/support",  icon: HeadphonesIcon, label: "Support" },
       { href: "/settings", icon: Settings,        label: "Settings" },
     ],
@@ -84,6 +83,7 @@ const SUB_ROUTE_MAP: Record<string, string> = {
   "/anomaly":           "/analytics",
   "/mlops":             "/analytics",
   "/gnn":               "/analytics",
+  "/predictive":        "/analytics",
   "/daily-reports":     "/construction",
   "/rfis":              "/construction",
   "/meetings":          "/construction",
@@ -180,14 +180,12 @@ function NavItemRow({
                   </span>
                 )}
 
-                {item.dot && (
+                {isActive && (
                   <span
                     className="w-1.5 h-1.5 rounded-full shrink-0"
                     style={{
-                      background: item.dot === "online" ? "#10B981" : "#F59E0B",
-                      boxShadow: item.dot === "online"
-                        ? "0 0 6px rgba(16,185,129,0.8)"
-                        : "0 0 6px rgba(245,158,11,0.8)",
+                      background: "#10B981",
+                      boxShadow: "0 0 6px rgba(16,185,129,0.8)",
                       animation: "dot-ping 2s ease-in-out infinite",
                     }}
                   />
@@ -234,12 +232,13 @@ function SidebarContent({
   onClose?: () => void;
 }) {
   const pathname = usePathname();
-  const { role } = useRoleStore();
+  const { role, can } = useRoleStore();
   const { user } = useAuth();
   const { pinned, pin, unpin, isPinned } = usePinnedStore();
   const [hoveredHref, setHoveredHref] = useState<string | null>(null);
 
-  const pinnedItems = allNavItems.filter((i) => pinned.includes(i.href));
+  const visible = (i: NavItem) => !i.requires || can(i.requires);
+  const pinnedItems = allNavItems.filter((i) => pinned.includes(i.href) && visible(i));
   const displayName = user?.user_metadata?.full_name ?? "CivilAI Admin";
   const initials = displayName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
 
@@ -275,11 +274,8 @@ function SidebarContent({
             transition={{ duration: 0.2 }}
             className="flex-1 min-w-0"
           >
-            <div className="font-display text-[15px] font-bold leading-none tracking-widest text-white">
+            <div className="font-display text-2xl leading-[36px] tracking-wider text-white">
               CIVIL<span className="text-cyan-400 text-glow-cyan">AI</span>
-            </div>
-            <div className="text-[9px] text-white/25 tracking-[0.2em] mt-1 font-mono uppercase">
-              Platform v2.0
             </div>
           </motion.div>
         )}
@@ -309,7 +305,7 @@ function SidebarContent({
 
         {/* Groups */}
         {navGroups.map((group, gi) => {
-          const items = group.items.filter((i) => !pinned.includes(i.href));
+          const items = group.items.filter((i) => !pinned.includes(i.href) && visible(i));
           if (items.length === 0) return null;
           return (
             <div key={group.label} className={gi > 0 ? "pt-3" : ""}>

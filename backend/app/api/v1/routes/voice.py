@@ -23,6 +23,7 @@ from app.ai.copilot import get_copilot_response
 from app.core.guardrails import sanitize_prompt, validate_output
 from app.core.llama_guard import check_input
 from app.services.voice_db_service import build_module_context
+from app.services.web_search_service import search_web, build_search_query, filter_cited_sources
 
 router = APIRouter()
 logger = logging.getLogger("civilai.voice")
@@ -71,7 +72,7 @@ async def transcribe_endpoint(audio: UploadFile = File(...)):
 @router.post("/speak")
 async def speak_endpoint(
     text:  str = Form(...),
-    voice: str = Form(default="tara"),
+    voice: str = Form(default="autumn"),
 ):
     """Convert text to MP3 speech using Groq PlayAI TTS."""
     if not text.strip():
@@ -91,15 +92,17 @@ async def voice_chat_endpoint(
     session_id:       str        = Form(default=""),
     require_wakeword: bool       = Form(default=False),
     wakeword_threshold: float    = Form(default=0.5),
+    web_search:       bool       = Form(default=False),
 ):
     """
     Voice pipeline — STT + LLM only. TTS is handled by the browser (Web Speech API).
-    Returns JSON: { transcript, response, status, wakeword? }
+    Returns JSON: { transcript, response, status, sources?, wakeword? }
 
     require_wakeword    false (default) — always process audio
                         true            — only process if a wake word is detected first;
                                           returns { status: "no_wakeword" } otherwise
     wakeword_threshold  confidence cutoff 0–1 (default 0.5, only used when require_wakeword=true)
+    web_search          false (default) — augment the answer with live DuckDuckGo results
     """
     audio_bytes = await audio.read()
     if not audio_bytes:
@@ -156,8 +159,23 @@ async def voice_chat_endpoint(
     except Exception:
         module_ctx = ""
 
+    # Optional live web search
+    web_results: list[dict] = []
+    web_ctx = ""
+    if web_search:
+        search_query = build_search_query(clean_msg)
+        try:
+            web_results = search_web(search_query)
+        except Exception:
+            web_results = []
+        if web_results:
+            web_ctx = "\n".join(
+                f"{i + 1}. {r['title']} — {r['snippet']}\n   URL: {r['url']}"
+                for i, r in enumerate(web_results)
+            )
+
     try:
-        response_text = get_copilot_response(clean_msg, history, extra_context=module_ctx)
+        response_text = get_copilot_response(clean_msg, history, extra_context=module_ctx, web_context=web_ctx)
     except Exception as exc:
         raise HTTPException(500, f"LLM error: {exc}")
 
@@ -167,6 +185,7 @@ async def voice_chat_endpoint(
         "transcript": transcript,
         "response":   safe_response,
         "status":     "success",
+        "sources":    filter_cited_sources(safe_response, web_results),
     }
     if detected_wakeword:
         result["wakeword"] = detected_wakeword
@@ -176,7 +195,7 @@ async def voice_chat_endpoint(
 @router.get("/voices")
 async def list_voices():
     """List all available TTS voices."""
-    return {"voices": AVAILABLE_VOICES, "default": "Celeste-PlayAI"}
+    return {"voices": AVAILABLE_VOICES, "default": AVAILABLE_VOICES[0]}
 
 
 @router.get("/health")
@@ -537,3 +556,54 @@ async def save_vad_endpoint(
         raise HTTPException(500, f"Database save failed: {exc}")
 
     return {"success": True, "record": record, "pdf_url": pdf_url, "audio_url": audio_url}
+
+
+# ── Voice chat session history (the "Voice Chat Sessions" history tab) ────────
+
+class VoiceSessionUpsert(BaseModel):
+    id: str
+    label: str = ""
+    turns: list = []
+
+
+@router.get("/sessions")
+async def list_voice_sessions(limit: int = 30):
+    """List saved voice-chat conversation sessions, newest first."""
+    from app.core.database import supabase
+    try:
+        rows = (
+            supabase.table("voice_sessions")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+            .data or []
+        )
+        return {"sessions": rows}
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to fetch voice sessions: {exc}")
+
+
+@router.post("/sessions")
+async def upsert_voice_session(body: VoiceSessionUpsert):
+    """Create or update a voice-chat session (called after each conversation turn)."""
+    from app.core.database import supabase
+    try:
+        res = supabase.table("voice_sessions").upsert({
+            "id": body.id,
+            "label": body.label,
+            "turns": body.turns,
+        }).execute()
+        return {"success": True, "session": res.data[0] if res.data else None}
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to save voice session: {exc}")
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_voice_session(session_id: str):
+    from app.core.database import supabase
+    try:
+        supabase.table("voice_sessions").delete().eq("id", session_id).execute()
+        return {"success": True, "deleted": session_id}
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to delete voice session: {exc}")

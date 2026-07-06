@@ -12,13 +12,13 @@ interface Shortcut {
 }
 
 const Kbd = ({ keys }: { keys: string[] }) => (
-  <div className="flex items-center gap-1">
+  <span className="inline-flex items-center gap-1">
     {keys.map((k, i) => (
       <span key={i} className="px-1.5 py-0.5 text-xs font-mono font-medium bg-secondary border border-border rounded text-foreground">
         {k}
       </span>
     ))}
-  </div>
+  </span>
 );
 
 const sections = [

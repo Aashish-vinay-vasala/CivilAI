@@ -46,12 +46,14 @@ const roleColors: Record<string, string> = {
 
 export default function LandingPage() {
   const [mode, setMode] = useState<"landing" | "login">("landing");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
-  const { signIn, user, loading: authLoading } = useAuth();
+  const { signIn, signUp, user, loading: authLoading } = useAuth();
 
   // Auto-redirect logged-in users straight to dashboard
   useEffect(() => {
@@ -64,15 +66,25 @@ export default function LandingPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      const { error } = await signIn(email, password);
-      if (error) {
-        toast.error(error.message);
+      if (authMode === "signup") {
+        const { error } = await signUp(email, password, fullName);
+        if (error) {
+          toast.error(error.message);
+        } else {
+          toast.success("Account created! Check your email to confirm, then sign in.");
+          setAuthMode("signin");
+        }
       } else {
-        toast.success("Welcome to CivilAI!");
-        router.push("/dashboard");
+        const { error } = await signIn(email, password);
+        if (error) {
+          toast.error(error.message);
+        } else {
+          toast.success("Welcome to CivilAI!");
+          router.push("/dashboard");
+        }
       }
     } catch {
-      toast.error("Login failed");
+      toast.error(authMode === "signup" ? "Sign up failed" : "Login failed");
     } finally {
       setLoading(false);
     }
@@ -100,50 +112,71 @@ export default function LandingPage() {
                 <Building2 className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-foreground">Welcome back</h2>
-                <p className="text-xs text-muted-foreground">Sign in to CivilAI</p>
+                <h2 className="text-xl font-bold text-foreground">
+                  {authMode === "signup" ? "Create your account" : "Welcome back"}
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  {authMode === "signup" ? "Join CivilAI" : "Sign in to CivilAI"}
+                </p>
               </div>
             </div>
 
             {/* Demo accounts */}
-            <div className="mb-6">
-              <p className="text-xs text-muted-foreground mb-3 font-medium uppercase tracking-wide">
-                Quick access — click to fill credentials
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {DUMMY_ACCOUNTS.map((acc) => (
-                  <button
-                    key={acc.email}
-                    type="button"
-                    onClick={() => fillAccount(acc)}
-                    className={`flex items-center gap-2.5 p-3 rounded-xl border text-left hover:scale-[1.02] active:scale-[0.98] transition-all ${
-                      email === acc.email
-                        ? "border-blue-500/50 bg-blue-500/5"
-                        : "border-border hover:border-border/80 bg-secondary/50"
-                    }`}
-                  >
-                    <div className={`w-8 h-8 rounded-lg ${acc.color} flex items-center justify-center shrink-0`}>
-                      <span className="text-white text-xs font-bold">{acc.avatar}</span>
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold text-foreground truncate">{acc.name}</p>
-                      <p className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border w-fit mt-0.5 ${roleColors[acc.role]}`}>
-                        {acc.role}
-                      </p>
-                    </div>
-                  </button>
-                ))}
+            {authMode === "signin" && (
+              <div className="mb-6">
+                <p className="text-xs text-muted-foreground mb-3 font-medium uppercase tracking-wide">
+                  Quick access — click to fill credentials
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {DUMMY_ACCOUNTS.map((acc) => (
+                    <button
+                      key={acc.email}
+                      type="button"
+                      onClick={() => fillAccount(acc)}
+                      className={`flex items-center gap-2.5 p-3 rounded-xl border text-left hover:scale-[1.02] active:scale-[0.98] transition-all ${
+                        email === acc.email
+                          ? "border-blue-500/50 bg-blue-500/5"
+                          : "border-border hover:border-border/80 bg-secondary/50"
+                      }`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg ${acc.color} flex items-center justify-center shrink-0`}>
+                        <span className="text-white text-xs font-bold">{acc.avatar}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-foreground truncate">{acc.name}</p>
+                        <p className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border w-fit mt-0.5 ${roleColors[acc.role]}`}>
+                          {acc.role}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="flex items-center gap-3 mb-4">
               <div className="flex-1 h-px bg-border" />
-              <span className="text-xs text-muted-foreground">or enter manually</span>
+              <span className="text-xs text-muted-foreground">
+                {authMode === "signup" ? "sign up with email" : "or enter manually"}
+              </span>
               <div className="flex-1 h-px bg-border" />
             </div>
 
             {/* Form */}
             <form onSubmit={handleLogin} className="space-y-4">
+              {authMode === "signup" && (
+                <div>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">Full Name</label>
+                  <input
+                    type="text"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Jane Smith"
+                    required
+                    className={inputClass}
+                  />
+                </div>
+              )}
               <div>
                 <label className="text-sm text-muted-foreground mb-1.5 block">Email</label>
                 <input
@@ -185,7 +218,7 @@ export default function LandingPage() {
                   ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   : <ArrowRight className="w-4 h-4 mr-2" />
                 }
-                Sign In
+                {authMode === "signup" ? "Create Account" : "Sign In"}
               </Button>
             </form>
 
@@ -194,6 +227,12 @@ export default function LandingPage() {
                 <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
                 Demo environment — no real data stored
               </div>
+              <button
+                onClick={() => setAuthMode(authMode === "signup" ? "signin" : "signup")}
+                className="w-full text-sm text-blue-400 hover:text-blue-300 transition-colors text-center"
+              >
+                {authMode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
+              </button>
               <button
                 onClick={() => setMode("landing")}
                 className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors text-center"

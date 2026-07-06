@@ -11,6 +11,8 @@ import {
   AlertTriangle,
   XCircle,
   Users,
+  Scale,
+  FileText,
 } from "lucide-react";
 import {
   RadarChart,
@@ -88,6 +90,53 @@ export default function VendorsPage() {
     }
   };
 
+  const [compareSelected, setCompareSelected] = useState<string[]>([]);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareResult, setCompareResult] = useState("");
+
+  const toggleCompare = (name: string) => {
+    setCompareSelected(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+  };
+
+  const runCompare = async () => {
+    if (compareSelected.length < 2) { toast.error("Select at least 2 vendors to compare"); return; }
+    setCompareLoading(true);
+    setCompareResult("");
+    try {
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/vendors/compare`,
+        { vendors: vendors.filter(v => compareSelected.includes(v.name)) }
+      );
+      setCompareResult(response.data.comparison);
+      toast.success("Vendors compared!");
+    } catch {
+      toast.error("Failed to compare vendors");
+    } finally {
+      setCompareLoading(false);
+    }
+  };
+
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportResult, setReportResult] = useState("");
+
+  const runReport = async () => {
+    if (!form.vendor_name.trim()) { toast.error("Enter a vendor name first"); return; }
+    setReportLoading(true);
+    setReportResult("");
+    try {
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/vendors/report`,
+        form
+      );
+      setReportResult(response.data.report);
+      toast.success("Vendor report generated!");
+    } catch {
+      toast.error("Failed to generate vendor report");
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "Preferred": return "bg-blue-500/10 text-blue-400 border-blue-500/20";
@@ -115,7 +164,7 @@ export default function VendorsPage() {
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
       >
-        <h1 className="text-3xl font-bold text-foreground">Vendor Scoring</h1>
+        <h1 className="text-4xl font-bold text-foreground">Vendor Scoring</h1>
         <p className="text-muted-foreground text-sm mt-1">
           AI-powered subcontractor & vendor performance management
         </p>
@@ -148,8 +197,8 @@ export default function VendorsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2">
-        {["register", "score"].map((tab) => (
+      <div className="flex gap-2 flex-wrap">
+        {["register", "score", "compare", "report"].map((tab) => (
           <button
             key={tab}
             onClick={() => { setActiveTab(tab); setResult(""); }}
@@ -159,7 +208,7 @@ export default function VendorsPage() {
                 : "bg-secondary text-muted-foreground hover:text-foreground"
             }`}
           >
-            {tab === "score" ? "AI Score Vendor" : "Vendor Register"}
+            {tab === "score" ? "AI Score Vendor" : tab === "compare" ? "Compare Vendors" : tab === "report" ? "Vendor Report" : "Vendor Register"}
           </button>
         ))}
       </div>
@@ -322,6 +371,85 @@ export default function VendorsPage() {
             {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Star className="w-4 h-4 mr-2" />}
             Score Vendor
           </Button>
+        </motion.div>
+      )}
+
+      {/* Compare Vendors */}
+      {activeTab === "compare" && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6 space-y-4"
+        >
+          <div>
+            <h3 className="font-semibold text-foreground">AI Vendor Comparison</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Select 2 or more vendors from the register to compare</p>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            {vendors.map((vendor) => (
+              <label
+                key={vendor.name}
+                className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                  compareSelected.includes(vendor.name)
+                    ? "border-blue-500/40 bg-blue-500/5"
+                    : "border-border bg-secondary/40 hover:bg-secondary/70"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={compareSelected.includes(vendor.name)}
+                  onChange={() => toggleCompare(vendor.name)}
+                  className="accent-blue-500"
+                />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate">{vendor.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{vendor.type} · Score {vendor.score}</p>
+                </div>
+              </label>
+            ))}
+          </div>
+          <Button onClick={runCompare} disabled={compareLoading} className="gradient-blue text-white border-0">
+            {compareLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Scale className="w-4 h-4 mr-2" />}
+            Compare Selected ({compareSelected.length})
+          </Button>
+          {compareResult && (
+            <div className="p-4 bg-secondary rounded-xl">
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{compareResult}</p>
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* Vendor Report */}
+      {activeTab === "report" && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card border border-border rounded-2xl p-6 space-y-4"
+        >
+          <div>
+            <h3 className="font-semibold text-foreground">AI Vendor Performance Report</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Uses the vendor details from the AI Score Vendor tab — fill those in first</p>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1.5 block">Vendor Name</label>
+              <input placeholder="Company name" value={form.vendor_name} onChange={(e) => setForm({ ...form, vendor_name: e.target.value })} className={inputClass} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1.5 block">Vendor Type</label>
+              <input value={form.vendor_type} onChange={(e) => setForm({ ...form, vendor_type: e.target.value })} className={inputClass} />
+            </div>
+          </div>
+          <Button onClick={runReport} disabled={reportLoading} className="gradient-blue text-white border-0">
+            {reportLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />}
+            Generate Report
+          </Button>
+          {reportResult && (
+            <div className="p-4 bg-secondary rounded-xl">
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{reportResult}</p>
+            </div>
+          )}
         </motion.div>
       )}
 

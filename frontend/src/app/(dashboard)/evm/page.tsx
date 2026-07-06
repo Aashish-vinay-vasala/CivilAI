@@ -13,6 +13,7 @@ import {
   ResponsiveContainer, ReferenceLine, Legend, Cell,
 } from "recharts";
 import ModuleChat from "@/components/shared/ModuleChat";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 interface EVMData {
   bac: number;
@@ -55,6 +56,7 @@ const calculateEVM = (tasks: any[], budget: number, spent: number): EVMData | nu
 };
 
 export default function EVMPage({ projectId: initialProjectId }: { projectId?: string } = {}) {
+  const { triggerRefresh } = useDataRefreshStore();
   const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState(initialProjectId || "");
   const [evm, setEvm] = useState<EVMData | null>(null);
@@ -162,6 +164,7 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
       setShowEntryForm(false);
       await fetchCostEntries();
       await calculateProjectEVM();
+      triggerRefresh("cost");
     } catch (err) { console.error(err); }
     finally { setEntrySubmitting(false); }
   };
@@ -171,6 +174,7 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
       await axios.delete(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/cost/${entryId}`);
       await fetchCostEntries();
       await calculateProjectEVM();
+      triggerRefresh("cost");
     } catch (err) { console.error(err); }
   };
 
@@ -225,7 +229,7 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Earned Value Management</h1>
+          <h1 className="text-4xl font-bold text-foreground">Earned Value Management</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Real-time EVM · CPI · SPI · Variance Analysis · Forecast at Completion
           </p>

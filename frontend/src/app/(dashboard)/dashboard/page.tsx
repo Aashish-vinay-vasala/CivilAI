@@ -7,18 +7,21 @@ import {
   TrendingUp, TrendingDown, AlertTriangle,
   CheckCircle, Clock, ArrowRight, Building2,
   Plus, X, Loader2, MapPin, Trash2, Edit2, Save, Zap,
+  FileDown, Mic, Volume2,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, BarChart, Bar,
+  LineChart, Line,
 } from "recharts";
 import ModuleChat from "@/components/shared/ModuleChat";
+import VoiceButton from "@/components/shared/VoiceButton";
 import CountUp from "@/components/shared/CountUp";
 import { Skeleton } from "@/components/shared/Skeleton";
 import Link from "next/link";
 import axios from "axios";
 import { toast } from "sonner";
-import { exportProjectReport } from "@/lib/exportPDF";
+import { exportProjectReport, exportAIReportPDF } from "@/lib/exportPDF";
 import WidgetCustomizer from "@/components/dashboard/WidgetCustomizer";
 import { useWidgetStore } from "@/lib/stores/widgetStore";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
@@ -40,6 +43,15 @@ const ACCENT: Record<string, { bg: string; border: string; text: string; shadow:
   orange: { bg: "rgba(249,115,22,0.07)",  border: "rgba(249,115,22,0.18)",  text: "#F97316", shadow: "rgba(249,115,22,0.15)" },
 };
 
+const PROGRESS_PRESETS: { key: string; label: string; months: number }[] = [
+  { key: "1m",  label: "1M",  months: 1 },
+  { key: "3m",  label: "3M",  months: 3 },
+  { key: "6m",  label: "6M",  months: 6 },
+  { key: "1y",  label: "1Y",  months: 12 },
+  { key: "5y",  label: "5Y",  months: 60 },
+  { key: "10y", label: "10Y", months: 120 },
+];
+
 const emptyProject = {
   name: "", location: "", status: "active",
   budget: "", start_date: "", end_date: "", client: "",
@@ -55,6 +67,36 @@ const inputStyle = {
   background: "rgba(255,255,255,0.04)",
   border: "1px solid rgba(255,255,255,0.08)",
 };
+
+// Maps an alert's "module" field (from the backend activity log) to a route.
+const MODULE_HREF: Record<string, string> = {
+  cost: "/cost", budget: "/cost", schedule: "/scheduling", scheduling: "/scheduling",
+  safety: "/safety", workforce: "/workforce", documents: "/documents",
+  compliance: "/documents", contracts: "/documents", procurement: "/procurement",
+  equipment: "/workforce", projects: "/projects", vendors: "/workforce",
+  payments: "/payments", financials: "/financials",
+};
+
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  if (data.length < 2) return null;
+  const points = data.map((v, i) => ({ i, v }));
+  return (
+    <ResponsiveContainer width="100%" height={28}>
+      <LineChart data={points} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+        <Line type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+function getGreeting(): { text: string; emoji: string } {
+  const hour = new Date().getHours();
+  if (hour < 5)  return { text: "Good night",      emoji: "🌙" };
+  if (hour < 12) return { text: "Good morning",     emoji: "☀️" };
+  if (hour < 17) return { text: "Good afternoon",   emoji: "🌤️" };
+  if (hour < 21) return { text: "Good evening",     emoji: "🌆" };
+  return           { text: "Good night",      emoji: "🌙" };
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -150,6 +192,12 @@ export default function DashboardPage() {
   const { counters, triggerRefresh } = useDataRefreshStore();
   const { setProjects: syncProjects } = useProjectStore();
   const [exporting, setExporting] = useState(false);
+  const [summarizingPdf, setSummarizingPdf] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [voiceInterim, setVoiceInterim] = useState("");
+  const [voiceResponse, setVoiceResponse] = useState("");
+  const [voiceError, setVoiceError] = useState("");
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddProject, setShowAddProject] = useState(false);
@@ -166,24 +214,50 @@ export default function DashboardPage() {
   const [progressData, setProgressData] = useState<any[]>([]);
   const [costData, setCostData] = useState<any[]>([]);
   const [liveAlerts, setLiveAlerts] = useState<any[]>([]);
+  const [kpiTrends, setKpiTrends] = useState<{ workers: any[]; safety: any[] }>({ workers: [], safety: [] });
+  const [projectView, setProjectView] = useState<"grid" | "compact">("grid");
+  const [progressRange, setProgressRange] = useState<{ preset: string; start?: string; end?: string }>({ preset: "1y" });
+  const [showRangePicker, setShowRangePicker] = useState(false);
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
 
   useEffect(() => { fetchAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchAll(); }, [counters.workers, counters.safety, counters.documents, counters.projects]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchAll(); }, [
+    counters.workers, counters.safety, counters.documents, counters.projects,
+    counters.cost, counters.schedule,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { fetchProgressChart(); }, [progressRange, counters.schedule, counters.projects]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fetchProgressChart = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (progressRange.preset === "custom" && progressRange.start && progressRange.end) {
+        params.set("start_date", progressRange.start);
+        params.set("end_date", progressRange.end);
+      } else {
+        const preset = PROGRESS_PRESETS.find((p) => p.key === progressRange.preset);
+        params.set("months", String(preset?.months ?? 12));
+      }
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/charts/progress?${params.toString()}`);
+      setProgressData(res.data.data || []);
+    } catch { /* keep previous chart data on failure */ }
+  };
 
   const fetchAll = async () => {
     setLoading(true);
-    const [projectsRes, kpisRes, progressRes, costsRes, alertsRes] = await Promise.allSettled([
+    const [projectsRes, kpisRes, costsRes, alertsRes, trendsRes] = await Promise.allSettled([
       axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`),
       axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/kpis`),
-      axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/charts/progress`),
       axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/charts/costs`),
       axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/alerts`),
+      axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/charts/kpi-trends`),
     ]);
     if (projectsRes.status === "fulfilled") { const f = projectsRes.value.data.projects || []; setProjects(f); syncProjects(f); }
     if (kpisRes.status === "fulfilled") setKpiData(kpisRes.value.data.kpis || null);
-    if (progressRes.status === "fulfilled") setProgressData(progressRes.value.data.data || []);
     if (costsRes.status === "fulfilled") setCostData(costsRes.value.data.data || []);
     if (alertsRes.status === "fulfilled") setLiveAlerts(alertsRes.value.data.alerts || []);
+    if (trendsRes.status === "fulfilled") setKpiTrends({ workers: trendsRes.value.data.workers || [], safety: trendsRes.value.data.safety || [] });
     setLoading(false);
   };
 
@@ -201,11 +275,39 @@ export default function DashboardPage() {
     finally { setExporting(false); }
   };
 
+  const handleSummarizeDashboardPDF = async () => {
+    setSummarizingPdf(true);
+    try {
+      const summaryPrompt =
+        "Summarize and analyze this entire construction dashboard for a printable report. " +
+        "Cover overall budget, schedule progress, workforce, safety, active projects and live alerts. " +
+        "Highlight key insights, risks, and 3-5 prioritized recommendations. Use bold section headings and bullet points. Data: " +
+        JSON.stringify({
+          kpis: kpiData,
+          projects: projects.map((p) => ({
+            name: p.name, status: p.status,
+            progress: p.progress_percentage,
+            budget: p.total_budget, spent: p.spent_to_date,
+          })),
+          alerts: liveAlerts.map((a) => a.text),
+        });
+      const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/copilot/chat`, {
+        message: summaryPrompt, chat_history: [],
+      });
+      exportAIReportPDF(res.data.response, "dashboard", "All Projects");
+      toast.success("Dashboard summary PDF exported!");
+    } catch {
+      toast.error("Failed to generate dashboard summary");
+    } finally {
+      setSummarizingPdf(false);
+    }
+  };
+
   const handleAddProject = async () => {
     if (!newProject.name) { toast.error("Project name is required"); return; }
     setAdding(true);
     try {
-      await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/create`, {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`, {
         ...newProject, budget: parseFloat(newProject.budget) || 0,
         start_date: newProject.start_date || null, end_date: newProject.end_date || null,
       });
@@ -214,7 +316,9 @@ export default function DashboardPage() {
       setShowAddProject(false);
       setNewProject(emptyProject);
       fetchAll();
-    } catch { toast.error("Failed to create project"); }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || "Failed to create project");
+    }
     finally { setAdding(false); }
   };
 
@@ -223,11 +327,19 @@ export default function DashboardPage() {
     setSaving(true);
     try {
       await axios.patch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${editingProject.id}`,
-        { ...editForm, budget: parseFloat(editForm.budget) || 0 });
+        {
+          ...editForm,
+          budget: parseFloat(editForm.budget) || 0,
+          start_date: editForm.start_date || null,
+          end_date: editForm.end_date || null,
+        });
       toast.success("Project updated!");
+      triggerRefresh("projects");
       setEditingProject(null);
       fetchAll();
-    } catch { toast.error("Failed to update project"); }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || "Failed to update project");
+    }
     finally { setSaving(false); }
   };
 
@@ -252,23 +364,57 @@ export default function DashboardPage() {
     boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
   };
 
+  const greeting = getGreeting();
+
+  // Widgets can be dragged into any order in the Customize panel; sections here
+  // follow that order via CSS flex `order` rather than re-fetching/re-rendering.
+  const sectionOrder = (ids: string[]) => {
+    const idxs = ids.map((id) => { const i = widgets.findIndex((w) => w.id === id); return i === -1 ? 999 : i; });
+    return Math.min(...idxs);
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+        style={{ order: -1 }}
         className="flex items-center justify-between">
         <div>
           <p className="text-white/35 text-[13px] flex items-center gap-1.5">
-            Good morning
-            <span>☀️</span>
+            {greeting.text}
+            <span>{greeting.emoji}</span>
           </p>
-          <h1 className="text-2xl font-bold text-white mt-0.5 tracking-tight">
+          <h1 className="text-4xl font-bold text-white mt-0.5 tracking-tight">
             Project Overview
           </h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 relative">
           <WidgetCustomizer />
+          <button
+            onClick={handleSummarizeDashboardPDF}
+            disabled={summarizingPdf}
+            title="Summarize this page and download as PDF"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-white/80 transition-all hover:scale-105 disabled:opacity-50"
+            style={{
+              background: "rgba(16,185,129,0.08)",
+              border: "1px solid rgba(16,185,129,0.2)",
+            }}
+          >
+            {summarizingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+            <span className="hidden sm:inline">Summarize PDF</span>
+          </button>
+          <button
+            onClick={() => setVoiceOpen((v) => !v)}
+            title="Talk to the CivilAI voice assistant"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium transition-all hover:scale-105"
+            style={voiceOpen
+              ? { background: "rgba(139,92,246,0.18)", border: "1px solid rgba(139,92,246,0.4)", color: "#C4B5FD" }
+              : { background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)", color: "rgba(255,255,255,0.8)" }}
+          >
+            <Mic className="w-4 h-4" />
+            <span className="hidden sm:inline">Voice Assistant</span>
+          </button>
           <button
             onClick={() => setShowAddProject(true)}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:scale-105"
@@ -281,6 +427,67 @@ export default function DashboardPage() {
             <Plus className="w-4 h-4" />
             New Project
           </button>
+
+          <AnimatePresence>
+            {voiceOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="absolute right-0 top-full mt-2 z-30 rounded-2xl p-5 flex flex-col items-center gap-3"
+                style={{
+                  width: 300,
+                  background: "rgba(4,11,25,0.97)",
+                  border: "1px solid rgba(139,92,246,0.25)",
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+                  backdropFilter: "blur(24px)",
+                }}
+              >
+                <div className="flex items-center gap-2 self-start">
+                  <Volume2 className="w-4 h-4 text-purple-300" />
+                  <p className="text-[12px] font-semibold text-white">Voice Assistant</p>
+                </div>
+                <p className="text-[11px] text-white/35 self-start -mt-1.5">
+                  Tap the mic, ask about your projects, and I&apos;ll speak the answer back.
+                </p>
+
+                <VoiceButton
+                  size="lg"
+                  onInterim={setVoiceInterim}
+                  onResult={(transcript, response) => {
+                    setVoiceTranscript(transcript);
+                    setVoiceResponse(response);
+                    setVoiceError("");
+                  }}
+                  onError={setVoiceError}
+                />
+
+                {voiceInterim && (
+                  <p className="text-[11px] text-purple-300/80 italic text-center">{voiceInterim}</p>
+                )}
+                {voiceError && (
+                  <p className="text-[11px] text-red-400 text-center">{voiceError}</p>
+                )}
+                {(voiceTranscript || voiceResponse) && !voiceInterim && (
+                  <div className="w-full space-y-2 mt-1">
+                    {voiceTranscript && (
+                      <div className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}>
+                        <p className="text-[10px] text-white/30 mb-0.5">You said</p>
+                        <p className="text-[12px] text-white/70">{voiceTranscript}</p>
+                      </div>
+                    )}
+                    {voiceResponse && (
+                      <div className="rounded-lg px-3 py-2" style={{ background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.18)" }}>
+                        <p className="text-[10px] text-purple-300/60 mb-0.5">Assistant</p>
+                        <p className="text-[12px] text-white/80">{voiceResponse}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </motion.div>
 
@@ -322,7 +529,8 @@ export default function DashboardPage() {
 
       {/* ── KPI Cards ───────────────────────────────────────────────────── */}
       {(isVisible("kpi-budget") || isVisible("kpi-schedule") || isVisible("kpi-workers") || isVisible("kpi-safety")) && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+          style={{ order: sectionOrder(["kpi-budget", "kpi-schedule", "kpi-workers", "kpi-safety"]) }}>
           {loading || !kpiData ? (
             Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="glass-card p-5">
@@ -345,24 +553,28 @@ export default function DashboardPage() {
                 numValue: budgetNum, prefix: "$", suffix: budgetSuffix, decimals: 1,
                 change: `${projects.length} project${projects.length !== 1 ? "s" : ""}`,
                 trend: "up", icon: DollarSign, accent: "cyan", href: "/cost",
+                trendData: costData.map((d) => d.actual),
               },
               {
                 id: "kpi-schedule", title: "Schedule Progress",
                 numValue: kpiData.avg_progress, suffix: "%", decimals: 0,
                 change: kpiData.avg_progress >= 60 ? "On track" : "Behind schedule",
                 trend: kpiData.avg_progress >= 60 ? "up" : "down", icon: Calendar, accent: "amber", href: "/scheduling",
+                trendData: progressData.map((d) => d.actual),
               },
               {
                 id: "kpi-workers", title: "Active Workers",
                 numValue: kpiData.active_workers, suffix: "", decimals: 0,
                 change: "Across all projects",
                 trend: "up", icon: Users, accent: "green", href: "/workforce",
+                trendData: kpiTrends.workers.map((d) => d.value),
               },
               {
                 id: "kpi-safety", title: "Safety Score",
                 numValue: kpiData.safety_score, suffix: "/100", decimals: 0,
                 change: `${kpiData.incident_count} incident${kpiData.incident_count !== 1 ? "s" : ""}`,
                 trend: kpiData.safety_score >= 80 ? "up" : "down", icon: Shield, accent: "red", href: "/safety",
+                trendData: kpiTrends.safety.map((d) => d.value),
               },
             ];
             return dynamicKpis.filter(k => isVisible(k.id)).map((kpi, i) => {
@@ -404,6 +616,11 @@ export default function DashboardPage() {
                       style={{ color: a.text, textShadow: `0 0 20px ${a.shadow}` } as React.CSSProperties}
                     />
                     <p className="text-[13px] text-white/40 mt-1">{kpi.title}</p>
+                    {kpi.trendData.length >= 2 && (
+                      <div className="relative -mx-1 mt-2 opacity-70">
+                        <Sparkline data={kpi.trendData} color={a.text} />
+                      </div>
+                    )}
                   </motion.div>
                 </Link>
               );
@@ -415,7 +632,8 @@ export default function DashboardPage() {
       {/* ── Active Projects ──────────────────────────────────────────────── */}
       {isVisible("projects") && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }} className="glass-card p-6">
+          transition={{ delay: 0.2 }} className="glass-card p-6"
+          style={{ order: sectionOrder(["projects"]) }}>
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-lg flex items-center justify-center"
@@ -428,17 +646,44 @@ export default function DashboardPage() {
                 {projects.length} Live
               </span>
             </div>
-            <button onClick={() => setShowAddProject(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-medium transition-colors"
-              style={{ background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.18)", color: "#00D4FF" }}>
-              <Plus className="w-3.5 h-3.5" />
-              Add Project
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-0.5 p-0.5 rounded-lg"
+                style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                {(["grid", "compact"] as const).map((v) => (
+                  <button key={v} onClick={() => setProjectView(v)}
+                    className="px-2.5 py-1 rounded-md text-[11px] font-medium capitalize transition-colors"
+                    style={projectView === v
+                      ? { background: "rgba(0,212,255,0.15)", color: "#00D4FF" }
+                      : { color: "rgba(255,255,255,0.35)" }}>
+                    {v}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setShowAddProject(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-medium transition-colors"
+                style={{ background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.18)", color: "#00D4FF" }}>
+                <Plus className="w-3.5 h-3.5" />
+                Add Project
+              </button>
+            </div>
           </div>
 
           {loading ? (
-            <div className="flex items-center justify-center py-10">
-              <Loader2 className="w-5 h-5 animate-spin text-cyan-400" />
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div className="flex items-center justify-between mb-3">
+                    <Skeleton className="w-24 h-4 rounded" />
+                    <Skeleton className="w-14 h-4 rounded-full" />
+                  </div>
+                  <Skeleton className="w-32 h-3 rounded mb-3" />
+                  <Skeleton className="w-full h-1 rounded-full mb-3" />
+                  <div className="space-y-2">
+                    <Skeleton className="w-full h-3 rounded" />
+                    <Skeleton className="w-full h-3 rounded" />
+                  </div>
+                </div>
+              ))}
             </div>
           ) : projects.length === 0 ? (
             <div className="text-center py-10">
@@ -449,6 +694,49 @@ export default function DashboardPage() {
                 style={{ background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.25)" }}>
                 Create First Project
               </button>
+            </div>
+          ) : projectView === "compact" ? (
+            <div className="space-y-1.5">
+              {projects.map((project, i) => {
+                const pct = project.progress_percentage || 0;
+                const barColor = pct >= 70 ? "#10B981" : pct >= 40 ? "#00D4FF" : "#F59E0B";
+                return (
+                  <motion.div key={project.id}
+                    initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.03 }}
+                    className="group flex items-center gap-3 rounded-lg px-3 py-2 transition-colors"
+                    style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}
+                  >
+                    <p className="font-medium text-white text-[12px] truncate flex-1 min-w-0">{project.name}</p>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-medium"
+                      style={{
+                        background: project.status === "active" ? "rgba(16,185,129,0.12)" : project.status === "planning" ? "rgba(0,212,255,0.12)" : project.status === "completed" ? "rgba(139,92,246,0.12)" : "rgba(245,158,11,0.12)",
+                        color: project.status === "active" ? "#10B981" : project.status === "planning" ? "#00D4FF" : project.status === "completed" ? "#8B5CF6" : "#F59E0B",
+                      }}>
+                      {project.status}
+                    </span>
+                    <div className="w-20 h-1 rounded-full shrink-0 hidden sm:block" style={{ background: "rgba(255,255,255,0.06)" }}>
+                      <div className="h-1 rounded-full" style={{ width: `${pct}%`, background: barColor }} />
+                    </div>
+                    <span className="text-[11px] font-medium shrink-0 w-9 text-right" style={{ color: barColor }}>{pct}%</span>
+                    <span className="text-[11px] text-white/40 shrink-0 hidden md:block w-16 text-right">
+                      ${((project.total_budget || 0) / 1_000_000).toFixed(1)}M
+                    </span>
+                    <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => { setEditingProject(project); setEditForm({ name: project.name, client: project.client || "", location: project.location || "", budget: project.total_budget || 0, status: project.status || "active", start_date: project.start_date || "", end_date: project.end_date || "" }); }}
+                        className="w-6 h-6 rounded-md flex items-center justify-center"
+                        style={{ background: "rgba(0,212,255,0.1)" }}>
+                        <Edit2 className="w-3 h-3 text-cyan-400" />
+                      </button>
+                      <button onClick={() => handleDeleteProject(project.id, project.name)} disabled={deletingId === project.id}
+                        className="w-6 h-6 rounded-md flex items-center justify-center"
+                        style={{ background: "rgba(239,68,68,0.1)" }}>
+                        {deletingId === project.id ? <Loader2 className="w-3 h-3 text-red-400 animate-spin" /> : <Trash2 className="w-3 h-3 text-red-400" />}
+                      </button>
+                    </div>
+                  </motion.div>
+                );
+              })}
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -540,19 +828,71 @@ export default function DashboardPage() {
 
       {/* ── Charts ──────────────────────────────────────────────────────── */}
       {(isVisible("chart-progress") || isVisible("chart-cost")) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5"
+          style={{ order: sectionOrder(["chart-progress", "chart-cost"]) }}>
           {isVisible("chart-progress") && (
             <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.3 }} className="glass-card p-6">
-              <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center justify-between mb-5 relative">
                 <div>
                   <h3 className="font-semibold text-white text-[14px]">Project Progress</h3>
                   <p className="text-[11px] text-white/35 mt-0.5">Planned vs Actual %</p>
                 </div>
-                <span className="text-[11px] px-3 py-1 rounded-full"
-                  style={{ background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.18)", color: "#00D4FF" }}>
-                  This Year
-                </span>
+                <div className="flex items-center gap-1 p-1 rounded-full"
+                  style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  {PROGRESS_PRESETS.map((p) => (
+                    <button
+                      key={p.key}
+                      onClick={() => { setProgressRange({ preset: p.key }); setShowRangePicker(false); }}
+                      className="text-[10px] px-2.5 py-1 rounded-full font-medium transition-colors"
+                      style={progressRange.preset === p.key
+                        ? { background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)", color: "#00D4FF" }
+                        : { background: "transparent", border: "1px solid transparent", color: "rgba(255,255,255,0.35)" }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setShowRangePicker((v) => !v)}
+                    className="text-[10px] px-2.5 py-1 rounded-full font-medium transition-colors flex items-center gap-1"
+                    style={progressRange.preset === "custom"
+                      ? { background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)", color: "#00D4FF" }
+                      : { background: "transparent", border: "1px solid transparent", color: "rgba(255,255,255,0.35)" }}
+                  >
+                    <Calendar className="w-3 h-3" />
+                    Custom
+                  </button>
+                </div>
+
+                <AnimatePresence>
+                  {showRangePicker && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+                      className="absolute right-0 top-full mt-2 z-20 rounded-xl p-4 flex flex-col gap-3"
+                      style={{ background: "rgba(4,11,25,0.98)", border: "1px solid rgba(0,212,255,0.18)", boxShadow: "0 8px 32px rgba(0,0,0,0.5)", minWidth: "230px" }}
+                    >
+                      <Field label="From">
+                        <input type="date" className={inputClass} style={inputStyle} value={customStart}
+                          onChange={(e) => setCustomStart(e.target.value)} />
+                      </Field>
+                      <Field label="To">
+                        <input type="date" className={inputClass} style={inputStyle} value={customEnd}
+                          onChange={(e) => setCustomEnd(e.target.value)} />
+                      </Field>
+                      <button
+                        onClick={() => {
+                          if (!customStart || !customEnd) { toast.error("Pick both dates"); return; }
+                          setProgressRange({ preset: "custom", start: customStart, end: customEnd });
+                          setShowRangePicker(false);
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-all hover:scale-105"
+                        style={{ background: "linear-gradient(135deg, rgba(0,212,255,0.25), rgba(0,100,160,0.2))", border: "1px solid rgba(0,212,255,0.3)" }}
+                      >
+                        Apply Range
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
               {progressData.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-52 text-white/25">
@@ -619,7 +959,7 @@ export default function DashboardPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
                       <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <Tooltip contentStyle={tooltipStyle} />
+                      <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(0,212,255,0.06)" }} />
                       <Bar dataKey="budget" fill="rgba(0,212,255,0.12)" stroke="#00D4FF" strokeWidth={1} radius={[6, 6, 0, 0]} name="Budget" />
                       <Bar dataKey="actual" fill="#F59E0B" radius={[6, 6, 0, 0]} name="Actual" />
                     </BarChart>
@@ -641,7 +981,8 @@ export default function DashboardPage() {
 
       {/* ── Alerts + Quick Access ────────────────────────────────────────── */}
       {(isVisible("alerts") || isVisible("modules")) && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5"
+          style={{ order: sectionOrder(["alerts", "modules"]) }}>
           {isVisible("alerts") && (
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.5 }} className="lg:col-span-2 glass-card p-6">
@@ -665,11 +1006,12 @@ export default function DashboardPage() {
                     const isError = alert.type === "error", isWarning = alert.type === "warning", isSuccess = alert.type === "success";
                     const Icon  = isSuccess ? CheckCircle : isError ? AlertTriangle : Clock;
                     const color = isSuccess ? "#10B981" : isError ? "#EF4444" : isWarning ? "#F59E0B" : "#00D4FF";
-                    return (
-                      <motion.div key={alert.id || i}
+                    const href = MODULE_HREF[String(alert.module || "").toLowerCase()];
+                    const row = (
+                      <motion.div
                         initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: 0.5 + i * 0.06 }}
-                        className="flex items-center gap-3 p-3 rounded-xl transition-all"
+                        className={`flex items-center gap-3 p-3 rounded-xl transition-all ${href ? "cursor-pointer" : ""}`}
                         style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.05)" }}
                         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.045)"; }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.025)"; }}
@@ -680,8 +1022,12 @@ export default function DashboardPage() {
                         </div>
                         <p className="text-[12px] text-white/70 flex-1">{alert.text}</p>
                         <span className="text-[10px] text-white/25 whitespace-nowrap">{alert.time}</span>
+                        {href && <ArrowRight className="w-3 h-3 text-white/20 shrink-0" />}
                       </motion.div>
                     );
+                    return href
+                      ? <Link href={href} key={alert.id || i}>{row}</Link>
+                      : <div key={alert.id || i}>{row}</div>;
                   })}
                 </div>
               )}
@@ -722,14 +1068,16 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <ModuleChat
-        context="Project Dashboard"
-        placeholder="Ask about your projects..."
-        pageSummaryData={{
-          totalProjects: projects.length,
-          projects: projects.map(p => ({ name: p.name, progress: p.progress_percentage, budget: p.total_budget, spent: p.spent_to_date, status: p.status })),
-        }}
-      />
+      <div style={{ order: 999 }}>
+        <ModuleChat
+          context="Project Dashboard"
+          placeholder="Ask about your projects..."
+          pageSummaryData={{
+            totalProjects: projects.length,
+            projects: projects.map(p => ({ name: p.name, progress: p.progress_percentage, budget: p.total_budget, spent: p.spent_to_date, status: p.status })),
+          }}
+        />
+      </div>
     </div>
   );
 }

@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config import settings
 from app.services.db_service import supabase
+from app.core.guardrails import has_permission
 
 logger = logging.getLogger("civilai.security")
 
@@ -173,6 +174,50 @@ def protect_route(*roles: str):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Role '{user_role}' is not authorized for this action",
+            )
+        return user
+    return _dependency
+
+
+def require_module_access(module: str):
+    """
+    Dependency factory for coarse, module-level RBAC (backend/app/core/guardrails.ROLE_PERMISSIONS).
+
+    Attach at router-include time (see main.py) rather than per-endpoint — this
+    gates the whole module (e.g. every /api/v1/financials/* route) by role, on
+    top of any finer-grained protect_route()/require_role() checks individual
+    endpoints already apply.
+
+    Follows the same AUTH_REQUIRED-conditional pattern as protect_route(): a
+    no-op (logs only) in demo mode so the frontend keeps working without JWTs.
+    """
+    def _dependency(
+        credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+    ) -> dict | None:
+        if not settings.AUTH_REQUIRED:
+            user = _resolve_user(credentials.credentials) if credentials else None
+            role = user.get("role", "unauthenticated") if user else "unauthenticated"
+            logger.debug("require_module_access (demo mode) | role=%s | module=%s", role, module)
+            return user
+
+        if not credentials:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user = _resolve_user(credentials.credentials)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if not has_permission(user.get("role", ""), module):
+            logger.warning("Module access denied | role=%s | module=%s", user.get("role"), module)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Role '{user.get('role')}' does not have access to the '{module}' module",
             )
         return user
     return _dependency

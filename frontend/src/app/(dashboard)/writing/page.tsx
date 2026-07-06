@@ -147,7 +147,7 @@ export default function WritingPage() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-3xl font-bold text-foreground">Writing Assistant</h1>
+        <h1 className="text-4xl font-bold text-foreground">Writing Assistant</h1>
         <p className="text-muted-foreground text-sm mt-1">
           AI-powered document generation & analysis
         </p>

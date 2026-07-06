@@ -553,6 +553,7 @@ export const exportAIReportPDF = (
     stakeholder: "Stakeholder Report",
     kpi:         "KPI Report",
     safety:      "Safety Report",
+    dashboard:   "Dashboard Summary Report",
   };
   const title = titleMap[reportType] || "AI Report";
 

@@ -5,6 +5,7 @@ from groq import Groq
 import instructor
 from langsmith import traceable
 from app.config import settings
+from app.services import usage_tracker
 
 logger = logging.getLogger("civilai.groq")
 
@@ -102,6 +103,8 @@ def chat(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0) -> str
             temperature=0.7,
             max_tokens=2048,
         )
+        if response.usage:
+            usage_tracker.add_llm_tokens(response.usage.total_tokens)
         return response.choices[0].message.content
     except Exception as exc:
         if _is_daily_limit(exc):
@@ -118,6 +121,50 @@ def chat(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0) -> str
             _time.sleep(wait + 0.5)
             return chat(messages, model, _rpm_attempt=1)
         raise
+
+
+def chat_stream(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0):
+    """Yields text deltas as they arrive from Groq. Key rotation only applies before
+    the stream starts — a failure mid-stream just ends the generator early and lets
+    the caller's accumulated partial text stand (better than losing it outright)."""
+    try:
+        stream = _state["client"].chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2048,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    except Exception as exc:
+        if _is_daily_limit(exc):
+            if _rotate_key():
+                yield from chat_stream(messages, model, _rpm_attempt=0)
+                return
+            raise RuntimeError(
+                "CivilAI Copilot is temporarily unavailable: all Groq API keys have "
+                "reached their daily token limit. Please try again after midnight UTC."
+            ) from exc
+        wait = _rate_limit_wait(exc)
+        if wait is not None and wait <= _MAX_AUTO_RETRY_SECS and _rpm_attempt == 0:
+            logger.warning("Groq rate limited — waiting %.1fs then retrying", wait)
+            _time.sleep(wait + 0.5)
+            yield from chat_stream(messages, model, _rpm_attempt=1)
+            return
+        raise
+
+    for chunk in stream:
+        if chunk.usage:
+            usage_tracker.add_llm_tokens(chunk.usage.total_tokens)
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
+def get_key_pool_size() -> int:
+    return len(_key_pool)
 
 
 _ANALYZE_SYSTEM = """\

@@ -226,7 +226,7 @@ export default function WeatherPage() {
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Weather & Site Conditions</h1>
+          <h1 className="text-4xl font-bold text-foreground">Weather & Site Conditions</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Real-time weather · Construction impact · 7-day forecast · Open-Meteo API
           </p>

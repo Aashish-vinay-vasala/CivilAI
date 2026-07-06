@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from app.ai.procurement_analyzer import (
@@ -7,6 +8,7 @@ from app.ai.procurement_analyzer import (
     forecast_material_demand
 )
 from app.ocr.document_processor import process_document
+from app.services.db_service import supabase
 
 router = APIRouter()
 
@@ -30,6 +32,20 @@ class DemandForecastRequest(BaseModel):
     start_date: str
     end_date: str
     key_materials: list = []
+
+class PurchaseOrderRecord(BaseModel):
+    project_id: str
+    po_number: str
+    vendor: str
+    item: str = ""
+    total_amount: float = 0
+    status: str = "pending"
+
+class PurchaseOrderUpdate(BaseModel):
+    status: Optional[str] = None
+    total_amount: Optional[float] = None
+    vendor: Optional[str] = None
+    item: Optional[str] = None
 
 @router.post("/analyze")
 async def analyze_procurement_route(
@@ -96,5 +112,41 @@ async def demand_forecast_route(
             "status": "success",
             "forecast": forecast
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Purchase order records (persisted, tracked against the purchase_orders table) ──
+
+@router.post("/purchase-orders")
+async def create_purchase_order_record(body: PurchaseOrderRecord):
+    try:
+        res = supabase.table("purchase_orders").insert(body.model_dump()).execute()
+        return {"status": "success", "purchase_order": res.data[0] if res.data else body.model_dump()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/purchase-orders/{po_id}")
+async def update_purchase_order_record(po_id: str, body: PurchaseOrderUpdate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    try:
+        res = supabase.table("purchase_orders").update(updates).eq("id", po_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Purchase order not found")
+        return {"status": "success", "purchase_order": res.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/purchase-orders/{po_id}")
+async def delete_purchase_order_record(po_id: str):
+    try:
+        supabase.table("purchase_orders").delete().eq("id", po_id).execute()
+        return {"status": "success", "deleted": po_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

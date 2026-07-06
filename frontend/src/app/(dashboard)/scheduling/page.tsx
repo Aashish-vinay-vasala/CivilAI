@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Calendar, AlertTriangle, TrendingDown, Clock,
   CheckCircle, Upload, Loader2, Brain, Plus, X,
-  Search, Flag, Edit2, Save, Trash2,
+  Search, Flag, Edit2, Save, Trash2, Wrench,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import dynamic from "next/dynamic";
 import { MarkdownText } from "@/lib/renderMarkdown";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 const GanttChart = dynamic(() => import("@/components/scheduling/GanttChart"), { ssr: false });
 const ML_API = process.env.NEXT_PUBLIC_ML_API_URL || "http://localhost:8001";
@@ -62,6 +63,7 @@ interface ExtractedTask {
 }
 
 export default function SchedulingPage() {
+  const { triggerRefresh } = useDataRefreshStore();
   const [loading, setLoading] = useState(false);
   const [analysis, setAnalysis] = useState("");
   const [extractedTasks, setExtractedTasks] = useState<ExtractedTask[]>([]);
@@ -72,6 +74,18 @@ export default function SchedulingPage() {
   const [scenario, setScenario] = useState({ scenario: "", delay_days: 0 });
   const [whatIfResult, setWhatIfResult] = useState("");
   const [whatIfLoading, setWhatIfLoading] = useState(false);
+  const [predictOpen, setPredictOpen] = useState(false);
+  const [predictLoading, setPredictLoading] = useState(false);
+  const [predictResult, setPredictResult] = useState("");
+  const [predictForm, setPredictForm] = useState({
+    weather_conditions: "Normal", labor_availability: "Full", material_status: "Available",
+  });
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoveryResult, setRecoveryResult] = useState("");
+  const [recoveryForm, setRecoveryForm] = useState({
+    delay_days: 7, delay_causes: "", available_resources: "", budget_remaining: 0,
+  });
   const [mlDelay, setMlDelay] = useState<any>(null);
   const [mlLoading, setMlLoading] = useState(true);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -145,12 +159,14 @@ export default function SchedulingPage() {
       toast.success("Task updated!");
       setEditingTask(null);
       fetchTasks();
+      triggerRefresh("schedule");
     } catch {
       setTasks(prev => prev.map(t =>
         t.id === taskId ? { ...t, actual_progress: editProgress, status: editStatus } : t
       ));
       toast.success("Task updated!");
       setEditingTask(null);
+      triggerRefresh("schedule");
     } finally { setSavingTask(null); }
   };
 
@@ -161,9 +177,11 @@ export default function SchedulingPage() {
       await axios.delete(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule/${taskId}`);
       toast.success("Task deleted!");
       fetchTasks();
+      triggerRefresh("schedule");
     } catch {
       setTasks(prev => prev.filter(t => t.id !== taskId));
       toast.success("Task removed!");
+      triggerRefresh("schedule");
     } finally { setDeletingTask(null); }
   };
 
@@ -186,6 +204,7 @@ export default function SchedulingPage() {
         planned_start: "", planned_end: "", delay_days: 0,
       });
       fetchTasks();
+      triggerRefresh("schedule");
     } catch { toast.error("Failed to add task"); }
   };
 
@@ -215,6 +234,7 @@ export default function SchedulingPage() {
       toast.success(`"${task.task_name}" added to task list`);
       setExtractedTasks(prev => prev.filter((_, i) => i !== idx));
       fetchTasks();
+      triggerRefresh("schedule");
     } catch { toast.error("Failed to add task"); }
     finally { setAddingExtracted(null); }
   };
@@ -232,6 +252,7 @@ export default function SchedulingPage() {
     toast.success(`${added} task(s) added to task list`);
     setExtractedTasks([]);
     fetchTasks();
+    if (added > 0) triggerRefresh("schedule");
     setAddingExtracted(null);
   };
 
@@ -242,6 +263,40 @@ export default function SchedulingPage() {
       setWhatIfResult(response.data.analysis);
     } catch { toast.error("Failed to run analysis"); }
     finally { setWhatIfLoading(false); }
+  };
+
+  const runPredictDelays = async () => {
+    if (!selectedProject) { toast.error("Select a project first"); return; }
+    setPredictLoading(true);
+    try {
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/schedule/predict-delays`, {
+        project_name: selectedProject.name,
+        start_date: selectedProject.start_date || "",
+        end_date: selectedProject.end_date || "",
+        completion_percentage: overallProgress,
+        weather_conditions: predictForm.weather_conditions,
+        labor_availability: predictForm.labor_availability,
+        material_status: predictForm.material_status,
+        pending_tasks: tasks.filter(t => t.status !== "done" && t.status !== "completed").map(t => t.task_name),
+      });
+      setPredictResult(response.data.prediction);
+    } catch { toast.error("Failed to predict delays"); }
+    finally { setPredictLoading(false); }
+  };
+
+  const runRecoveryPlan = async () => {
+    setRecoveryLoading(true);
+    try {
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/schedule/recovery-plan`, {
+        project_name: selectedProject?.name || "",
+        delay_days: Number(recoveryForm.delay_days) || 0,
+        delay_causes: recoveryForm.delay_causes.split(",").map(t => t.trim()).filter(Boolean),
+        available_resources: recoveryForm.available_resources.split(",").map(t => t.trim()).filter(Boolean),
+        budget_remaining: Number(recoveryForm.budget_remaining) || 0,
+      });
+      setRecoveryResult(response.data.plan);
+    } catch { toast.error("Failed to generate recovery plan"); }
+    finally { setRecoveryLoading(false); }
   };
 
   const getStatusColor = (status: string) => {
@@ -295,7 +350,7 @@ export default function SchedulingPage() {
         className="flex items-center justify-between flex-wrap gap-3"
       >
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Scheduling</h1>
+          <h1 className="text-4xl font-bold text-foreground">Scheduling</h1>
           <p className="text-muted-foreground text-sm mt-1">AI-powered delay prediction & task management</p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -314,6 +369,12 @@ export default function SchedulingPage() {
             </Button>
           <Button variant="outline" onClick={() => setWhatIfOpen(!whatIfOpen)}>
             <Clock className="w-4 h-4 mr-2 text-blue-400" />What-If
+          </Button>
+          <Button variant="outline" onClick={() => setPredictOpen(!predictOpen)}>
+            <AlertTriangle className="w-4 h-4 mr-2 text-orange-400" />Predict Delays
+          </Button>
+          <Button variant="outline" onClick={() => setRecoveryOpen(!recoveryOpen)}>
+            <Wrench className="w-4 h-4 mr-2 text-emerald-400" />Recovery Plan
           </Button>
           <label className="cursor-pointer">
             <input type="file" className="hidden" accept=".pdf,.xlsx,.docx" onChange={handleFileUpload} />
@@ -494,6 +555,103 @@ export default function SchedulingPage() {
             {whatIfResult && (
               <div className="mt-4 p-4 bg-secondary rounded-xl">
                 <MarkdownText text={whatIfResult} className="text-sm text-foreground leading-relaxed" />
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Predict Delays */}
+      <AnimatePresence>
+        {predictOpen && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="bg-card border border-orange-500/30 rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-foreground">AI Delay Prediction</h3>
+              <Button variant="ghost" size="icon" onClick={() => setPredictOpen(false)}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mb-4">
+              Uses {selectedProject ? selectedProject.name : "the selected project"}'s current progress
+              ({overallProgress}%) and open tasks to forecast delay risk.
+            </p>
+            <div className="grid grid-cols-3 gap-4 mb-4">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1.5 block">Weather Conditions</label>
+                <select value={predictForm.weather_conditions}
+                  onChange={(e) => setPredictForm({ ...predictForm, weather_conditions: e.target.value })} className={inputClass}>
+                  {["Normal", "Rainy", "Extreme Heat", "Storms", "Winter"].map(w => <option key={w} value={w}>{w}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1.5 block">Labor Availability</label>
+                <select value={predictForm.labor_availability}
+                  onChange={(e) => setPredictForm({ ...predictForm, labor_availability: e.target.value })} className={inputClass}>
+                  {["Full", "Partial", "Short-staffed"].map(w => <option key={w} value={w}>{w}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1.5 block">Material Status</label>
+                <select value={predictForm.material_status}
+                  onChange={(e) => setPredictForm({ ...predictForm, material_status: e.target.value })} className={inputClass}>
+                  {["Available", "Delayed", "Backordered"].map(w => <option key={w} value={w}>{w}</option>)}
+                </select>
+              </div>
+            </div>
+            <Button onClick={runPredictDelays} disabled={predictLoading} className="gradient-blue text-white border-0">
+              {predictLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Brain className="w-4 h-4 mr-2" />}
+              Predict Delays
+            </Button>
+            {predictResult && (
+              <div className="mt-4 p-4 bg-secondary rounded-xl">
+                <MarkdownText text={predictResult} className="text-sm text-foreground leading-relaxed" />
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Recovery Plan */}
+      <AnimatePresence>
+        {recoveryOpen && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="bg-card border border-emerald-500/30 rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-foreground">AI Recovery Plan Generator</h3>
+              <Button variant="ghost" size="icon" onClick={() => setRecoveryOpen(false)}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1.5 block">Delay (days)</label>
+                <input type="number" min="0" value={recoveryForm.delay_days}
+                  onChange={(e) => setRecoveryForm({ ...recoveryForm, delay_days: parseInt(e.target.value) || 0 })} className={inputClass} />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1.5 block">Budget Remaining ($)</label>
+                <input type="number" min="0" value={recoveryForm.budget_remaining}
+                  onChange={(e) => setRecoveryForm({ ...recoveryForm, budget_remaining: parseFloat(e.target.value) || 0 })} className={inputClass} />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-muted-foreground mb-1.5 block">Delay Causes (comma-separated)</label>
+                <input placeholder="e.g. Steel delivery delay, Permit hold-up" value={recoveryForm.delay_causes}
+                  onChange={(e) => setRecoveryForm({ ...recoveryForm, delay_causes: e.target.value })} className={inputClass} />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-muted-foreground mb-1.5 block">Available Resources (comma-separated)</label>
+                <input placeholder="e.g. Extra crew, Overtime budget" value={recoveryForm.available_resources}
+                  onChange={(e) => setRecoveryForm({ ...recoveryForm, available_resources: e.target.value })} className={inputClass} />
+              </div>
+            </div>
+            <Button onClick={runRecoveryPlan} disabled={recoveryLoading} className="bg-emerald-600 hover:bg-emerald-700 text-white border-0">
+              {recoveryLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wrench className="w-4 h-4 mr-2" />}
+              Generate Recovery Plan
+            </Button>
+            {recoveryResult && (
+              <div className="mt-4 p-4 bg-secondary rounded-xl">
+                <MarkdownText text={recoveryResult} className="text-sm text-foreground leading-relaxed" />
               </div>
             )}
           </motion.div>

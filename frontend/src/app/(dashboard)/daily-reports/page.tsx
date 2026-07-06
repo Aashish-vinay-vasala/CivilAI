@@ -198,7 +198,7 @@ Write a structured report: Summary, Work Completed, Resources Used, Safety Notes
       <ModuleTabs tabs={CONSTRUCTION_MODULE_TABS} />
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Daily Site Reports</h1>
+          <h1 className="text-4xl font-bold text-foreground">Daily Site Reports</h1>
           <p className="text-muted-foreground text-sm mt-1">AI-generated daily logs · voice input supported</p>
         </div>
         <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium">

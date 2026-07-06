@@ -1,4 +1,5 @@
 from app.config import settings
+from app.services import usage_tracker
 import PIL.Image
 import io
 
@@ -13,6 +14,7 @@ def get_client():
 
 def analyze_image(image_data: bytes, prompt: str) -> str:
     try:
+        usage_tracker.add_image_call()
         client = get_client()
         # PDF detected by magic bytes — pass as native PDF part (no PIL conversion)
         if image_data[:4] == b'%PDF':

@@ -14,6 +14,7 @@ from app.services.db_service import (
     get_equipment,
     get_contracts,
     get_permits,
+    get_purchase_orders,
 )
 from supabase import create_client
 from app.config import settings
@@ -101,7 +102,6 @@ def create_project(body: ProjectCreate):
             "status": body.status or "active",
             "budget": body.budget or 0,
             "client": body.client,
-            "project_type": body.project_type,
         }
         if body.start_date:
             data["start_date"] = body.start_date
@@ -152,7 +152,7 @@ def get_dashboard_kpis():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/charts/progress")
-def get_progress_chart():
+def get_progress_chart(start_date: Optional[str] = None, end_date: Optional[str] = None, months: Optional[int] = None):
     try:
         tasks_res = supabase.table("schedule_tasks").select(
             "planned_progress,actual_progress,planned_start"
@@ -172,20 +172,97 @@ def get_progress_chart():
                 except Exception:
                     pass
 
-        now = datetime.now()
+        # Build the list of (year, month) buckets to return: either an explicit
+        # start_date..end_date range, an N-month lookback preset, or the default.
+        if start_date and end_date:
+            try:
+                sd = datetime.strptime(str(start_date)[:10], "%Y-%m-%d")
+                ed = datetime.strptime(str(end_date)[:10], "%Y-%m-%d")
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid start_date/end_date")
+            if sd > ed:
+                sd, ed = ed, sd
+            months_list = []
+            y, m = sd.year, sd.month
+            while (y, m) <= (ed.year, ed.month):
+                months_list.append((y, m))
+                m += 1
+                if m > 12:
+                    m, y = 1, y + 1
+        else:
+            lookback = months if months and months > 0 else CHART_LOOKBACK_MONTHS
+            now = datetime.now()
+            months_list = []
+            for i in range(lookback, 0, -1):
+                total_months = now.year * 12 + (now.month - 1) - i
+                months_list.append((total_months // 12, (total_months % 12) + 1))
+
+        multi_year = len({y for y, _ in months_list}) > 1
         result = []
-        for i in range(CHART_LOOKBACK_MONTHS, 0, -1):
-            total_months = now.year * 12 + (now.month - 1) - i
-            y = total_months // 12
-            m = (total_months % 12) + 1
+        for (y, m) in months_list:
             d = month_data.get((y, m), {"planned": [], "actual": []})
+            label = f"{MONTH_NAMES[m - 1]} '{str(y)[2:]}" if multi_year else MONTH_NAMES[m - 1]
             result.append({
-                "month": MONTH_NAMES[m - 1],
+                "month": label,
                 "planned": round(sum(d["planned"]) / len(d["planned"])) if d["planned"] else 0,
                 "actual":  round(sum(d["actual"])  / len(d["actual"]))  if d["actual"]  else 0,
             })
 
         return {"status": "success", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/charts/kpi-trends")
+def get_kpi_trends():
+    """Short (6-month) trend series for the Active Workers and Safety Score KPIs,
+    used to render dashboard sparklines. Budget/Schedule sparklines are derived
+    client-side from the existing costs/progress chart series."""
+    try:
+        SPARK_MONTHS = 6
+        now = datetime.now()
+        months_list = []
+        for i in range(SPARK_MONTHS - 1, -1, -1):
+            total_months = now.year * 12 + (now.month - 1) - i
+            months_list.append((total_months // 12, (total_months % 12) + 1))
+
+        workforce_res = supabase.table("workforce").select("created_at").execute()
+        worker_dates = []
+        for w in (workforce_res.data or []):
+            c = w.get("created_at")
+            if c:
+                try:
+                    worker_dates.append(datetime.fromisoformat(str(c).replace("Z", "+00:00")).replace(tzinfo=None))
+                except Exception:
+                    pass
+
+        incidents_res = supabase.table("safety_incidents").select("created_at,severity").execute()
+        month_incidents: dict = defaultdict(list)
+        for inc in (incidents_res.data or []):
+            c = inc.get("created_at")
+            if c:
+                try:
+                    dt = datetime.fromisoformat(str(c).replace("Z", "+00:00"))
+                    month_incidents[(dt.year, dt.month)].append(str(inc.get("severity") or "").lower())
+                except Exception:
+                    pass
+
+        workers_trend, safety_trend = [], []
+        for (y, m) in months_list:
+            month_end = (datetime(y, m, 28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+            cumulative = sum(1 for d in worker_dates if d <= month_end)
+            workers_trend.append({"month": MONTH_NAMES[m - 1], "value": cumulative})
+
+            sevs = month_incidents.get((y, m), [])
+            high = sum(1 for s in sevs if s == "high")
+            med = sum(1 for s in sevs if s == "medium")
+            low_c = len(sevs) - high - med
+            score = round(max(0, 100 - high * 10 - med * 5 - low_c * 2))
+            safety_trend.append({"month": MONTH_NAMES[m - 1], "value": score})
+
+        return {"status": "success", "workers": workers_trend, "safety": safety_trend}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -351,24 +428,6 @@ def get_project_alerts():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/create")
-def create_project(project: ProjectCreate):
-    try:
-        data = {
-            "id": str(uuid.uuid4()),
-            "name": project.name,
-            "location": project.location,
-            "status": project.status,
-            "budget": project.budget,
-            "start_date": project.start_date,
-            "end_date": project.end_date,
-            "client": project.client,
-        }
-        response = supabase.table("projects").insert(data).execute()
-        return {"status": "success", "project": response.data[0] if response.data else data}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 @router.patch("/{project_id}")
 def update_project(project_id: str, project: ProjectUpdate):
     try:
@@ -525,6 +584,14 @@ def get_project_permits(project_id: str):
     try:
         data = get_permits(project_id)
         return {"status": "success", "permits": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{project_id}/purchase-orders")
+def get_project_purchase_orders(project_id: str):
+    try:
+        data = get_purchase_orders(project_id)
+        return {"status": "success", "purchase_orders": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

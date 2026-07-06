@@ -132,7 +132,7 @@ export default function RFIsPage() {
       <ModuleTabs tabs={CONSTRUCTION_MODULE_TABS} />
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">RFI Tracker</h1>
+          <h1 className="text-4xl font-bold text-foreground">RFI Tracker</h1>
           <p className="text-muted-foreground text-sm mt-1">Request for Information log</p>
         </div>
         <div className="flex gap-2">

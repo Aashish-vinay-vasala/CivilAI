@@ -11,6 +11,7 @@ import tempfile
 from typing import Optional
 from groq import Groq
 from app.config import settings
+from app.services import usage_tracker
 
 logger = logging.getLogger("civilai.voice")
 
@@ -18,10 +19,12 @@ _groq = Groq(api_key=settings.GROQ_API_KEY)
 
 _STT_MODEL  = "whisper-large-v3"
 _TTS_MODEL  = "canopylabs/orpheus-v1-english"
-_TTS_VOICE  = "tara"   # clear professional female voice
+_TTS_VOICE  = "autumn"   # clear professional female voice
 
-# Orpheus v1 English voices (accept terms at console.groq.com first)
-AVAILABLE_VOICES = ["tara", "leo", "leah", "jess", "dan", "mia", "zac", "zoe"]
+# Orpheus v1 English voices actually enabled for this Groq account — the model
+# supports a larger named set, but requesting one outside this list 400s and we
+# silently fall back to gTTS, so keep this in sync with console.groq.com.
+AVAILABLE_VOICES = ["autumn", "diana", "hannah", "austin", "daniel", "troy"]
 
 
 def transcribe_audio(audio_bytes: bytes, filename: str = "audio.webm") -> str:
@@ -33,6 +36,7 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "audio.webm") -> str:
     if not audio_bytes:
         raise ValueError("Empty audio data")
 
+    usage_tracker.add_audio_call()
     suffix  = ("." + filename.rsplit(".", 1)[-1]) if "." in filename else ".webm"
     tmp_path = None
     try:

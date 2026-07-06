@@ -6,12 +6,14 @@ import {
   TrendingUp, Loader2, Building2, Users, Check, Plus, X,
   Pencil, Check as CheckIcon, Upload, ClipboardList,
   AlertCircle, Clock3, CheckCircle2, ChevronRight, Box,
+  FileSignature, ShieldCheck, ShoppingCart, Trash2,
 } from "lucide-react";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useProjectStore, ProjectSummary } from "@/lib/stores/projectStore";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 import { toast } from "sonner";
 
 // ─── Types ────────────────────────────────────────────────
@@ -51,6 +53,34 @@ interface Overview {
   observations: OverviewBucket;
   punch_list: OverviewBucket;
   meetings: OverviewBucket;
+}
+
+interface ProjectContract {
+  id: string;
+  title: string;
+  contractor: string;
+  value: number;
+  status: string;
+  start_date?: string;
+  end_date?: string;
+}
+
+interface ProjectPermit {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  expiry_date?: string;
+  risk_level: string;
+}
+
+interface ProjectPurchaseOrder {
+  id: string;
+  po_number: string;
+  vendor: string;
+  item?: string;
+  total_amount: number;
+  status: string;
 }
 
 const OVERVIEW_ROWS: { key: keyof Overview; label: string }[] = [
@@ -389,8 +419,16 @@ function AddMemberPanel({
 
 export default function ProjectsPage() {
   const { projects, currentProjectId, setProjects, setCurrentProjectId } = useProjectStore();
+  const { counters, triggerRefresh } = useDataRefreshStore();
   const [team, setTeam]           = useState<TeamMember[]>([]);
   const [overview, setOverview]   = useState<Overview | null>(null);
+  const [contracts, setContracts] = useState<ProjectContract[]>([]);
+  const [permits, setPermits]     = useState<ProjectPermit[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<ProjectPurchaseOrder[]>([]);
+  const [poFormOpen, setPoFormOpen] = useState(false);
+  const [poForm, setPoForm] = useState({ po_number: "", vendor: "", item: "", total_amount: 0 });
+  const [addingPO, setAddingPO] = useState(false);
+  const [deletingPO, setDeletingPO] = useState<string | null>(null);
   const [loading, setLoading]     = useState(false);
   const [showAddMember, setShowAddMember] = useState(false);
   const [extractedMembers, setExtractedMembers] = useState<ExtractedMember[]>([]);
@@ -410,20 +448,20 @@ export default function ProjectsPage() {
 
   const API = process.env.NEXT_PUBLIC_API_URL;
 
-  // Load project list once, keep store in sync
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await axios.get(`${API}/api/v1/projects/`);
-        const p: ProjectSummary[] = res.data.projects || [];
-        setProjects(p);
-        if (!currentProjectId && p.length > 0) setCurrentProjectId(p[0].id);
-      } catch {
-        toast.error("Failed to load projects");
-      }
-    };
-    load();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Load project list, keep store in sync
+  const loadProjects = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/api/v1/projects/`);
+      const p: ProjectSummary[] = res.data.projects || [];
+      setProjects(p);
+      if (!currentProjectId && p.length > 0) setCurrentProjectId(p[0].id);
+    } catch {
+      toast.error("Failed to load projects");
+    }
+  }, [API]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Runs on mount, and again whenever a project is created/edited/deleted anywhere else (e.g. Dashboard)
+  useEffect(() => { loadProjects(); }, [counters.projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedId = currentProjectId ?? projects[0]?.id ?? null;
   // Use normalized data from the store — already has total_budget, spent_to_date, progress_percentage
@@ -433,12 +471,18 @@ export default function ProjectsPage() {
     if (!id) return;
     setLoading(true);
     try {
-      const [teamRes, ovRes] = await Promise.all([
+      const [teamRes, ovRes, contractsRes, permitsRes, poRes] = await Promise.all([
         axios.get(`${API}/api/v1/projects/${id}/workforce`),
         axios.get(`${API}/api/v1/projects/${id}/overview`),
+        axios.get(`${API}/api/v1/projects/${id}/contracts`),
+        axios.get(`${API}/api/v1/projects/${id}/permits`),
+        axios.get(`${API}/api/v1/projects/${id}/purchase-orders`),
       ]);
       setTeam(teamRes.data.workforce || []);
       setOverview(ovRes.data.overview ?? null);
+      setContracts(contractsRes.data.contracts || []);
+      setPermits(permitsRes.data.permits || []);
+      setPurchaseOrders(poRes.data.purchase_orders || []);
     } catch {
       toast.error("Failed to load project data");
     } finally {
@@ -449,6 +493,54 @@ export default function ProjectsPage() {
   useEffect(() => {
     if (selectedId) fetchTeamAndOverview(selectedId);
   }, [selectedId, fetchTeamAndOverview]);
+
+  // Refresh project detail data when any dependent module changes elsewhere
+  useEffect(() => {
+    if (selectedId) fetchTeamAndOverview(selectedId);
+  }, [ // eslint-disable-line react-hooks/exhaustive-deps
+    counters.workers, counters.safety, counters.schedule,
+    counters.contracts, counters.compliance, counters.equipment, counters.procurement,
+  ]);
+
+  const addPurchaseOrder = async () => {
+    if (!selectedId || !poForm.po_number.trim() || !poForm.vendor.trim()) {
+      toast.error("PO number and vendor are required");
+      return;
+    }
+    setAddingPO(true);
+    try {
+      await axios.post(`${API}/api/v1/procurement/purchase-orders`, {
+        project_id: selectedId,
+        po_number: poForm.po_number,
+        vendor: poForm.vendor,
+        item: poForm.item,
+        total_amount: poForm.total_amount,
+        status: "pending",
+      });
+      toast.success("Purchase order added");
+      setPoForm({ po_number: "", vendor: "", item: "", total_amount: 0 });
+      setPoFormOpen(false);
+      triggerRefresh("procurement");
+    } catch {
+      toast.error("Failed to add purchase order");
+    } finally {
+      setAddingPO(false);
+    }
+  };
+
+  const deletePurchaseOrder = async (id: string) => {
+    setDeletingPO(id);
+    try {
+      await axios.delete(`${API}/api/v1/procurement/purchase-orders/${id}`);
+      setPurchaseOrders((prev) => prev.filter((po) => po.id !== id));
+      toast.success("Purchase order removed");
+      triggerRefresh("procurement");
+    } catch {
+      toast.error("Failed to remove purchase order");
+    } finally {
+      setDeletingPO(null);
+    }
+  };
 
   const handleMemberFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -550,10 +642,9 @@ export default function ProjectsPage() {
       setNewProjectForm({ name: "", location: "", client: "", budget: "", start_date: "", end_date: "", project_type: "Building" });
       setNewProjectIFC(null);
 
-      // Refresh project list
-      const listRes = await axios.get(`${API}/api/v1/projects/`);
-      const p: ProjectSummary[] = listRes.data.projects || [];
-      setProjects(p);
+      // Refresh project list and notify other pages (e.g. Dashboard)
+      await loadProjects();
+      triggerRefresh("projects");
       if (newProject?.id) setCurrentProjectId(newProject.id);
     } catch {
       toast.error("Failed to create project");
@@ -574,7 +665,7 @@ export default function ProjectsPage() {
       {/* ── Header ── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Project Homepage</h1>
+          <h1 className="text-4xl font-bold text-foreground">Project Homepage</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Live data across all modules · click any Email or Mobile cell to edit</p>
         </div>
         <div className="flex items-center gap-2">
@@ -1009,6 +1100,153 @@ export default function ProjectsPage() {
                 </>
               );
             })() : null}
+          </section>
+
+          {/* ── Contracts & Permits ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <section className="bg-card border border-border rounded-xl overflow-hidden">
+              <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
+                <FileSignature className="w-4 h-4 text-blue-400" />
+                <h2 className="font-semibold text-foreground">Contracts</h2>
+                <span className="text-xs text-muted-foreground ml-auto">{contracts.length}</span>
+              </div>
+              {loading && contracts.length === 0 ? (
+                <div className="flex items-center justify-center py-10">
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+                </div>
+              ) : contracts.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">No contracts for this project</p>
+              ) : (
+                <div className="divide-y divide-border max-h-72 overflow-y-auto">
+                  {contracts.map((c) => (
+                    <div key={c.id} className="flex items-center gap-3 px-5 py-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">{c.title}</p>
+                        <p className="text-xs text-muted-foreground">{c.contractor}</p>
+                      </div>
+                      <span className="text-sm font-semibold text-foreground shrink-0">{fmtCurrency(c.value)}</span>
+                      <span className={cn(
+                        "text-[11px] px-2 py-0.5 rounded-md font-medium border shrink-0 capitalize",
+                        c.status === "active" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-muted text-muted-foreground border-border"
+                      )}>
+                        {c.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="bg-card border border-border rounded-xl overflow-hidden">
+              <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <h2 className="font-semibold text-foreground">Permits</h2>
+                <span className="text-xs text-muted-foreground ml-auto">{permits.length}</span>
+              </div>
+              {loading && permits.length === 0 ? (
+                <div className="flex items-center justify-center py-10">
+                  <Loader2 className="w-5 h-5 animate-spin text-emerald-400" />
+                </div>
+              ) : permits.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">No permits for this project</p>
+              ) : (
+                <div className="divide-y divide-border max-h-72 overflow-y-auto">
+                  {permits.map((p) => (
+                    <div key={p.id} className="flex items-center gap-3 px-5 py-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">{p.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {p.type}{p.expiry_date ? ` · Expires ${fmt(p.expiry_date)}` : ""}
+                        </p>
+                      </div>
+                      <span className={cn(
+                        "text-[11px] px-2 py-0.5 rounded-md font-medium border shrink-0",
+                        p.status === "Approved" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                          : p.status === "Pending" ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                          : "bg-red-500/10 text-red-400 border-red-500/20"
+                      )}>
+                        {p.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* ── Purchase Orders ── */}
+          <section className="bg-card border border-border rounded-xl overflow-hidden">
+            <div className="flex items-center gap-2 px-5 py-4 border-b border-border">
+              <ShoppingCart className="w-4 h-4 text-amber-400" />
+              <h2 className="font-semibold text-foreground">Purchase Orders</h2>
+              <span className="text-xs text-muted-foreground ml-auto mr-2">{purchaseOrders.length}</span>
+              <Button size="sm" variant="outline" onClick={() => setPoFormOpen((v) => !v)}>
+                <Plus className="w-3.5 h-3.5 mr-1.5 text-emerald-400" />
+                Add PO
+              </Button>
+            </div>
+
+            <AnimatePresence>
+              {poFormOpen && (
+                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden border-b border-border">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4">
+                    <input placeholder="PO Number *" value={poForm.po_number}
+                      onChange={(e) => setPoForm({ ...poForm, po_number: e.target.value })}
+                      className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    <input placeholder="Vendor *" value={poForm.vendor}
+                      onChange={(e) => setPoForm({ ...poForm, vendor: e.target.value })}
+                      className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    <input placeholder="Item / Description" value={poForm.item}
+                      onChange={(e) => setPoForm({ ...poForm, item: e.target.value })}
+                      className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    <input type="number" min="0" placeholder="Total Amount" value={poForm.total_amount}
+                      onChange={(e) => setPoForm({ ...poForm, total_amount: parseFloat(e.target.value) || 0 })}
+                      className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                  <div className="px-4 pb-4">
+                    <Button size="sm" onClick={addPurchaseOrder} disabled={addingPO} className="gradient-blue text-white border-0">
+                      {addingPO ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                      Save Purchase Order
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {loading && purchaseOrders.length === 0 ? (
+              <div className="flex items-center justify-center py-10">
+                <Loader2 className="w-5 h-5 animate-spin text-amber-400" />
+              </div>
+            ) : purchaseOrders.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">No purchase orders for this project</p>
+            ) : (
+              <div className="divide-y divide-border max-h-72 overflow-y-auto">
+                {purchaseOrders.map((po) => (
+                  <div key={po.id} className="flex items-center gap-3 px-5 py-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{po.po_number} · {po.vendor}</p>
+                      {po.item && <p className="text-xs text-muted-foreground truncate">{po.item}</p>}
+                    </div>
+                    <span className="text-sm font-semibold text-foreground shrink-0">{fmtCurrency(po.total_amount)}</span>
+                    <span className={cn(
+                      "text-[11px] px-2 py-0.5 rounded-md font-medium border shrink-0 capitalize",
+                      po.status === "received" || po.status === "approved" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                        : po.status === "cancelled" ? "bg-red-500/10 text-red-400 border-red-500/20"
+                        : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                    )}>
+                      {po.status}
+                    </span>
+                    <button onClick={() => deletePurchaseOrder(po.id)} disabled={deletingPO === po.id}
+                      className="p-1.5 rounded-lg hover:bg-red-500/10 transition-colors shrink-0">
+                      {deletingPO === po.id
+                        ? <Loader2 className="w-3.5 h-3.5 text-red-400 animate-spin" />
+                        : <Trash2 className="w-3.5 h-3.5 text-red-400" />}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
         </motion.div>

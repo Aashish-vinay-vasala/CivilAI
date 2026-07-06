@@ -76,7 +76,7 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-3xl font-bold text-foreground">Settings</h1>
+        <h1 className="text-4xl font-bold text-foreground">Settings</h1>
         <p className="text-muted-foreground text-sm mt-1">Manage your account & preferences</p>
       </motion.div>
 

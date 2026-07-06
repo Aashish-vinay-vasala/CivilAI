@@ -9,12 +9,14 @@ import {
   ClipboardCheck, ChevronRight, LayoutDashboard, Database,
   Scale, TrendingUp, TrendingDown, Clock, RefreshCw,
   Copy, Trash2, AlertTriangle, Link2, Download,
+  PieChart, Search, Sparkles, Type, FileSignature,
 } from "lucide-react";
 import axios from "axios";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import ModuleTabs from "@/components/shared/ModuleTabs";
 import { drawMarkdownText } from "@/lib/pdfMarkdownText";
+import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 const DOCS_TABS = [
   { href: "/documents",  label: "Documents" },
@@ -26,8 +28,11 @@ const DOCS_TABS = [
 const SUB_TABS = [
   { id: "extract",   label: "Extract",    icon: Calculator },
   { id: "dashboard", label: "Dashboard",  icon: LayoutDashboard },
+  { id: "summary",   label: "Summary",    icon: PieChart },
+  { id: "reports",   label: "AI Reports", icon: Sparkles },
   { id: "records",   label: "Records",    icon: Database },
   { id: "reconcile", label: "Reconcile",  icon: Scale },
+  { id: "glossary",  label: "Glossary",   icon: BookOpen },
 ] as const;
 type SubTab = typeof SUB_TABS[number]["id"];
 
@@ -535,6 +540,7 @@ interface RecordSummary {
 }
 
 function AccountingRecordsTab({ projectId }: { projectId: string }) {
+  const { counters, triggerRefresh } = useDataRefreshStore();
   const [records, setRecords]     = useState<RecordSummary[]>([]);
   const [loading, setLoading]     = useState(true);
   const [classFilter, setClassFilter] = useState("");
@@ -558,6 +564,7 @@ function AccountingRecordsTab({ projectId }: { projectId: string }) {
   }, [projectId, classFilter]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [counters.accounting]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = async (id: string) => {
     if (expandedId === id) { setExpandedId(null); return; }
@@ -576,6 +583,7 @@ function AccountingRecordsTab({ projectId }: { projectId: string }) {
       await axios.delete(`${API}/api/v1/accounting/records/${id}`);
       setRecords((r) => r.filter((x) => x.id !== id));
       if (expandedId === id) setExpandedId(null);
+      triggerRefresh("accounting");
     } catch { /* keep in list on failure */ }
     finally { setDeletingId(null); }
   };
@@ -800,6 +808,296 @@ function AccountingReconcileTab({ projectId }: { projectId: string }) {
   );
 }
 
+// ── Summary tab ───────────────────────────────────────────────────────────────
+
+interface ProjectSummaryData {
+  project_id: string;
+  modules: Record<string, any>;
+  financial_health: {
+    original_budget: number; total_spent: number; total_invoiced: number;
+    budget_remaining: number; budget_utilization: number | null;
+  };
+}
+
+function AccountingSummaryTab({ projectId }: { projectId: string }) {
+  const [data, setData]       = useState<ProjectSummaryData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState("");
+
+  const load = useCallback(() => {
+    if (!projectId) return;
+    setLoading(true); setError(""); setData(null);
+    axios.get(`${API}/api/v1/accounting/summary/${projectId}`)
+      .then((res) => setData(res.data))
+      .catch(() => setError("Could not build project financial summary"))
+      .finally(() => setLoading(false));
+  }, [projectId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (!projectId) return <EmptyState text="Select a project to see its cross-module financial summary" icon={PieChart} />;
+  if (loading) return <CenterLoader label="Aggregating invoices, budget, contracts, POs, EVM…" />;
+  if (error) return <ErrorBanner text={error} />;
+  if (!data) return null;
+
+  const { modules, financial_health: fh } = data;
+  const utilPct = fh.budget_utilization ?? 0;
+  const utilColor = utilPct > 100 ? "#EF4444" : utilPct > 85 ? "#F59E0B" : "#10B981";
+
+  const moduleCards: { key: string; label: string; icon: React.ElementType }[] = [
+    { key: "invoices", label: "Invoices", icon: DollarSign },
+    { key: "budget", label: "Budget Items", icon: Building2 },
+    { key: "contracts", label: "Contracts", icon: FileSignature },
+    { key: "cost_entries", label: "Cost Entries", icon: TrendingDown },
+    { key: "purchase_orders", label: "Purchase Orders", icon: ClipboardCheck },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <p className="text-white/35 text-[12px]">Aggregated financial picture across every connected module</p>
+        <button onClick={load} className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/70 transition-colors">
+          <RefreshCw className="w-3.5 h-3.5" /> Refresh
+        </button>
+      </div>
+
+      <div className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+        <div className="flex items-center justify-between text-[12px] mb-2">
+          <span className="text-white/40">Budget Utilization</span>
+          <span className="font-semibold" style={{ color: utilColor }}>{fh.budget_utilization ?? "—"}%</span>
+        </div>
+        <div className="h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
+          <div className="h-1.5 rounded-full transition-all" style={{ width: `${Math.min(utilPct, 100)}%`, background: utilColor }} />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+          <KpiTile label="Original Budget" value={fmt(fh.original_budget)} icon={Building2} color="#00D4FF" />
+          <KpiTile label="Total Spent"     value={fmt(fh.total_spent)}     icon={TrendingDown} color="#F97316" />
+          <KpiTile label="Total Invoiced"  value={fmt(fh.total_invoiced)}  icon={DollarSign} color="#A78BFA" />
+          <KpiTile label="Remaining"       value={fmt(fh.budget_remaining)} icon={Hash} color="#10B981" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {moduleCards.map(({ key, label, icon: Icon }) => {
+          const m = modules[key];
+          if (!m) return null;
+          return (
+            <div key={key} className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+              <div className="flex items-center gap-2 mb-2">
+                <Icon className="w-3.5 h-3.5 text-cyan-400" />
+                <p className="text-[12px] text-white/60 font-medium">{label}</p>
+                <span className="ml-auto text-[10px] text-white/30">{m.count ?? m.items_count ?? 0} record(s)</span>
+              </div>
+              <div className="space-y-1">
+                {Object.entries(m).filter(([k]) => k !== "count" && k !== "items_count" && k !== "by_class" && k !== "latest_extractions").map(([k, v]) => (
+                  <div key={k} className="flex items-center justify-between text-[11px]">
+                    <span className="text-white/30">{k.replace(/_/g, " ")}</span>
+                    <span className="text-white/70 font-mono">{typeof v === "number" ? fmt(v) : String(v)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {modules.evm && (
+          <div className="rounded-2xl p-4" style={{ background: "rgba(0,212,255,0.03)", border: "1px solid rgba(0,212,255,0.1)" }}>
+            <p className="text-[11px] text-white/35 uppercase tracking-wide mb-2">Latest EVM Snapshot</p>
+            <div className="grid grid-cols-2 gap-2 text-[12px]">
+              <div><span className="text-white/30">CPI </span><span className="text-white/80 font-mono">{modules.evm.cpi?.toFixed(2)}</span></div>
+              <div><span className="text-white/30">SPI </span><span className="text-white/80 font-mono">{modules.evm.spi?.toFixed(2)}</span></div>
+              <div><span className="text-white/30">EAC </span><span className="text-white/80 font-mono">{fmt(modules.evm.eac)}</span></div>
+              <div><span className="text-white/30">BAC </span><span className="text-white/80 font-mono">{fmt(modules.evm.bac)}</span></div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── AI Reports tab (cost analysis / payment summary / contract terms) ────────
+
+function AccountingReportsTab({ projectId }: { projectId: string }) {
+  const [costAnalysis, setCostAnalysis]   = useState<{ analysis: string; snapshot: any } | null>(null);
+  const [costLoading, setCostLoading]     = useState(false);
+  const [paymentSummary, setPaymentSummary] = useState<{ analysis: string; kpis: any } | null>(null);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [contractTerms, setContractTerms] = useState<{ total_value: number; active_count: number; contracts: any[] } | null>(null);
+  const [contractsLoading, setContractsLoading] = useState(false);
+
+  const loadCost = useCallback(() => {
+    if (!projectId) return;
+    setCostLoading(true);
+    axios.get(`${API}/api/v1/accounting/cost-analysis/${projectId}`)
+      .then((res) => setCostAnalysis(res.data))
+      .catch(() => setCostAnalysis({ analysis: "Cost analysis failed", snapshot: null }))
+      .finally(() => setCostLoading(false));
+  }, [projectId]);
+
+  const loadPayment = useCallback(() => {
+    if (!projectId) return;
+    setPaymentLoading(true);
+    axios.get(`${API}/api/v1/accounting/payment-summary/${projectId}`)
+      .then((res) => setPaymentSummary(res.data))
+      .catch(() => setPaymentSummary({ analysis: "Payment summary failed", kpis: null }))
+      .finally(() => setPaymentLoading(false));
+  }, [projectId]);
+
+  const loadContracts = useCallback(() => {
+    if (!projectId) return;
+    setContractsLoading(true);
+    axios.get(`${API}/api/v1/accounting/contract-terms/${projectId}`)
+      .then((res) => setContractTerms(res.data))
+      .catch(() => setContractTerms(null))
+      .finally(() => setContractsLoading(false));
+  }, [projectId]);
+
+  useEffect(() => { loadContracts(); }, [loadContracts]);
+
+  if (!projectId) return <EmptyState text="Select a project to generate AI financial reports" icon={Sparkles} />;
+
+  return (
+    <div className="space-y-4">
+      <Section title="AI Cost Analysis" icon={TrendingDown} defaultOpen>
+        {!costAnalysis && !costLoading && (
+          <button onClick={loadCost} className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] font-medium"
+            style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", color: "#00D4FF" }}>
+            <Sparkles className="w-3.5 h-3.5" /> Generate Cost Analysis
+          </button>
+        )}
+        {costLoading && <CenterLoader label="Analyzing cost report…" />}
+        {costAnalysis && (
+          <div className="space-y-3">
+            {costAnalysis.snapshot && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <KpiTile label="Budget" value={fmt(costAnalysis.snapshot.total_budget)} icon={Building2} color="#00D4FF" />
+                <KpiTile label="Spent" value={fmt(costAnalysis.snapshot.total_spent)} icon={TrendingDown} color="#F97316" />
+                <KpiTile label="Invoiced" value={fmt(costAnalysis.snapshot.total_invoiced)} icon={DollarSign} color="#A78BFA" />
+                <KpiTile label="Remaining" value={fmt(costAnalysis.snapshot.budget_remaining)} icon={Hash} color="#10B981" />
+              </div>
+            )}
+            <p className="text-white/60 text-[13px] leading-relaxed whitespace-pre-wrap">{costAnalysis.analysis}</p>
+          </div>
+        )}
+      </Section>
+
+      <Section title="AI Payment Summary" icon={DollarSign} defaultOpen>
+        {!paymentSummary && !paymentLoading && (
+          <button onClick={loadPayment} className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] font-medium"
+            style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", color: "#00D4FF" }}>
+            <Sparkles className="w-3.5 h-3.5" /> Generate Payment Summary
+          </button>
+        )}
+        {paymentLoading && <CenterLoader label="Analyzing payment cash flow…" />}
+        {paymentSummary && (
+          <div className="space-y-3">
+            {paymentSummary.kpis && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <KpiTile label="Invoiced" value={fmt(paymentSummary.kpis.total_invoiced)} icon={DollarSign} color="#00D4FF" />
+                <KpiTile label="Received" value={fmt(paymentSummary.kpis.total_received)} icon={TrendingUp} color="#10B981" />
+                <KpiTile label="Pending" value={fmt(paymentSummary.kpis.total_pending)} icon={Clock} color="#F59E0B" />
+                <KpiTile label="Overdue" value={fmt(paymentSummary.kpis.total_overdue)} icon={AlertTriangle} color="#EF4444" />
+              </div>
+            )}
+            <p className="text-white/60 text-[13px] leading-relaxed whitespace-pre-wrap">{paymentSummary.analysis || "No invoices found for this project"}</p>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Contract Financial Terms" icon={FileSignature} count={contractTerms?.contracts?.length} defaultOpen>
+        {contractsLoading ? (
+          <CenterLoader label="Loading contract terms…" />
+        ) : !contractTerms || contractTerms.contracts.length === 0 ? (
+          <p className="text-white/30 text-[13px]">No contracts found for this project</p>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex gap-4 text-[12px] mb-2">
+              <span className="text-white/40">Total value: <span className="text-white/80 font-mono">{fmt(contractTerms.total_value)}</span></span>
+              <span className="text-white/40">Active: <span className="text-white/80 font-mono">{contractTerms.active_count}</span></span>
+            </div>
+            {contractTerms.contracts.map((c: any) => (
+              <div key={c.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl text-[12px]"
+                style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                <div>
+                  <span className="text-white/70 font-medium">{c.title}</span>
+                  <span className="text-white/30 ml-2">{c.contractor}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.status === "active" ? "bg-emerald-500/10 text-emerald-400" : "bg-white/5 text-white/40"}`}>
+                    {c.status}
+                  </span>
+                  <span className="text-white/80 font-mono font-semibold">{fmt(c.value)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+// ── Glossary tab ──────────────────────────────────────────────────────────────
+
+interface GlossaryTerm { term: string; definition: string; aliases: string[] }
+
+function AccountingGlossaryTab() {
+  const [terms, setTerms]     = useState<GlossaryTerm[]>([]);
+  const [search, setSearch]   = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback((q: string) => {
+    setLoading(true);
+    axios.get(`${API}/api/v1/accounting/glossary`, { params: q ? { search: q } : {} })
+      .then((res) => setTerms(res.data.terms || []))
+      .catch(() => setTerms([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => load(search), 250);
+    return () => clearTimeout(t);
+  }, [search, load]);
+
+  return (
+    <div className="space-y-4">
+      <div className="relative max-w-sm">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/25" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search terms, aliases, definitions…"
+          className="w-full pl-9 pr-3 py-2 rounded-xl text-[13px] text-white/70 placeholder:text-white/25 outline-none"
+          style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+        />
+      </div>
+
+      {loading ? (
+        <CenterLoader label="Loading glossary…" />
+      ) : terms.length === 0 ? (
+        <EmptyState text="No terms match your search" icon={BookOpen} />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {terms.map((t) => (
+            <div key={t.term} className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="flex items-start gap-2 flex-wrap mb-1.5">
+                <span className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold"
+                  style={{ background: "rgba(0,212,255,0.08)", border: "1px solid rgba(0,212,255,0.15)", color: "#00D4FF" }}>
+                  {t.term}
+                </span>
+                {t.aliases?.length > 0 && (
+                  <span className="text-[10px] text-white/25 pt-1.5">aka {t.aliases.join(", ")}</span>
+                )}
+              </div>
+              <p className="text-white/50 text-[12px] leading-relaxed">{t.definition}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Extraction PDF export ────────────────────────────────────────────────────
 
 function flattenForPDF(obj: Record<string, unknown>, rows: [string, string][] = [], prefix = ""): [string, string][] {
@@ -956,6 +1254,7 @@ function buildExtractionPDF(result: ExtractionResult, sourceFilename: string): j
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function AccountingPage() {
+  const { triggerRefresh } = useDataRefreshStore();
   const [activeTab, setActiveTab] = useState<SubTab>("extract");
   const [projects, setProjects]   = useState<ProjectOption[]>([]);
   const [projectId, setProjectId] = useState("");
@@ -965,6 +1264,12 @@ export default function AccountingPage() {
   const [error, setError]       = useState("");
   const [filename, setFilename] = useState("");
   const [extractProjectId, setExtractProjectId] = useState("");
+  const [extractMode, setExtractMode] = useState<"file" | "text">("file");
+  const [pastedText, setPastedText]   = useState("");
+
+  const [budgetCheck, setBudgetCheck]     = useState<any>(null);
+  const [budgetChecking, setBudgetChecking] = useState(false);
+  const [budgetFigureIdx, setBudgetFigureIdx] = useState(0);
 
   useEffect(() => {
     axios.get(`${API}/api/v1/projects/`)
@@ -980,6 +1285,8 @@ export default function AccountingPage() {
     setLoading(true);
     setError("");
     setResult(null);
+    setBudgetCheck(null);
+    setBudgetFigureIdx(0);
     setFilename(file.name);
 
     const form = new FormData();
@@ -992,12 +1299,60 @@ export default function AccountingPage() {
         timeout: 60_000,
       });
       setResult(res.data);
+      triggerRefresh("accounting"); // extract defaults to save=true — persists a record
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
                || "Extraction failed. Please try again.";
       setError(msg);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function processText() {
+    if (!pastedText.trim()) return;
+    setLoading(true);
+    setError("");
+    setResult(null);
+    setBudgetCheck(null);
+    setBudgetFigureIdx(0);
+    setFilename("pasted-text.txt");
+
+    try {
+      const res = await axios.post(`${API}/api/v1/accounting/extract-text`, {
+        text: pastedText,
+        filename: "pasted-text.txt",
+        project_id: extractProjectId || undefined,
+        save: false,
+      });
+      setResult(res.data);
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+               || "Extraction failed. Please try again.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function checkAgainstBudget() {
+    if (!result || !extractProjectId || result.key_figures.length === 0) return;
+    setBudgetChecking(true);
+    setBudgetCheck(null);
+    try {
+      const kf = result.key_figures[budgetFigureIdx];
+      const res = await axios.post(`${API}/api/v1/accounting/analyze-budget`, {
+        project_id: extractProjectId,
+        extracted_total: kf.value,
+        doc_class: result.document_class,
+        currency: kf.currency || result.currency,
+        doc_subtype: result.document_subtype,
+      });
+      setBudgetCheck(res.data);
+    } catch {
+      setBudgetCheck({ message: "Budget analysis failed" });
+    } finally {
+      setBudgetChecking(false);
     }
   }
 
@@ -1017,7 +1372,7 @@ export default function AccountingPage() {
             <Calculator className="w-5 h-5 text-cyan-400" />
           </div>
           <div>
-            <h1 className="text-white font-semibold text-[17px]">Accounting</h1>
+            <h1 className="text-4xl font-bold text-white">Accounting</h1>
             <p className="text-white/35 text-[12px]">
               Extract, track, and reconcile project financials
             </p>
@@ -1043,8 +1398,11 @@ export default function AccountingPage() {
       </div>
 
       {activeTab === "dashboard" && <AccountingDashboardTab projectId={projectId} />}
+      {activeTab === "summary"   && <AccountingSummaryTab   projectId={projectId} />}
+      {activeTab === "reports"   && <AccountingReportsTab   projectId={projectId} />}
       {activeTab === "records"   && <AccountingRecordsTab   projectId={projectId} />}
       {activeTab === "reconcile" && <AccountingReconcileTab projectId={projectId} />}
+      {activeTab === "glossary"  && <AccountingGlossaryTab />}
 
       {/* Upload */}
       {activeTab === "extract" && !result && !loading && (
@@ -1065,7 +1423,40 @@ export default function AccountingPage() {
               <span className="text-[11px] text-cyan-400/70">Enables budget, invoice, contract & EVM cross-checks</span>
             )}
           </div>
-          <DropZone onFile={processFile} />
+
+          <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <button onClick={() => setExtractMode("file")}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all"
+              style={extractMode === "file" ? { background: "rgba(0,212,255,0.15)", color: "#00D4FF" } : { color: "rgba(255,255,255,0.35)" }}>
+              <Upload className="w-3.5 h-3.5" /> Upload File
+            </button>
+            <button onClick={() => setExtractMode("text")}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all"
+              style={extractMode === "text" ? { background: "rgba(0,212,255,0.15)", color: "#00D4FF" } : { color: "rgba(255,255,255,0.35)" }}>
+              <Type className="w-3.5 h-3.5" /> Paste Text
+            </button>
+          </div>
+
+          {extractMode === "file" ? (
+            <DropZone onFile={processFile} />
+          ) : (
+            <div className="space-y-3">
+              <textarea
+                value={pastedText}
+                onChange={(e) => setPastedText(e.target.value)}
+                placeholder="Paste invoice, BOQ, or financial statement text here…"
+                rows={10}
+                className="w-full px-4 py-3 rounded-2xl text-[13px] text-white/80 placeholder:text-white/25 outline-none resize-none"
+                style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,212,255,0.15)" }}
+              />
+              <button onClick={processText} disabled={!pastedText.trim()}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-medium disabled:opacity-40"
+                style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", color: "#00D4FF" }}>
+                <Calculator className="w-4 h-4" /> Extract from Text
+              </button>
+            </div>
+          )}
+
           {error && (
             <div className="mt-4 flex items-center gap-2 text-red-400 text-[13px] bg-red-500/8 border border-red-500/20 rounded-xl px-4 py-3">
               <AlertCircle className="w-4 h-4 shrink-0" /> {error}
@@ -1128,7 +1519,7 @@ export default function AccountingPage() {
                   <Download className="w-3.5 h-3.5" /> Download PDF
                 </button>
                 <button
-                  onClick={() => { setResult(null); setError(""); }}
+                  onClick={() => { setResult(null); setError(""); setBudgetCheck(null); setBudgetFigureIdx(0); }}
                   className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/70 transition-colors"
                 >
                   <X className="w-3.5 h-3.5" /> New document
@@ -1198,6 +1589,47 @@ export default function AccountingPage() {
                     </span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Check against project budget */}
+            {extractProjectId && result.key_figures.length > 0 && (
+              <div className="rounded-2xl p-4 space-y-3" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Scale className="w-4 h-4 text-cyan-400 shrink-0" />
+                  <span className="text-[12px] text-white/60">Check</span>
+                  <select
+                    value={budgetFigureIdx}
+                    onChange={(e) => setBudgetFigureIdx(Number(e.target.value))}
+                    className="px-2.5 py-1.5 rounded-lg text-[12px] text-white/60 outline-none"
+                    style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+                  >
+                    {result.key_figures.map((kf, i) => (
+                      <option key={i} value={i}>{kf.label} ({fmt(kf.value, kf.currency)})</option>
+                    ))}
+                  </select>
+                  <span className="text-[12px] text-white/60">against this project's budget</span>
+                  <button onClick={checkAgainstBudget} disabled={budgetChecking}
+                    className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium disabled:opacity-40"
+                    style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", color: "#00D4FF" }}>
+                    {budgetChecking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Scale className="w-3.5 h-3.5" />}
+                    Check
+                  </button>
+                </div>
+                {budgetCheck && (
+                  budgetCheck.variance === null || budgetCheck.message ? (
+                    <p className="text-[12px] text-white/40">{budgetCheck.message}</p>
+                  ) : (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      <KpiTile label="vs Original" value={fmt(budgetCheck.variance_vs_original)} icon={TrendingDown} color="#00D4FF" />
+                      <KpiTile label="vs Revised" value={fmt(budgetCheck.variance_vs_revised)} icon={TrendingDown} color="#A78BFA" />
+                      <KpiTile label="Utilization" value={budgetCheck.utilization_pct !== null ? `${budgetCheck.utilization_pct}%` : "—"} icon={Percent}
+                        color={budgetCheck.risk_level === "high" ? "#EF4444" : budgetCheck.risk_level === "medium" ? "#F59E0B" : "#10B981"} />
+                      <KpiTile label="Risk" value={budgetCheck.risk_level} icon={AlertTriangle}
+                        color={budgetCheck.risk_level === "high" ? "#EF4444" : budgetCheck.risk_level === "medium" ? "#F59E0B" : "#10B981"} />
+                    </div>
+                  )
+                )}
               </div>
             )}
 

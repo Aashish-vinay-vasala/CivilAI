@@ -14,7 +14,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Users, TrendingUp, TrendingDown, Upload, Loader2, UserPlus,
   Brain, Phone, Briefcase, Clock, CheckCircle, XCircle,
-  Search, X, Trash2,
+  Search, X, Trash2, Target, AlertTriangle,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -84,6 +84,15 @@ export default function WorkforcePage() {
   const [extractLoading, setExtractLoading] = useState(false);
   const [addingExtracted, setAddingExtracted] = useState<string | null>(null);
   const extractFileRef = useRef<HTMLInputElement>(null);
+
+  const [skillMatchOpen, setSkillMatchOpen] = useState(false);
+  const [skillMatchLoading, setSkillMatchLoading] = useState(false);
+  const [skillMatchResult, setSkillMatchResult] = useState("");
+  const [jobReq, setJobReq] = useState({ role: "", trade: "", min_experience_years: 0, notes: "" });
+
+  const [turnoverOpen, setTurnoverOpen] = useState(false);
+  const [turnoverLoading, setTurnoverLoading] = useState(false);
+  const [turnoverResult, setTurnoverResult] = useState("");
 
   useEffect(() => { fetchAll(); }, []);
 
@@ -192,6 +201,42 @@ export default function WorkforcePage() {
       toast.success("Onboarding plan generated!");
     } catch { toast.error("Failed to generate plan"); }
     finally { setPlanLoading(false); }
+  };
+
+  const runSkillMatch = async () => {
+    if (workers.length === 0) { toast.error("Add workers first"); return; }
+    setSkillMatchLoading(true);
+    try {
+      const job_requirements: Record<string, any> = {};
+      if (jobReq.role) job_requirements.role = jobReq.role;
+      if (jobReq.trade) job_requirements.trade = jobReq.trade;
+      if (jobReq.min_experience_years) job_requirements.min_experience_years = jobReq.min_experience_years;
+      if (jobReq.notes) job_requirements.notes = jobReq.notes;
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/workforce/match-skills`, {
+        job_requirements,
+        available_workers: workers.map(w => ({
+          name: w.name, role: w.role, trade: w.trade, status: w.status, hours_worked: w.hours_worked,
+        })),
+      });
+      setSkillMatchResult(response.data.matches);
+      toast.success("Skill match complete!");
+    } catch { toast.error("Failed to match skills"); }
+    finally { setSkillMatchLoading(false); }
+  };
+
+  const runTurnoverPredict = async () => {
+    if (workers.length === 0) { toast.error("Add workers first"); return; }
+    setTurnoverLoading(true);
+    try {
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/workforce/predict-turnover`, {
+        workers: workers.map(w => ({
+          name: w.name, role: w.role, trade: w.trade, status: w.status, hours_worked: w.hours_worked,
+        })),
+      });
+      setTurnoverResult(response.data.prediction);
+      toast.success("Turnover risk predicted!");
+    } catch { toast.error("Failed to predict turnover"); }
+    finally { setTurnoverLoading(false); }
   };
 
   const addWorker = async () => {
@@ -303,7 +348,7 @@ export default function WorkforcePage() {
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Workforce</h1>
+          <h1 className="text-4xl font-bold text-foreground">Workforce</h1>
           <p className="text-muted-foreground text-sm mt-1">AI-powered workforce management & planning</p>
         </div>
         <div className="flex gap-2">
@@ -312,6 +357,12 @@ export default function WorkforcePage() {
           </Button>
           <Button variant="outline" onClick={() => setOnboardingOpen(!onboardingOpen)}>
             <UserPlus className="w-4 h-4 mr-2 text-blue-400" />Onboard
+          </Button>
+          <Button variant="outline" onClick={() => setSkillMatchOpen(!skillMatchOpen)}>
+            <Target className="w-4 h-4 mr-2 text-cyan-400" />Match Skills
+          </Button>
+          <Button variant="outline" onClick={() => setTurnoverOpen(!turnoverOpen)}>
+            <AlertTriangle className="w-4 h-4 mr-2 text-orange-400" />Turnover Risk
           </Button>
           <input ref={extractFileRef} type="file" className="hidden" accept=".pdf,.xlsx,.xls,.docx,.doc,.csv" onChange={handleExtractUpload} />
           <Button className="gradient-blue text-white border-0" disabled={extractLoading} onClick={() => extractFileRef.current?.click()}>
@@ -509,6 +560,74 @@ export default function WorkforcePage() {
             {plan && (
               <div className="mt-4 p-4 bg-secondary rounded-xl">
                 <MarkdownText text={plan} className="text-sm text-foreground leading-relaxed" />
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* AI Skill Match Panel */}
+      <AnimatePresence>
+        {skillMatchOpen && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="bg-card border border-cyan-500/30 rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold text-foreground">AI Skill Match</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Matches your {workers.length} worker(s) against a job's requirements</p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setSkillMatchOpen(false)}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <input placeholder="Role needed (e.g. Electrician)" value={jobReq.role}
+                onChange={(e) => setJobReq({ ...jobReq, role: e.target.value })} className={inputClass} />
+              <input
+                list="trades-datalist"
+                placeholder="Trade needed (e.g. MEP)"
+                value={jobReq.trade}
+                onChange={(e) => setJobReq({ ...jobReq, trade: e.target.value })} className={inputClass} />
+              <input type="number" min="0" placeholder="Min. years experience" value={jobReq.min_experience_years}
+                onChange={(e) => setJobReq({ ...jobReq, min_experience_years: parseInt(e.target.value) || 0 })}
+                className={inputClass} />
+              <input placeholder="Notes (e.g. certifications required)" value={jobReq.notes}
+                onChange={(e) => setJobReq({ ...jobReq, notes: e.target.value })} className={inputClass} />
+            </div>
+            <Button onClick={runSkillMatch} disabled={skillMatchLoading} className="gradient-blue text-white border-0">
+              {skillMatchLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Target className="w-4 h-4 mr-2" />}
+              Match Skills
+            </Button>
+            {skillMatchResult && (
+              <div className="mt-4 p-4 bg-secondary rounded-xl">
+                <MarkdownText text={skillMatchResult} className="text-sm text-foreground leading-relaxed" />
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* AI Turnover Risk Panel */}
+      <AnimatePresence>
+        {turnoverOpen && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="bg-card border border-orange-500/30 rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold text-foreground">AI Turnover Risk</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Analyzes your {workers.length} logged worker(s) for retention risk</p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setTurnoverOpen(false)}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <Button onClick={runTurnoverPredict} disabled={turnoverLoading} className="bg-orange-600 hover:bg-orange-700 text-white border-0">
+              {turnoverLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <AlertTriangle className="w-4 h-4 mr-2" />}
+              Predict Turnover Risk
+            </Button>
+            {turnoverResult && (
+              <div className="mt-4 p-4 bg-secondary rounded-xl">
+                <MarkdownText text={turnoverResult} className="text-sm text-foreground leading-relaxed" />
               </div>
             )}
           </motion.div>

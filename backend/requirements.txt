@@ -226,3 +226,6 @@ silero-vad                   # ML-based VAD — more accurate on noisy inputs (P
 pyannote.audio               # State-of-the-art speaker diarization (HuggingFace models)
 av                           # PyAV — bundles FFmpeg for format-agnostic audio decoding (WAV/WebM/MP4/M4A)
 openwakeword                 # Fully free wake word detection — no account or API key needed
+
+# ── Web search ──────────────────────────────────────────────────────────────────
+ddgs                          # DuckDuckGo web search — no API key needed, used by the copilot's web search mode

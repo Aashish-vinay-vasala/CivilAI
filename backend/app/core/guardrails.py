@@ -102,20 +102,26 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "workforce", "procurement", "compliance", "equipment", "reports",
         "ml", "projects", "writing", "green", "vendors", "payments",
         "bim", "construction", "transcribe", "email", "preconstruction", "financials",
+        "chatbot", "voice", "agent", "support", "review", "evaluation", "accounting",
+        "notifications", "tenders",
     },
     "admin": {
         "copilot", "documents", "contracts", "safety", "cost", "schedule",
         "workforce", "procurement", "compliance", "equipment", "reports",
         "ml", "projects", "writing", "green", "vendors", "payments",
         "bim", "construction", "transcribe", "email", "preconstruction", "financials",
+        "chatbot", "voice", "agent", "support", "review", "evaluation", "accounting",
+        "notifications", "tenders",
     },
     "engineer": {
         "copilot", "documents", "safety", "schedule", "equipment", "reports",
         "ml", "projects", "bim", "construction", "compliance", "writing", "transcribe",
+        "chatbot", "voice", "agent", "support", "notifications", "tenders", "workforce",
     },
     "contractor": {
         "copilot", "documents", "safety", "schedule", "equipment",
         "projects", "construction", "compliance", "writing",
+        "chatbot", "voice", "agent", "support", "notifications", "tenders", "workforce", "ml",
     },
 }
 
