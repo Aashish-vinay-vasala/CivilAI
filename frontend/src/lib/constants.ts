@@ -11,9 +11,9 @@ export const STATUS_COLORS: Record<InvoiceStatus, string> = {
 
 // Tailwind badge classes keyed by status
 export const STATUS_BADGE: Record<InvoiceStatus, string> = {
-  received: "bg-emerald-500/10 text-emerald-400",
-  pending:  "bg-orange-500/10 text-orange-400",
-  overdue:  "bg-red-500/10 text-red-400",
+  received: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+  pending:  "bg-amber-500/10 text-amber-400 border border-amber-500/20",
+  overdue:  "bg-red-500/10 text-red-400 border border-red-500/20",
 };
 
 // Recharts tooltip style — shared across all pages

@@ -46,6 +46,61 @@ class CostRisk(BaseModel):
     savings_potential: Optional[str] = Field(default=None)
 
 
+class ExtractedCostItem(BaseModel):
+    description: str = Field(description="Line item description exactly as it appears in the document")
+    category: Optional[str] = Field(default=None, description="e.g. Materials, Labour, Equipment, Subcontractor, Overhead")
+    amount: float = Field(description="Dollar amount stated for this line item")
+    entry_date: Optional[str] = Field(default=None, description="ISO date YYYY-MM-DD if a date is stated for this item, else null")
+    item_type: Literal["budget", "actual", "other"] = Field(
+        default="actual",
+        description="'budget' if this is a planned/allocated amount, 'actual' if it is spent/incurred, 'other' otherwise",
+    )
+
+
+class CostReportExtraction(BaseModel):
+    is_cost_document: bool = Field(
+        description="True only if this is genuinely a construction cost report, budget, invoice, or cost breakdown "
+                     "containing real dollar figures relevant to project costs. False for unrelated documents "
+                     "(resumes, safety reports, contracts with no figures, schedules, random text, etc.)."
+    )
+    validation_message: str = Field(description="One short sentence explaining the validation decision")
+    document_type: Optional[str] = Field(default=None, description="Short label, e.g. 'Budget Report', 'Invoice', 'Cost Breakdown'")
+    items: list[ExtractedCostItem] = Field(default_factory=list)
+
+
+def extract_cost_items(text: str) -> dict:
+    truncated = text[:_MAX_CHARS]
+    try:
+        result: CostReportExtraction = instructor_client.chat.completions.create(
+            model=_FAST_MODEL,
+            response_model=CostReportExtraction,
+            messages=[{
+                "role": "system",
+                "content": (
+                    "You validate and extract data from an uploaded document for a construction cost management tool. "
+                    "First decide whether this is genuinely a cost/budget report, invoice, or cost breakdown containing "
+                    "real dollar figures relevant to construction project costs — reject anything else. "
+                    "If it is valid, extract every distinct cost line item you can find, using only figures explicitly "
+                    "present in the text. Never invent or estimate numbers. Classify each item's type as 'budget' "
+                    "(planned/allocated), 'actual' (spent/incurred), or 'other'."
+                ),
+            }, {
+                "role": "user",
+                "content": truncated,
+            }],
+            max_retries=2,
+        )
+        return result.model_dump()
+    except Exception as exc:
+        logger.warning("Cost item extraction failed: %s", exc)
+        return {
+            "is_cost_document": False,
+            "validation_message": "Could not analyze this document — please try again.",
+            "document_type": None,
+            "items": [],
+        }
+
+
 def analyze_cost_report(text: str) -> dict:
     truncated = text[:_MAX_CHARS]
     analysis = analyze_document(truncated, COST_PROMPT)

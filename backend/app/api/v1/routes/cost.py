@@ -5,6 +5,7 @@ from app.ai.cost_analyzer import (
     forecast_cashflow,
     analyze_material_prices,
     analyze_scenarios,
+    extract_cost_items,
 )
 from app.ocr.document_processor import process_document
 
@@ -53,12 +54,24 @@ async def analyze_cost_report_route(
                 status_code=400,
                 detail="Could not extract text from the uploaded file. Ensure it is a readable PDF, Excel, or Word document."
             )
-        result = analyze_cost_report(text)
+
+        extraction = extract_cost_items(text)
+        analysis, risk_data = None, None
+        if extraction.get("is_cost_document"):
+            result = analyze_cost_report(text)
+            analysis, risk_data = result["analysis"], result["risk_data"]
+
         return {
             "status": "success",
-            "analysis": result["analysis"],
-            "risk_data": result["risk_data"]
+            "analysis": analysis,
+            "risk_data": risk_data,
+            "is_cost_document": extraction.get("is_cost_document", False),
+            "validation_message": extraction.get("validation_message", ""),
+            "document_type": extraction.get("document_type"),
+            "items": extraction.get("items", []),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useNotificationStore } from "@/lib/stores/notificationStore";
 import { useActivityStore } from "@/lib/stores/activityStore";
+import { useDataRefreshStore, type DataType } from "@/lib/stores/dataRefreshStore";
 
 const PATH_TO_MODULE: Record<string, string> = {
   "/dashboard":    "Dashboard",
@@ -101,7 +102,41 @@ export function useSupabaseSync(userId: string | null, displayName: string) {
     return () => { try { if (channel) supabase.removeChannel(channel); } catch {} };
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── 4. Log navigation on every route change ───────────────────────────────
+  // ── 4. Cross-tab/cross-user data sync ──────────────────────────────────────
+  // These tables are shared team data (not scoped to this user), so any
+  // insert/update/delete anywhere should invalidate the same useDataRefreshStore
+  // counters every page already listens to — without this, a change made in one
+  // browser tab (or by a teammate) never reaches an already-open EVM/Cost/Overview
+  // tab until it's manually reloaded. schedule_tasks/workforce/safety_incidents/
+  // projects must also be added to the `supabase_realtime` publication (see
+  // migration 030) or no postgres_changes event is ever emitted for them.
+  useEffect(() => {
+    if (!userId) return;
+    const channels: ReturnType<typeof supabase.channel>[] = [];
+    const watch = (table: string, dataType: DataType) => {
+      try {
+        const ch = supabase
+          .channel(`sync:${table}`)
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table },
+            () => { useDataRefreshStore.getState().triggerRefresh(dataType); }
+          )
+          .subscribe();
+        channels.push(ch);
+      } catch {}
+    };
+    watch("cost_entries", "cost");
+    watch("invoices", "payments");
+    watch("schedule_tasks", "schedule");
+    watch("workforce", "workers");
+    watch("safety_incidents", "safety");
+    watch("projects", "projects");
+
+    return () => { channels.forEach((ch) => { try { supabase.removeChannel(ch); } catch {} }); };
+  }, [userId]);
+
+  // ── 5. Log navigation on every route change ───────────────────────────────
   useEffect(() => {
     if (!userId) return;
     if (pathname === prevPath.current) return;

@@ -173,6 +173,11 @@ def get_invoices(project_id: Optional[str] = Query(None), _user=Depends(protect_
                 "due_date":       str(row.get("due_date", "")),
                 "status":         row.get("status", "pending"),
                 "days_overdue":   days_overdue,
+                "description":    row.get("description"),
+                # Invoices with no project_id are invisible to every project-scoped
+                # view (Cost & Budget, Financial Budget, Accounting) — surfaced so the
+                # UI can flag them and let the user assign one.
+                "project_id":     row.get("project_id"),
             })
 
         return {
@@ -196,6 +201,7 @@ class UpdateInvoice(BaseModel):
     amount: Optional[float] = None
     due_date: Optional[str] = None
     description: Optional[str] = None
+    project_id: Optional[str] = None
 
 @router.patch("/invoices/{invoice_id}")
 def update_invoice(invoice_id: str, data: UpdateInvoice, _user=Depends(protect_route(*_finance_roles))):

@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     ZEP_API_KEY:  Optional[str] = None
 
     # When True, sensitive routes (/financials, /payments, /vendors, /contracts)
-    # require a valid JWT Bearer token.
+    # require a valid JWT Bearer token. The frontend's "Start Demo" button signs
+    # into a real (seeded admin-role) Supabase account, so this stays on.
     AUTH_REQUIRED: bool = True
 
     # ── Observability ────────────────────────────────────────────────────────────
@@ -51,6 +52,13 @@ class Settings(BaseSettings):
 
     # Wake word — Picovoice Porcupine (free key at picovoice.ai)
     PVPORCUPINE_ACCESS_KEY: Optional[str] = None
+
+    # Material price live sync — FRED (Federal Reserve Economic Data), free key at
+    # fred.stlouisfed.org. Sync stays off until both a key is set AND this is enabled,
+    # so no environment silently starts hitting an external API on deploy.
+    FRED_API_KEY: Optional[str] = None
+    MATERIAL_PRICE_SYNC_ENABLED: bool = False
+    MATERIAL_PRICE_SYNC_INTERVAL_HOURS: int = 24
 
     def get_origins(self) -> List[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]

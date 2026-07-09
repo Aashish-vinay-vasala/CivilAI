@@ -1175,10 +1175,11 @@ export default function ModuleChat({
         {open && (
           <motion.div
             key="panel"
+            layout
             initial={{ opacity: 0, y: maximized ? 0 : (panelAbove ? 12 : -12), scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{    opacity: 0, y: maximized ? 0 : (panelAbove ? 12 : -12), scale: 0.96 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
+            transition={{ duration: 0.2, ease: "easeOut", layout: { duration: 0.3, ease: "easeOut" } }}
             className={`flex flex-col rounded-2xl overflow-hidden shadow-2xl ${maximized ? "fixed" : "absolute"}`}
             style={maximized ? {
               width:          maxPanelW,

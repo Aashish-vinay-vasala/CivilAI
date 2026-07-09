@@ -78,15 +78,27 @@ def _resolve_user(token: str) -> dict | None:
     role = "contractor"
     full_name = ""
 
-    try:
-        response = supabase.table("profiles").select("role,full_name").eq("id", user_id).execute()
+    # One retry on transient network failures (e.g. httpx socket errors) — without
+    # this, a single dropped connection to Supabase silently downgrades a real
+    # admin/project_director to the "contractor" default and gets them RBAC-denied,
+    # which looks identical to an actual permissions problem from the caller's side.
+    response = None
+    for attempt in range(2):
+        try:
+            response = supabase.table("profiles").select("role,full_name").eq("id", user_id).execute()
+            break
+        except Exception:
+            if attempt == 0:
+                logger.warning("Profile lookup failed for user %s, retrying once", user_id)
+            else:
+                logger.exception("Profile lookup failed for user %s after retry", user_id)
+
+    if response is not None:
         if response.data:
             role = response.data[0].get("role", role)
             full_name = response.data[0].get("full_name", "")
         else:
             logger.warning("No profile row for authenticated user %s — defaulting role to '%s'", user_id, role)
-    except Exception:
-        logger.exception("Profile lookup failed for user %s", user_id)
 
     return {"id": user_id, "email": email, "role": role, "full_name": full_name}
 

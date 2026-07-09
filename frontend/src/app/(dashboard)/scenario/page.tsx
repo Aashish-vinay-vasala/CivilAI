@@ -15,6 +15,7 @@ import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import { CHART_TOOLTIP_STYLE } from "@/lib/constants";
+import { ACCENT, glassInputClass, glassInputStyle, gradientButtonStyle, glassButtonStyle } from "@/lib/theme";
 import { exportScenarioAnalysisPDF } from "@/lib/exportPDF";
 import { Download } from "lucide-react";
 
@@ -119,7 +120,7 @@ function renderMarkdown(text: string): ReactNode {
     if (hMatch) {
       const rest = hMatch[2].replace(/\*\*/g, "").trim();
       return (
-        <p key={li} className="mt-4 mb-1 text-sm font-bold text-blue-400">
+        <p key={li} className="mt-4 mb-1 text-sm font-bold text-cyan-400">
           {hMatch[1]}{rest ? " " + rest : ""}
         </p>
       );
@@ -135,22 +136,22 @@ function renderMarkdown(text: string): ReactNode {
 
     const rendered = segsContent.map((seg, si) => {
       if (seg.startsWith("**") && seg.endsWith("**")) {
-        return <strong key={si} className="font-semibold text-foreground">{seg.slice(2, -2)}</strong>;
+        return <strong key={si} className="font-semibold text-white">{seg.slice(2, -2)}</strong>;
       }
       return seg;
     });
 
     if (isBullet) {
       return (
-        <div key={li} className="flex gap-2 text-sm leading-relaxed text-foreground/90 pl-1">
-          <span className="text-blue-400 mt-0.5 shrink-0">•</span>
+        <div key={li} className="flex gap-2 text-sm leading-relaxed text-white/90 pl-1">
+          <span className="text-cyan-400 mt-0.5 shrink-0">•</span>
           <span>{rendered}</span>
         </div>
       );
     }
 
     return (
-      <p key={li} className="text-sm leading-relaxed text-foreground/90">
+      <p key={li} className="text-sm leading-relaxed text-white/90">
         {hasInline ? rendered : line}
       </p>
     );
@@ -387,8 +388,8 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-4xl font-bold text-foreground">Scenario Planner</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-4xl font-bold text-white tracking-tight">Scenario Planner</h1>
+          <p className="text-white/35 text-[13px] mt-1">
             What-if budget &amp; schedule modelling — seeded from live project data
           </p>
         </div>
@@ -397,7 +398,7 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
             <select
               value={selProjectId}
               onChange={(e) => { setSelProjectId(e.target.value); setScenarios([]); setActiveIds([]); }}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none"
+              className={glassInputClass + " w-auto"} style={glassInputStyle}
             >
               {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
@@ -405,7 +406,8 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
           <button
             onClick={() => loadFromProject()}
             disabled={loadingBase || !selProjectId}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-secondary border border-border text-sm text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm text-white/80 transition-all hover:scale-105 disabled:opacity-50"
+            style={glassButtonStyle}
           >
             {loadingBase ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Reload from Project
@@ -413,14 +415,16 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
           <button
             onClick={analyzeWithAI}
             disabled={analyzing || visibleScenarios.length === 0}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-sm font-medium hover:bg-cyan-500/20 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all hover:scale-105 disabled:opacity-50"
+            style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}`, color: ACCENT.cyan.text }}
           >
             {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             AI Analysis
           </button>
           <button
             onClick={addScenario}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-medium transition-all hover:scale-105"
+            style={gradientButtonStyle}
           >
             <Plus className="w-4 h-4" /> Add Scenario
           </button>
@@ -430,7 +434,8 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
       {/* EVM Context Banner */}
       {evmSnapshot && selectedProject && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-          className="flex items-center gap-4 p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 flex-wrap">
+          className="flex items-center gap-4 p-4 rounded-xl flex-wrap"
+          style={{ background: ACCENT.blue.bg, border: `1px solid ${ACCENT.blue.border}` }}>
           <Info className="w-4 h-4 text-blue-400 shrink-0" />
           <span className="text-sm font-medium text-blue-400">{selectedProject.name} — Live EVM:</span>
           {[
@@ -440,9 +445,9 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
             { label: "SPI",            value: evmSnapshot.spi.toFixed(2) },
             { label: "Budget (BAC)",   value: fmt(evmSnapshot.bac) },
           ].map(({ label, value }) => (
-            <div key={label} className="text-xs">
-              <span className="text-muted-foreground">{label}: </span>
-              <span className="text-foreground font-semibold">{value}</span>
+            <div key={label} className="text-[11px]">
+              <span className="text-white/35">{label}: </span>
+              <span className="text-white font-semibold">{value}</span>
             </div>
           ))}
         </motion.div>
@@ -451,11 +456,11 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
       {/* Scenario Cards */}
       {loadingBase ? (
         <div className="flex items-center justify-center py-16">
-          <Loader2 className="w-6 h-6 animate-spin text-blue-400 mr-3" />
-          <span className="text-muted-foreground text-sm">Loading project data…</span>
+          <Loader2 className="w-6 h-6 animate-spin text-cyan-400 mr-3" />
+          <span className="text-white/35 text-[13px]">Loading project data…</span>
         </div>
       ) : scenarios.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground text-sm">
+        <div className="text-center py-16 text-white/30 text-[13px]">
           Select a project and click <strong>Reload from Project</strong> to seed scenarios from real data.
         </div>
       ) : (
@@ -465,14 +470,15 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
               key={s.id}
               initial={{ opacity: 0, scale: 0.97 }}
               animate={{ opacity: 1, scale: 1 }}
-              className={`bg-card border rounded-2xl p-5 transition-all ${activeIds.includes(s.id) ? "border-blue-500/40" : "border-border opacity-60"}`}
+              className="glass-card p-5 transition-all"
+              style={{ borderColor: activeIds.includes(s.id) ? ACCENT.cyan.border : "rgba(255,255,255,0.07)", opacity: activeIds.includes(s.id) ? 1 : 0.6 }}
             >
               {/* Card header */}
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
                   <input
-                    className="text-sm font-semibold text-foreground bg-transparent border-none outline-none w-36 truncate"
+                    className="text-sm font-semibold text-white bg-transparent border-none outline-none w-36 truncate"
                     value={s.name}
                     onChange={(e) => updateScenario(s.id, "name", e.target.value)}
                   />
@@ -480,15 +486,14 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
                 <div className="flex gap-1 shrink-0">
                   <button
                     onClick={() => toggleActive(s.id)}
-                    className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                      activeIds.includes(s.id)
-                        ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
-                        : "text-muted-foreground border-border"
-                    }`}
+                    className="text-[11px] px-2 py-0.5 rounded-full transition-colors"
+                    style={activeIds.includes(s.id)
+                      ? { background: ACCENT.cyan.bg, color: ACCENT.cyan.text, border: `1px solid ${ACCENT.cyan.border}` }
+                      : { color: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.08)" }}
                   >
                     {activeIds.includes(s.id) ? "Visible" : "Hidden"}
                   </button>
-                  <button onClick={() => removeScenario(s.id)} className="text-muted-foreground hover:text-red-400 p-1">
+                  <button onClick={() => removeScenario(s.id)} className="text-white/40 hover:text-red-400 p-1">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -504,39 +509,40 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
                   { label: "Contingency (%)",    key: "contingencyPct",  step: 1,      min: 0      },
                 ].map(({ label, key, ...attrs }) => (
                   <div key={key} className="flex items-center justify-between gap-2">
-                    <label className="text-xs text-muted-foreground">{label}</label>
+                    <label className="text-[11px] text-white/35">{label}</label>
                     <input
                       type="number"
                       {...attrs}
                       value={(s as any)[key]}
                       onChange={(e) => updateScenario(s.id, key as keyof Scenario, parseFloat(e.target.value) || 0)}
-                      className="w-28 text-right px-2 py-1 bg-secondary border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className="w-28 text-right px-2 py-1 rounded-lg text-xs text-white outline-none transition-all border focus:border-cyan-500/50"
+                      style={glassInputStyle}
                     />
                   </div>
                 ))}
               </div>
 
               {/* Derived metrics */}
-              <div className="mt-4 pt-3 border-t border-border space-y-1.5">
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Total Estimate</span>
-                  <span className="font-semibold text-foreground">{fmt(totalCostEst(s))}</span>
+              <div className="mt-4 pt-3 space-y-1.5" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-white/35">Total Estimate</span>
+                  <span className="font-semibold text-white">{fmt(totalCostEst(s))}</span>
                 </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Monthly Burn</span>
-                  <span className="font-medium text-orange-400">{fmt(monthlyBurn(s))}/mo</span>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-white/35">Monthly Burn</span>
+                  <span className="font-medium text-amber-400">{fmt(monthlyBurn(s))}/mo</span>
                 </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Labour</span>
-                  <span className="text-foreground">{fmt(laborDollar(s))}</span>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-white/35">Labour</span>
+                  <span className="text-white/70">{fmt(laborDollar(s))}</span>
                 </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Materials</span>
-                  <span className="text-foreground">{fmt(materialDollar(s))}</span>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-white/35">Materials</span>
+                  <span className="text-white/70">{fmt(materialDollar(s))}</span>
                 </div>
                 {evmSnapshot && evmSnapshot.ac > 0 && (
-                  <div className="flex justify-between text-xs pt-1 border-t border-border">
-                    <span className="text-muted-foreground">vs Actual Spend</span>
+                  <div className="flex justify-between text-[11px] pt-1" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                    <span className="text-white/35">vs Actual Spend</span>
                     <div className={`flex items-center gap-1 ${totalCostEst(s) >= evmSnapshot.ac ? "text-emerald-400" : "text-red-400"}`}>
                       {totalCostEst(s) >= evmSnapshot.ac
                         ? <TrendingUp className="w-3 h-3" />
@@ -554,24 +560,24 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
       {/* Cumulative Cost Chart */}
       {visibleScenarios.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-          className="bg-card border border-border rounded-2xl p-6">
+          className="glass-card p-6">
           <div className="mb-4">
-            <h3 className="font-semibold text-foreground">Cumulative Cost Projection ($K)</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">S-curve model · budget only (contingency not included)</p>
+            <h3 className="font-semibold text-white text-[14px]">Cumulative Cost Projection ($K)</h3>
+            <p className="text-[11px] text-white/35 mt-0.5">S-curve model · budget only (contingency not included)</p>
           </div>
           <ResponsiveContainer width="100%" height={300}>
             <AreaChart data={chartData}>
               <defs>
                 {visibleScenarios.map((s) => (
                   <linearGradient key={s.id} id={`grad-${s.id}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor={s.color} stopOpacity={0.2} />
+                    <stop offset="5%"  stopColor={s.color} stopOpacity={0.25} />
                     <stop offset="95%" stopColor={s.color} stopOpacity={0}   />
                   </linearGradient>
                 ))}
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-              <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} unit="K" />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+              <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} unit="K" />
               <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(v: any) => [`$${v}K`]} />
               <Legend wrapperStyle={{ fontSize: "11px" }} />
               {visibleScenarios.map((s) => (
@@ -594,11 +600,11 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
       {/* Comparison Table */}
       {visibleScenarios.length > 1 && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-border rounded-2xl p-6 overflow-x-auto">
-          <h3 className="font-semibold text-foreground mb-4">Scenario Comparison</h3>
+          className="glass-card p-6 overflow-x-auto">
+          <h3 className="font-semibold text-white text-[15px] mb-4">Scenario Comparison</h3>
           <table className="w-full text-sm min-w-150">
             <thead>
-              <tr className="border-b border-border text-xs text-muted-foreground">
+              <tr className="text-[11px] text-white/35" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
                 <th className="text-left pb-2 pr-6">Scenario</th>
                 <th className="text-right pb-2 pr-4">Budget</th>
                 <th className="text-right pb-2 pr-4">Duration</th>
@@ -610,26 +616,25 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
             </thead>
             <tbody>
               {visibleScenarios.map((s) => (
-                <tr key={s.id} className="border-b border-border/50 hover:bg-secondary/20">
+                <tr key={s.id} className="transition-colors hover:bg-white/2" style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                   <td className="py-2.5 pr-6">
                     <div className="flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
-                      <span className="font-medium text-foreground">{s.name}</span>
+                      <span className="font-medium text-white">{s.name}</span>
                     </div>
                   </td>
-                  <td className="py-2.5 pr-4 text-right text-foreground">{fmt(s.budget)}</td>
-                  <td className="py-2.5 pr-4 text-right text-muted-foreground">{s.duration} mo</td>
-                  <td className="py-2.5 pr-4 text-right font-semibold text-foreground">{fmt(totalCostEst(s))}</td>
-                  <td className="py-2.5 pr-4 text-right text-orange-400">{fmt(monthlyBurn(s))}</td>
-                  <td className="py-2.5 pr-4 text-right text-muted-foreground">{s.laborCostPct}%</td>
+                  <td className="py-2.5 pr-4 text-right text-white/80">{fmt(s.budget)}</td>
+                  <td className="py-2.5 pr-4 text-right text-white/35">{s.duration} mo</td>
+                  <td className="py-2.5 pr-4 text-right font-semibold text-white">{fmt(totalCostEst(s))}</td>
+                  <td className="py-2.5 pr-4 text-right text-amber-400">{fmt(monthlyBurn(s))}</td>
+                  <td className="py-2.5 pr-4 text-right text-white/35">{s.laborCostPct}%</td>
                   <td className="py-2.5 text-right">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                      s.contingencyPct <= 10
-                        ? "bg-emerald-500/10 text-emerald-400"
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-medium"
+                      style={s.contingencyPct <= 10
+                        ? { background: ACCENT.green.bg, color: ACCENT.green.text }
                         : s.contingencyPct <= 15
-                        ? "bg-yellow-500/10 text-yellow-400"
-                        : "bg-red-500/10 text-red-400"
-                    }`}>
+                        ? { background: ACCENT.amber.bg, color: ACCENT.amber.text }
+                        : { background: ACCENT.red.bg, color: ACCENT.red.text }}>
                       {s.contingencyPct}%
                     </span>
                   </td>
@@ -643,15 +648,16 @@ export default function ScenarioPage({ projectId: propProjectId }: { projectId?:
       {/* AI Analysis Result */}
       {analysis && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-cyan-500/20 rounded-2xl p-5">
+          className="glass-card p-5" style={{ borderColor: ACCENT.cyan.border }}>
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-cyan-400" />
-              <p className="text-sm font-semibold text-foreground">AI Scenario Analysis</p>
+              <p className="text-sm font-semibold text-white">AI Scenario Analysis</p>
             </div>
             <button
               onClick={downloadPDF}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] text-white/70 transition-colors"
+              style={glassButtonStyle}
             >
               <Download className="w-3.5 h-3.5" />
               Download PDF

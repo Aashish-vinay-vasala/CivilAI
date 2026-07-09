@@ -417,10 +417,12 @@ def accounting_dashboard(
         total_budget = sum(float(p.get("budget") or 0) for p in proj_rows)
 
         # Committed + Direct Costs: canonical sources, matching /financials/live-actuals
-        # exactly — committed = pending/approved invoices, direct = cost_entries. Both
-        # previously read financial_budget_items (an itemized, independently-edited
-        # breakdown), which is why these numbers could drift from every other module.
-        total_committed = sum(float(i.get("amount") or 0) for i in invs if i.get("status") in ("pending", "approved"))
+        # and db_service.get_projects() exactly — committed = pending/overdue invoices
+        # (obligated, unpaid; "approved" never occurs — invoices.status only allows
+        # received/pending/overdue), direct = cost_entries. Both previously read
+        # financial_budget_items (an itemized, independently-edited breakdown), which is
+        # why these numbers could drift from every other module.
+        total_committed = sum(float(i.get("amount") or 0) for i in invs if i.get("status") in ("pending", "overdue"))
 
         costs       = (_q("cost_entries", "amount").execute().data or [])
         total_spent = sum(float(c.get("amount") or 0) for c in costs)

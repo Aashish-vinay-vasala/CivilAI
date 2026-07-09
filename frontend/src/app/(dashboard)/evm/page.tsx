@@ -13,6 +13,9 @@ import {
   ResponsiveContainer, ReferenceLine, Legend, Cell,
 } from "recharts";
 import ModuleChat from "@/components/shared/ModuleChat";
+import Sparkline from "@/components/shared/Sparkline";
+import { ACCENT, glassInputClass, glassInputStyle, gradientButtonStyle } from "@/lib/theme";
+import { CHART_TOOLTIP_STYLE } from "@/lib/constants";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 interface EVMData {
@@ -38,11 +41,22 @@ const calculateEVM = (tasks: any[], budget: number, spent: number): EVMData | nu
   if (!bac || bac <= 0) return null;
   if (totalTasks === 0) return null;
 
+  // Weight each task's contribution to PV/EV by its budgeted cost share when tasks carry
+  // real budgets, normalized back to BAC so total_budget stays the single source of truth
+  // even if task budgets don't sum exactly to it. Falls back to a simple average across
+  // tasks (equal weighting) for projects that haven't assigned per-task budgets yet.
+  const totalBudgeted = tasks.reduce((s, t) => s + (Number(t.budget) || 0), 0);
+  const hasTaskBudgets = totalBudgeted > 0;
+
   const avgPlanned = tasks.reduce((s, t) => s + (t.planned_progress || 0), 0) / totalTasks;
   const avgActual = tasks.reduce((s, t) => s + (t.actual_progress || 0), 0) / totalTasks;
-  const pv = bac * (avgPlanned / 100);
-  const ev = bac * (avgActual / 100);
-  const ac = spent > 0 ? spent : pv * 0.9; // use actual spend; if zero, approximate from PV
+  const pv = hasTaskBudgets
+    ? tasks.reduce((s, t) => s + (Number(t.budget) || 0) * ((t.planned_progress || 0) / 100), 0) * (bac / totalBudgeted)
+    : bac * (avgPlanned / 100);
+  const ev = hasTaskBudgets
+    ? tasks.reduce((s, t) => s + (Number(t.budget) || 0) * ((t.actual_progress || 0) / 100), 0) * (bac / totalBudgeted)
+    : bac * (avgActual / 100);
+  const ac = spent; // real actual cost — $0 is a legitimate value when no cost entries exist yet
   const sv = ev - pv;
   const cv = ev - ac;
   const spi = pv > 0 ? ev / pv : 1;
@@ -50,9 +64,13 @@ const calculateEVM = (tasks: any[], budget: number, spent: number): EVMData | nu
   const eac = cpi > 0 ? bac / cpi : bac;
   const etc = eac - ac;
   const vac = bac - eac;
-  const tcpi = (bac - ev) / Math.max(bac - ac, 1);
+  const tcpi = (bac - ev) / Math.max(bac - ac, 1); // floor = $1, avoids divide-by-zero when AC reaches BAC
 
-  return { bac, pv, ev, ac, sv, cv, spi, cpi, eac, etc, vac, tcpi, percent_complete: avgActual };
+  // Physical % complete is EV/BAC by definition — equals avgActual in the unweighted
+  // fallback case, and the real budget-weighted progress once task budgets are set.
+  const percentComplete = bac > 0 ? (ev / bac) * 100 : avgActual;
+
+  return { bac, pv, ev, ac, sv, cv, spi, cpi, eac, etc, vac, tcpi, percent_complete: percentComplete };
 };
 
 export default function EVMPage({ projectId: initialProjectId }: { projectId?: string } = {}) {
@@ -105,8 +123,18 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
       const tasksRes = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule`);
       const tasks = tasksRes.data.tasks || [];
 
-      // Use already-normalized project data from the projects list (has correct total_budget / spent_to_date)
-      const project = projects.find(p => p.id === projectId) || selectedProject;
+      // Re-fetch the projects list rather than reading the cached `projects` state — the list
+      // endpoint recomputes spent_to_date live from cost_entries, so this is what keeps AC/CPI
+      // in sync right after a Cost Entry is added or deleted instead of showing stale figures.
+      let project = projects.find(p => p.id === projectId) || selectedProject;
+      try {
+        const projRes = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
+        const freshProjects = projRes.data.projects || [];
+        if (freshProjects.length > 0) {
+          setProjects(freshProjects);
+          project = freshProjects.find((p: any) => p.id === projectId) || project;
+        }
+      } catch (err) { console.error(err); }
       setSelectedProject(project);
 
       const evmData = calculateEVM(
@@ -116,28 +144,46 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
       );
       setEvm(evmData);
 
-      // Build S-Curve from real snapshots or generate
-      if (snapshotData.length > 0) {
-        setSCurveData(snapshotData.map((s: any) => ({
-          month: new Date(s.snapshot_date).toLocaleDateString("en", { month: "short", year: "2-digit" }),
-          pv: Math.round(s.pv / 1000),
-          ev: Math.round(s.ev / 1000),
-          ac: Math.round(s.ac / 1000),
+      if (evmData) {
+        const todayStr = new Date().toISOString().slice(0, 10);
+
+        // Persist today's real EVM figures so history genuinely accumulates day over
+        // day — the backend upserts on (project_id, snapshot_date), so recalculating
+        // repeatedly the same day just updates today's row instead of duplicating it.
+        // Column names must match the live evm_snapshots table (pv/ev/ac/cpi/spi/
+        // percent_complete) — it has no bac/eac columns, so the chart's BAC reference
+        // line is drawn from the current project budget instead of a per-snapshot value.
+        try {
+          await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/construction/evm-snapshots`, {
+            project_id: projectId,
+            snapshot_date: todayStr,
+            pv: evmData.pv,
+            ev: evmData.ev,
+            ac: evmData.ac,
+            cpi: evmData.cpi,
+            spi: evmData.spi,
+            percent_complete: evmData.percent_complete,
+          });
+        } catch (err) { console.error(err); }
+
+        // The S-Curve is built entirely from real evm_snapshots rows — never a
+        // fabricated curve. Merge in today's just-computed point in case the POST
+        // above hasn't landed in a subsequent fetch yet, so the chart isn't empty
+        // on a project's very first visit.
+        const withToday = [
+          ...snapshotData.filter((s: any) => s.snapshot_date !== todayStr),
+          { snapshot_date: todayStr, pv: evmData.pv, ev: evmData.ev, ac: evmData.ac },
+        ].sort((a: any, b: any) => String(a.snapshot_date).localeCompare(String(b.snapshot_date)));
+
+        setSCurveData(withToday.map((s: any) => ({
+          month: new Date(s.snapshot_date).toLocaleDateString("en", { month: "short", day: "2-digit" }),
+          pv: Math.round((s.pv ?? 0) / 1000),
+          ev: Math.round((s.ev ?? 0) / 1000),
+          ac: Math.round((s.ac ?? 0) / 1000),
+          bac: Math.round(evmData.bac / 1000),
         })));
-      } else if (evmData) {
-        // Generate from EVM data
-        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        const currentMonth = new Date().getMonth();
-        setSCurveData(months.map((month, i) => {
-          const progress = (i + 1) / 12;
-          const isHistorical = i <= currentMonth;
-          return {
-            month,
-            pv: Math.round(evmData.bac * Math.pow(progress, 0.8) / 1000),
-            ev: isHistorical ? Math.round(evmData.bac * Math.pow(progress * (evmData.spi * 0.95), 0.8) / 1000) : null,
-            ac: isHistorical ? Math.round(evmData.bac * Math.pow(progress / evmData.cpi, 0.8) / 1000) : null,
-          };
-        }));
+      } else {
+        setSCurveData([]);
       }
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
@@ -184,6 +230,15 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
     return `$${val.toFixed(0)}`;
   };
 
+  // sCurveData / monthlyMetrics are already expressed in $K (divided by 1000 for chart display),
+  // so sparkline tooltips over that data need a formatter scaled accordingly — not the raw fmt() above.
+  const fmtK = (val: number) => {
+    const sign = val < 0 ? "-" : "";
+    const abs = Math.abs(val);
+    if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}M`;
+    return `${sign}$${abs.toFixed(0)}K`;
+  };
+
   const getIndexColor = (val: number, isIndex = true) => {
     if (isIndex) {
       if (val >= 1.05) return "text-emerald-400";
@@ -194,18 +249,18 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
     return val >= 0 ? "text-emerald-400" : "text-red-400";
   };
 
-  const getIndexBg = (val: number) => {
-    if (val >= 1.05) return "border-emerald-500/30 bg-emerald-500/5";
-    if (val >= 0.95) return "border-yellow-500/30 bg-yellow-500/5";
-    if (val >= 0.8) return "border-orange-500/30 bg-orange-500/5";
-    return "border-red-500/30 bg-red-500/5";
+  const getIndexAccent = (val: number) => {
+    if (val >= 1.05) return ACCENT.green;
+    if (val >= 0.95) return ACCENT.amber;
+    if (val >= 0.8) return ACCENT.orange;
+    return ACCENT.red;
   };
 
   const getHealthStatus = (evm: EVMData) => {
-    if (evm.cpi >= 1 && evm.spi >= 1) return { label: "On Track", color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" };
-    if (evm.cpi >= 0.9 && evm.spi >= 0.9) return { label: "Minor Issues", color: "text-yellow-400", bg: "bg-yellow-500/10 border-yellow-500/20" };
-    if (evm.cpi >= 0.8 || evm.spi >= 0.8) return { label: "At Risk", color: "text-orange-400", bg: "bg-orange-500/10 border-orange-500/20" };
-    return { label: "Critical", color: "text-red-400", bg: "bg-red-500/10 border-red-500/20" };
+    if (evm.cpi >= 1 && evm.spi >= 1) return { label: "On Track", color: "text-emerald-400", border: ACCENT.green.border };
+    if (evm.cpi >= 0.9 && evm.spi >= 0.9) return { label: "Minor Issues", color: "text-amber-400", border: ACCENT.amber.border };
+    if (evm.cpi >= 0.8 || evm.spi >= 0.8) return { label: "At Risk", color: "text-orange-400", border: ACCENT.orange.border };
+    return { label: "Critical", color: "text-red-400", border: ACCENT.red.border };
   };
 
   const varianceData = evm ? [
@@ -223,14 +278,39 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
     { name: "ETC", value: Math.round(evm.etc / 1000), color: "#06b6d4" },
   ] : [];
 
+  // Derive monthly CPI/SPI/variance/forecast series from the S-Curve's historical (non-null) points
+  // so Performance Indices and Forecast Metrics cards can show real sparklines too.
+  // sCurveData (pv/ev/ac/bac) is already scaled to $K, so bacK keeps every derived field in that
+  // same scale — mixing it with evm.bac (raw dollars) would silently produce nonsense EAC/ETC/VAC/TCPI.
+  const bacK = evm ? evm.bac / 1000 : 0;
+  const monthlyMetrics = evm ? sCurveData
+    .filter((d: any) => d.pv != null && d.ev != null && d.ac != null)
+    .map((d: any) => {
+      const cpi = d.ac > 0 ? d.ev / d.ac : 1;
+      const spi = d.pv > 0 ? d.ev / d.pv : 1;
+      const eac = cpi > 0 ? bacK / cpi : bacK;
+      return {
+        month: d.month,
+        cpi, spi,
+        cv: d.ev - d.ac,
+        sv: d.ev - d.pv,
+        eac,
+        etc: eac - d.ac,
+        vac: bacK - eac,
+        tcpi: (bacK - d.ev) / Math.max(bacK - d.ac, 0.001), // 0.001 $K == $1, matches the raw-dollar floor in calculateEVM
+        percentComplete: bacK > 0 ? (d.ev / bacK) * 100 : 0,
+        efficiency: cpi * spi * 100, // Critical Ratio (CPI × SPI)
+      };
+    }) : [];
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-4xl font-bold text-foreground">Earned Value Management</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-4xl font-bold text-white tracking-tight">Earned Value Management</h1>
+          <p className="text-white/35 text-[13px] mt-1">
             Real-time EVM · CPI · SPI · Variance Analysis · Forecast at Completion
           </p>
         </div>
@@ -238,12 +318,13 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
           {projects.length > 0 && (
             <select value={projectId}
               onChange={(e) => { setProjectId(e.target.value); setSelectedProject(projects.find(p => p.id === e.target.value)); }}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none">
+              className={glassInputClass + " w-auto"} style={glassInputStyle}>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           )}
           <button onClick={calculateProjectEVM} disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm">
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-medium transition-all hover:scale-105"
+            style={gradientButtonStyle}>
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Recalculate
           </button>
@@ -252,8 +333,8 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
 
       {loading ? (
         <div className="flex items-center justify-center py-20">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
-          <p className="ml-3 text-muted-foreground">Calculating EVM metrics...</p>
+          <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
+          <p className="ml-3 text-white/40">Calculating EVM metrics...</p>
         </div>
       ) : evm ? (
         <>
@@ -261,26 +342,26 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
           {(() => {
             const health = getHealthStatus(evm);
             return (
-              <div className={`flex items-center justify-between p-5 rounded-2xl border ${health.bg}`}>
+              <div className="glass-card flex items-center justify-between p-5" style={{ borderColor: health.border }}>
                 <div className="flex items-center gap-3">
                   {evm.cpi >= 1 && evm.spi >= 1
                     ? <CheckCircle className="w-6 h-6 text-emerald-400" />
-                    : <AlertTriangle className="w-6 h-6 text-orange-400" />}
+                    : <AlertTriangle className="w-6 h-6 text-amber-400" />}
                   <div>
                     <p className={`font-semibold text-lg ${health.color}`}>
                       Project Status: {health.label}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-[11px] text-white/35">
                       {selectedProject?.name} · {Math.round(evm.percent_complete)}% complete · BAC: {fmt(evm.bac)}
                     </p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-muted-foreground">Estimate at Completion</p>
+                  <p className="text-[11px] text-white/35">Estimate at Completion</p>
                   <p className={`text-2xl font-bold ${evm.eac > evm.bac ? "text-red-400" : "text-emerald-400"}`}>
                     {fmt(evm.eac)}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-[11px] text-white/35">
                     {evm.eac > evm.bac ? "⚠️ Overrun" : "✅ Under budget"} by {fmt(Math.abs(evm.eac - evm.bac))}
                   </p>
                 </div>
@@ -291,20 +372,27 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
           {/* Main KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { label: "Planned Value (PV)", value: fmt(evm.pv), sub: "Budgeted cost of work scheduled", icon: Calendar, color: "border-blue-500/20 bg-blue-500/5", iconColor: "text-blue-400", valColor: "text-blue-400" },
-              { label: "Earned Value (EV)", value: fmt(evm.ev), sub: "Budgeted cost of work performed", icon: CheckCircle, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400", valColor: "text-emerald-400" },
-              { label: "Actual Cost (AC)", value: fmt(evm.ac), sub: "Actual cost incurred to date", icon: DollarSign, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400", valColor: "text-orange-400" },
-              { label: "Budget at Completion", value: fmt(evm.bac), sub: "Total approved budget", icon: BarChart3, color: "border-cyan-500/20 bg-cyan-500/5", iconColor: "text-cyan-400", valColor: "text-cyan-400" },
+              { label: "Planned Value (PV)", value: fmt(evm.pv), sub: "Budgeted cost of work scheduled", icon: Calendar, accent: ACCENT.blue, trendData: sCurveData.filter((d) => d.pv != null && d.ev != null && d.ac != null).map((d) => d.pv), trendType: "area" as const, trendLabels: monthlyMetrics.map((m) => m.month), trendFmt: fmtK },
+              { label: "Earned Value (EV)", value: fmt(evm.ev), sub: "Budgeted cost of work performed", icon: CheckCircle, accent: ACCENT.green, trendData: sCurveData.filter((d) => d.pv != null && d.ev != null && d.ac != null).map((d) => d.ev), trendType: "area" as const, trendLabels: monthlyMetrics.map((m) => m.month), trendFmt: fmtK },
+              { label: "Actual Cost (AC)", value: fmt(evm.ac), sub: "Actual cost incurred to date", icon: DollarSign, accent: ACCENT.amber, trendData: sCurveData.filter((d) => d.pv != null && d.ev != null && d.ac != null).map((d) => d.ac), trendType: "area" as const, trendLabels: monthlyMetrics.map((m) => m.month), trendFmt: fmtK },
+              { label: "Budget at Completion", value: fmt(evm.bac), sub: "Total approved budget", icon: BarChart3, accent: ACCENT.cyan, trendData: sCurveData.filter((d) => d.bac > 0).map((d) => d.bac), trendType: "line" as const, trendLabels: sCurveData.filter((d) => d.bac > 0).map((d) => d.month), trendFmt: fmtK },
             ].map((kpi, i) => (
               <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.1 }} whileHover={{ y: -2 }}
-                className={`rounded-2xl border p-5 ${kpi.color}`}>
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs text-muted-foreground">{kpi.label}</p>
-                  <kpi.icon className={`w-4 h-4 ${kpi.iconColor}`} />
+                transition={{ delay: i * 0.1 }} whileHover={{ y: -4, scale: 1.02 }}
+                className="glass-card p-5 group relative overflow-hidden" style={{ borderColor: kpi.accent.border }}>
+                <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                  style={{ background: `radial-gradient(ellipse at top left, ${kpi.accent.bg}, transparent 70%)` }} />
+                <div className="relative flex items-center justify-between mb-2">
+                  <p className="text-[11px] text-white/35">{kpi.label}</p>
+                  <kpi.icon className="w-4 h-4" style={{ color: kpi.accent.text }} />
                 </div>
-                <p className={`text-2xl font-bold ${kpi.valColor}`}>{kpi.value}</p>
-                <p className="text-xs text-muted-foreground mt-1">{kpi.sub}</p>
+                <p className="relative text-2xl font-bold" style={{ color: kpi.accent.text }}>{kpi.value}</p>
+                <p className="relative text-[11px] text-white/35 mt-1">{kpi.sub}</p>
+                {kpi.trendData.length >= 2 && (
+                  <div className="relative -mx-1 mt-2 opacity-70">
+                    <Sparkline data={kpi.trendData} color={kpi.accent.text} type={kpi.trendType} labels={kpi.trendLabels} valueFormatter={kpi.trendFmt} />
+                  </div>
+                )}
               </motion.div>
             ))}
           </div>
@@ -312,58 +400,78 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
           {/* Performance Indices */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { label: "CPI", value: evm.cpi.toFixed(2), full: "Cost Performance Index", desc: evm.cpi >= 1 ? "✅ Under budget" : "⚠️ Over budget", isIndex: true, raw: evm.cpi },
-              { label: "SPI", value: evm.spi.toFixed(2), full: "Schedule Performance Index", desc: evm.spi >= 1 ? "✅ Ahead of schedule" : "⚠️ Behind schedule", isIndex: true, raw: evm.spi },
-              { label: "CV", value: fmt(evm.cv), full: "Cost Variance", desc: evm.cv >= 0 ? "✅ Under budget" : "⚠️ Over budget", isIndex: false, raw: evm.cv },
-              { label: "SV", value: fmt(evm.sv), full: "Schedule Variance", desc: evm.sv >= 0 ? "✅ Ahead of schedule" : "⚠️ Behind schedule", isIndex: false, raw: evm.sv },
-            ].map((metric, i) => (
-              <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 + i * 0.1 }} whileHover={{ y: -2 }}
-                className={`rounded-2xl border p-5 ${metric.isIndex ? getIndexBg(metric.raw) : "border-border bg-card"}`}>
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-xs text-muted-foreground">{metric.full}</p>
-                  <span className="text-xs font-bold text-muted-foreground bg-secondary px-2 py-0.5 rounded-lg">{metric.label}</span>
-                </div>
-                <p className={`text-3xl font-bold ${metric.isIndex ? getIndexColor(metric.raw) : getIndexColor(metric.raw, false)}`}>
-                  {metric.value}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">{metric.desc}</p>
-              </motion.div>
-            ))}
+              { label: "CPI", value: evm.cpi.toFixed(2), full: "Cost Performance Index", desc: evm.cpi >= 1 ? "✅ Under budget" : "⚠️ Over budget", isIndex: true, raw: evm.cpi, trendData: monthlyMetrics.map((m) => m.cpi), trendType: "line" as const, trendFmt: (v: number) => v.toFixed(2) },
+              { label: "SPI", value: evm.spi.toFixed(2), full: "Schedule Performance Index", desc: evm.spi >= 1 ? "✅ Ahead of schedule" : "⚠️ Behind schedule", isIndex: true, raw: evm.spi, trendData: monthlyMetrics.map((m) => m.spi), trendType: "line" as const, trendFmt: (v: number) => v.toFixed(2) },
+              { label: "CV", value: fmt(evm.cv), full: "Cost Variance", desc: evm.cv >= 0 ? "✅ Under budget" : "⚠️ Over budget", isIndex: false, raw: evm.cv, trendData: monthlyMetrics.map((m) => m.cv), trendType: "bar" as const, trendFmt: fmtK },
+              { label: "SV", value: fmt(evm.sv), full: "Schedule Variance", desc: evm.sv >= 0 ? "✅ Ahead of schedule" : "⚠️ Behind schedule", isIndex: false, raw: evm.sv, trendData: monthlyMetrics.map((m) => m.sv), trendType: "bar" as const, trendFmt: fmtK },
+            ].map((metric, i) => {
+              const a = metric.isIndex ? getIndexAccent(metric.raw) : (metric.raw >= 0 ? ACCENT.green : ACCENT.red);
+              return (
+                <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.2 + i * 0.1 }} whileHover={{ y: -4, scale: 1.02 }}
+                  className="glass-card p-5 group relative overflow-hidden" style={{ borderColor: a.border }}>
+                  <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                    style={{ background: `radial-gradient(ellipse at top left, ${a.bg}, transparent 70%)` }} />
+                  <div className="relative flex items-center justify-between mb-1">
+                    <p className="text-[11px] text-white/35">{metric.full}</p>
+                    <span className="text-[11px] font-bold text-white/40 px-2 py-0.5 rounded-lg" style={{ background: "rgba(255,255,255,0.05)" }}>{metric.label}</span>
+                  </div>
+                  <p className={`relative text-3xl font-bold ${metric.isIndex ? getIndexColor(metric.raw) : getIndexColor(metric.raw, false)}`}>
+                    {metric.value}
+                  </p>
+                  <p className="relative text-[11px] text-white/35 mt-1">{metric.desc}</p>
+                  {metric.trendData.length >= 2 && (
+                    <div className="relative -mx-1 mt-2 opacity-70">
+                      <Sparkline data={metric.trendData} color={a.text} type={metric.trendType} labels={monthlyMetrics.map((m) => m.month)} valueFormatter={metric.trendFmt} />
+                    </div>
+                  )}
+                </motion.div>
+              );
+            })}
           </div>
 
           {/* Forecast Metrics */}
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
             {[
-              { label: "EAC", full: "Estimate at Completion", value: fmt(evm.eac), good: evm.eac <= evm.bac, desc: `${evm.eac > evm.bac ? "+" : ""}${fmt(evm.eac - evm.bac)} vs BAC` },
-              { label: "ETC", full: "Estimate to Complete", value: fmt(evm.etc), good: true, desc: "Remaining cost forecast" },
-              { label: "VAC", full: "Variance at Completion", value: fmt(evm.vac), good: evm.vac >= 0, desc: evm.vac >= 0 ? "✅ Projected savings" : "⚠️ Projected overrun" },
-              { label: "TCPI", full: "To-Complete Perf. Index", value: evm.tcpi.toFixed(2), good: evm.tcpi <= 1.1, desc: evm.tcpi <= 1.1 ? "✅ Achievable target" : "⚠️ Challenging target" },
-              { label: "% Complete", full: "Physical % Complete", value: `${Math.round(evm.percent_complete)}%`, good: true, desc: "Based on task progress" },
-              { label: "Efficiency", full: "Overall Efficiency", value: `${Math.round(((evm.cpi + evm.spi) / 2) * 100)}%`, good: evm.cpi >= 1 && evm.spi >= 1, desc: "Combined CPI × SPI score" },
-            ].map((metric, i) => (
-              <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 + i * 0.08 }} whileHover={{ y: -2 }}
-                className={`rounded-2xl border p-4 ${metric.good ? "border-emerald-500/20 bg-emerald-500/5" : "border-red-500/20 bg-red-500/5"}`}>
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-xs text-muted-foreground">{metric.full}</p>
-                  <span className="text-xs font-bold text-muted-foreground bg-secondary px-2 py-0.5 rounded-lg">{metric.label}</span>
-                </div>
-                <p className={`text-2xl font-bold ${metric.good ? "text-emerald-400" : "text-red-400"}`}>
-                  {metric.value}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">{metric.desc}</p>
-              </motion.div>
-            ))}
+              { label: "EAC", full: "Estimate at Completion", value: fmt(evm.eac), good: evm.eac <= evm.bac, desc: `${evm.eac > evm.bac ? "+" : ""}${fmt(evm.eac - evm.bac)} vs BAC`, trendData: monthlyMetrics.map((m) => m.eac), trendType: "area" as const, trendFmt: fmtK },
+              { label: "ETC", full: "Estimate to Complete", value: fmt(evm.etc), good: true, desc: "Remaining cost forecast", trendData: monthlyMetrics.map((m) => m.etc), trendType: "bar" as const, trendFmt: fmtK },
+              { label: "VAC", full: "Variance at Completion", value: fmt(evm.vac), good: evm.vac >= 0, desc: evm.vac >= 0 ? "✅ Projected savings" : "⚠️ Projected overrun", trendData: monthlyMetrics.map((m) => m.vac), trendType: "bar" as const, trendFmt: fmtK },
+              { label: "TCPI", full: "To-Complete Perf. Index", value: evm.tcpi.toFixed(2), good: evm.tcpi <= 1.1, desc: evm.tcpi <= 1.1 ? "✅ Achievable target" : "⚠️ Challenging target", trendData: monthlyMetrics.map((m) => m.tcpi), trendType: "line" as const, trendFmt: (v: number) => v.toFixed(2) },
+              { label: "% Complete", full: "Physical % Complete", value: `${Math.round(evm.percent_complete)}%`, good: true, desc: "Based on task progress", trendData: monthlyMetrics.map((m) => m.percentComplete), trendType: "area" as const, trendFmt: (v: number) => `${v.toFixed(0)}%` },
+              { label: "CR", full: "Critical Ratio", value: `${Math.round(evm.cpi * evm.spi * 100)}%`, good: evm.cpi >= 1 && evm.spi >= 1, desc: "CPI × SPI — combined cost/schedule health", trendData: monthlyMetrics.map((m) => m.efficiency), trendType: "line" as const, trendFmt: (v: number) => `${v.toFixed(0)}%` },
+            ].map((metric, i) => {
+              const a = metric.good ? ACCENT.green : ACCENT.red;
+              return (
+                <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.3 + i * 0.08 }} whileHover={{ y: -4, scale: 1.02 }}
+                  className="glass-card p-4 group relative overflow-hidden" style={{ borderColor: a.border }}>
+                  <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                    style={{ background: `radial-gradient(ellipse at top left, ${a.bg}, transparent 70%)` }} />
+                  <div className="relative flex items-center justify-between mb-1">
+                    <p className="text-[11px] text-white/35">{metric.full}</p>
+                    <span className="text-[11px] font-bold text-white/40 px-2 py-0.5 rounded-lg" style={{ background: "rgba(255,255,255,0.05)" }}>{metric.label}</span>
+                  </div>
+                  <p className="relative text-2xl font-bold" style={{ color: a.text }}>
+                    {metric.value}
+                  </p>
+                  <p className="relative text-[11px] text-white/35 mt-1">{metric.desc}</p>
+                  {metric.trendData.length >= 2 && (
+                    <div className="relative -mx-1 mt-2 opacity-70">
+                      <Sparkline data={metric.trendData} color={a.text} type={metric.trendType} labels={monthlyMetrics.map((m) => m.month)} valueFormatter={metric.trendFmt} />
+                    </div>
+                  )}
+                </motion.div>
+              );
+            })}
           </div>
 
           {/* Charts */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* S-Curve */}
             <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
-              className="bg-card border border-border rounded-2xl p-6">
-              <h3 className="font-semibold text-foreground mb-1">EVM S-Curve</h3>
-              <p className="text-xs text-muted-foreground mb-4">PV · EV · AC over time ($K)</p>
+              className="glass-card p-6">
+              <h3 className="font-semibold text-white text-[14px] mb-1">EVM S-Curve</h3>
+              <p className="text-[11px] text-white/35 mb-4">PV · EV · AC over time ($K)</p>
               <ResponsiveContainer width="100%" height={220}>
                 <AreaChart data={sCurveData}>
                   <defs>
@@ -380,10 +488,10 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
                       <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                  <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} unit="K" />
-                  <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                  <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} unit="K" />
+                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
                   <Legend wrapperStyle={{ fontSize: "11px" }} />
                   <Area type="monotone" dataKey="pv" stroke="#8b5cf6" fill="url(#pvGrad)" strokeWidth={2} name="PV ($K)" connectNulls dot={false} />
                   <Area type="monotone" dataKey="ev" stroke="#10b981" fill="url(#evGrad)" strokeWidth={2} name="EV ($K)" connectNulls dot={false} />
@@ -394,17 +502,18 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
 
             {/* Variance Analysis */}
             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
-              className="bg-card border border-border rounded-2xl p-6">
-              <h3 className="font-semibold text-foreground mb-1">Variance Analysis</h3>
-              <p className="text-xs text-muted-foreground mb-4">SV · CV · VAC ($K) — Green = positive, Red = negative</p>
+              className="glass-card p-6">
+              <h3 className="font-semibold text-white text-[14px] mb-1">Variance Analysis</h3>
+              <p className="text-[11px] text-white/35 mb-4">SV · CV · VAC ($K) — Green = positive, Red = negative</p>
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={varianceData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                  <XAxis dataKey="name" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} unit="K" />
-                  <ReferenceLine y={0} stroke="#ffffff30" strokeWidth={2} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                  <XAxis dataKey="name" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} unit="K" />
+                  <ReferenceLine y={0} stroke="rgba(255,255,255,0.18)" strokeWidth={2} />
                   <Tooltip
-                    contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }}
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    cursor={{ fill: "rgba(0,212,255,0.06)" }}
                     formatter={(value: any) => [`$${value}K`, "Variance"]}
                   />
                   <Bar dataKey="value" radius={[6, 6, 0, 0]} name="Variance ($K)">
@@ -417,13 +526,16 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
 
               {/* Interpretation */}
               <div className="mt-4 space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground mb-2">📊 Interpretation:</p>
+                <p className="text-[11px] font-medium text-white/35 mb-2">📊 Interpretation:</p>
                 {[
                   { condition: evm.cpi >= 1, good: "✅ Cost efficient — under budget", bad: `⚠️ Over budget — CPI: ${evm.cpi.toFixed(2)}` },
                   { condition: evm.spi >= 1, good: "✅ Ahead of schedule", bad: `⚠️ Behind schedule — SPI: ${evm.spi.toFixed(2)}` },
                   { condition: evm.eac <= evm.bac, good: "✅ Projected to finish under budget", bad: `🚨 Projected overrun: ${fmt(evm.eac - evm.bac)}` },
                 ].map((item, i) => (
-                  <p key={i} className={`text-xs px-2 py-1 rounded-lg ${item.condition ? "bg-emerald-500/10 text-emerald-400" : "bg-orange-500/10 text-orange-400"}`}>
+                  <p key={i} className="text-[11px] px-2 py-1 rounded-lg"
+                    style={item.condition
+                      ? { background: ACCENT.green.bg, color: ACCENT.green.text }
+                      : { background: ACCENT.amber.bg, color: ACCENT.amber.text }}>
                     {item.condition ? item.good : item.bad}
                   </p>
                 ))}
@@ -433,18 +545,19 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
 
           {/* Budget Overview */}
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-            className="bg-card border border-border rounded-2xl p-6">
-            <h3 className="font-semibold text-foreground mb-1">Budget Overview</h3>
-            <p className="text-xs text-muted-foreground mb-4">
+            className="glass-card p-6">
+            <h3 className="font-semibold text-white text-[14px] mb-1">Budget Overview</h3>
+            <p className="text-[11px] text-white/35 mb-4">
               BAC · PV · EV · AC · EAC · ETC ($K) — color coded by performance
             </p>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={forecastData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                <XAxis dataKey="name" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} unit="K" />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="name" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} unit="K" />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }}
+                  contentStyle={CHART_TOOLTIP_STYLE}
+                  cursor={{ fill: "rgba(0,212,255,0.06)" }}
                   formatter={(value: any) => [`$${value}K`, "Amount"]}
                 />
                 <Bar dataKey="value" radius={[6, 6, 0, 0]} name="Amount ($K)">
@@ -458,7 +571,7 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
               {forecastData.map((item) => (
                 <div key={item.name} className="flex items-center gap-1.5">
                   <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: item.color }} />
-                  <span className="text-xs text-muted-foreground">{item.name}: ${item.value}K</span>
+                  <span className="text-[11px] text-white/35">{item.name}: ${item.value}K</span>
                 </div>
               ))}
             </div>
@@ -466,13 +579,13 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
         </>
       ) : (
         <div className="text-center py-20">
-          <BarChart3 className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+          <BarChart3 className="w-12 h-12 text-white/15 mx-auto mb-3" />
           {!projectId ? (
-            <p className="text-muted-foreground">Select a project to calculate EVM metrics</p>
+            <p className="text-white/30 text-[13px]">Select a project to calculate EVM metrics</p>
           ) : !selectedProject?.total_budget ? (
-            <p className="text-muted-foreground">No budget set for this project — add a budget to calculate EVM</p>
+            <p className="text-white/30 text-[13px]">No budget set for this project — add a budget to calculate EVM</p>
           ) : (
-            <p className="text-muted-foreground">No schedule tasks found — add tasks with planned/actual progress to calculate EVM</p>
+            <p className="text-white/30 text-[13px]">No schedule tasks found — add tasks with planned/actual progress to calculate EVM</p>
           )}
         </div>
       )}
@@ -480,37 +593,39 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
       {/* Cost Entries */}
       {projectId && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-border rounded-2xl p-6">
+          className="glass-card p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="font-semibold text-foreground">Cost Entries</h3>
-              <p className="text-xs text-muted-foreground">Actual costs recorded — these drive AC and CPI</p>
+              <h3 className="font-semibold text-white text-[15px]">Cost Entries</h3>
+              <p className="text-[11px] text-white/35">Actual costs recorded — these drive AC and CPI</p>
             </div>
             <button onClick={() => setShowEntryForm(v => !v)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl gradient-blue text-white text-sm">
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-medium text-white transition-all hover:scale-105"
+              style={gradientButtonStyle}>
               <Plus className="w-4 h-4" /> Add Entry
             </button>
           </div>
 
           {showEntryForm && (
-            <div className="mb-4 p-4 rounded-xl border border-border bg-secondary/30 grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="mb-4 p-4 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-3"
+              style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
               <div className="col-span-2 md:col-span-1">
-                <label className="text-xs text-muted-foreground mb-1 block">Amount ($) *</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Amount ($) *</label>
                 <input type="number" placeholder="50000" value={entryForm.amount}
                   onChange={e => setEntryForm(f => ({ ...f, amount: e.target.value }))}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none" />
+                  className={glassInputClass} style={glassInputStyle} />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Description</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Description</label>
                 <input type="text" placeholder="Concrete pour" value={entryForm.description}
                   onChange={e => setEntryForm(f => ({ ...f, description: e.target.value }))}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none" />
+                  className={glassInputClass} style={glassInputStyle} />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Category</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Category</label>
                 <select value={entryForm.category}
                   onChange={e => setEntryForm(f => ({ ...f, category: e.target.value }))}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none">
+                  className={glassInputClass} style={glassInputStyle}>
                   <option value="">Select…</option>
                   {["Labor", "Materials", "Equipment", "Subcontractor", "Overhead", "Other"].map(c => (
                     <option key={c} value={c}>{c}</option>
@@ -518,18 +633,20 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
                 </select>
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Date</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Date</label>
                 <input type="date" value={entryForm.entry_date}
                   onChange={e => setEntryForm(f => ({ ...f, entry_date: e.target.value }))}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none" />
+                  className={glassInputClass} style={glassInputStyle} />
               </div>
               <div className="col-span-2 md:col-span-4 flex gap-2 justify-end mt-1">
                 <button onClick={() => setShowEntryForm(false)}
-                  className="px-4 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground border border-border">
+                  className="px-4 py-1.5 rounded-lg text-sm text-white/50 hover:text-white/80 transition-colors"
+                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
                   Cancel
                 </button>
                 <button onClick={addCostEntry} disabled={entrySubmitting || !entryForm.amount}
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg gradient-blue text-white text-sm disabled:opacity-50">
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-50"
+                  style={gradientButtonStyle}>
                   {entrySubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                   Save Entry
                 </button>
@@ -538,12 +655,12 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
           )}
 
           {costEntries.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-6">No cost entries yet — add one above to update AC</p>
+            <p className="text-sm text-white/30 text-center py-6">No cost entries yet — add one above to update AC</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-border text-xs text-muted-foreground">
+                  <tr className="text-[11px] text-white/35" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
                     <th className="text-left py-2 pr-4">Date</th>
                     <th className="text-left py-2 pr-4">Description</th>
                     <th className="text-left py-2 pr-4">Category</th>
@@ -553,22 +670,22 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
                 </thead>
                 <tbody>
                   {costEntries.map((entry: any) => (
-                    <tr key={entry.id} className="border-b border-border/50 hover:bg-secondary/20">
-                      <td className="py-2 pr-4 text-muted-foreground">
+                    <tr key={entry.id} className="transition-colors hover:bg-white/2" style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                      <td className="py-2 pr-4 text-white/40">
                         {entry.entry_date ? new Date(entry.entry_date).toLocaleDateString() : "—"}
                       </td>
-                      <td className="py-2 pr-4 text-foreground">{entry.description || "—"}</td>
+                      <td className="py-2 pr-4 text-white/80">{entry.description || "—"}</td>
                       <td className="py-2 pr-4">
                         {entry.category ? (
-                          <span className="px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 text-xs">{entry.category}</span>
+                          <span className="px-2 py-0.5 rounded-full text-[11px]" style={{ background: ACCENT.cyan.bg, color: ACCENT.cyan.text }}>{entry.category}</span>
                         ) : "—"}
                       </td>
-                      <td className="py-2 pr-4 text-right font-medium text-orange-400">
+                      <td className="py-2 pr-4 text-right font-medium text-amber-400">
                         {fmt(Number(entry.amount))}
                       </td>
                       <td className="py-2 text-right">
                         <button onClick={() => deleteCostEntry(entry.id)}
-                          className="p-1 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                          className="p-1 rounded hover:bg-red-500/10 text-white/30 hover:text-red-400 transition-colors">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </td>
@@ -577,8 +694,8 @@ export default function EVMPage({ projectId: initialProjectId }: { projectId?: s
                 </tbody>
                 <tfoot>
                   <tr>
-                    <td colSpan={3} className="pt-3 text-xs text-muted-foreground">Total AC</td>
-                    <td className="pt-3 text-right font-bold text-orange-400">
+                    <td colSpan={3} className="pt-3 text-[11px] text-white/35">Total AC</td>
+                    <td className="pt-3 text-right font-bold text-amber-400">
                       {fmt(costEntries.reduce((s, e) => s + Number(e.amount), 0))}
                     </td>
                     <td />

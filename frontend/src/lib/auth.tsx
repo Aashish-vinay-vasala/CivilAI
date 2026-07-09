@@ -6,47 +6,11 @@ import { supabase } from "@/lib/supabase";
 import { installAxiosAuthInterceptor } from "@/lib/axiosAuthInterceptor";
 import { useRoleStore, type UserRole } from "@/lib/stores/roleStore";
 
-// Quick-fill demo credentials shown on the login page — these are real
-// Supabase Auth accounts, seeded via backend/scripts/seed_demo_users.py,
-// with matching `profiles.role` rows so backend RBAC applies correctly.
-export const DUMMY_ACCOUNTS = [
-  {
-    id: "a1b2c3d4-0001-0000-0000-000000000001",
-    name: "Sarah Chen",
-    role: "Project Director",
-    email: "director@civilai.com",
-    password: "Director@2024",
-    avatar: "SC",
-    color: "bg-blue-500",
-  },
-  {
-    id: "a1b2c3d4-0001-0000-0000-000000000002",
-    name: "James Wilson",
-    role: "Project Admin",
-    email: "admin@civilai.com",
-    password: "Admin@2024",
-    avatar: "JW",
-    color: "bg-cyan-500",
-  },
-  {
-    id: "a1b2c3d4-0001-0000-0000-000000000003",
-    name: "Mike Torres",
-    role: "Contractor",
-    email: "contractor@civilai.com",
-    password: "Contractor@2024",
-    avatar: "MT",
-    color: "bg-orange-500",
-  },
-  {
-    id: "a1b2c3d4-0001-0000-0000-000000000004",
-    name: "Priya Patel",
-    role: "Site Engineer",
-    email: "engineer@civilai.com",
-    password: "Engineer@2024",
-    avatar: "PP",
-    color: "bg-emerald-500",
-  },
-];
+// Single seeded Supabase account (admin role) that "Start Demo" signs into —
+// no signup/login form, no other accounts. Real JWT, real backend RBAC, just
+// no user-facing credential entry.
+const DEMO_EMAIL = "aashishvinayvasala@gmail.com";
+const DEMO_PASSWORD = "civilaidemo";
 
 // Maps the backend's real RBAC role vocabulary (profiles.role, checked by
 // backend/app/core/guardrails.ROLE_PERMISSIONS) onto the frontend's cosmetic
@@ -69,13 +33,17 @@ interface AuthContextType {
   profile: Profile | null;
   session: Session | null;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<{ error: { message: string } | null }>;
-  signUp: (email: string, password: string, name: string) => Promise<{ error: { message: string } | null }>;
+  startDemo: () => Promise<{ error: { message: string } | null }>;
   signOut: () => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({} as AuthContextType);
+
+// Installed at module scope (not inside AuthProvider's useEffect) so it's
+// registered before any child page's own useEffect fires — React runs child
+// effects before parent effects on mount, so an effect-scoped install here
+// would lose that race and let each page's first fetch go out unauthenticated.
+installAxiosAuthInterceptor();
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -96,8 +64,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [setRole]);
 
   useEffect(() => {
-    installAxiosAuthInterceptor();
-
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       if (data.session?.user) loadProfile(data.session.user.id);
@@ -113,16 +79,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => listener.subscription.unsubscribe();
   }, [loadProfile]);
 
-  const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error: error ? { message: error.message } : null };
-  };
-
-  const signUp = async (email: string, password: string, name: string) => {
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: name } },
+  const startDemo = async () => {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: DEMO_EMAIL,
+      password: DEMO_PASSWORD,
     });
     return { error: error ? { message: error.message } : null };
   };
@@ -132,13 +92,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setProfile(null);
   };
 
-  const signInWithGoogle = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: `${window.location.origin}/dashboard` },
-    });
-  };
-
   return (
     <AuthContext.Provider
       value={{
@@ -146,10 +99,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         profile,
         session,
         loading,
-        signIn,
-        signUp,
+        startDemo,
         signOut,
-        signInWithGoogle,
       }}
     >
       {children}

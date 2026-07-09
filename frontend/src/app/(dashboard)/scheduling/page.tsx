@@ -47,6 +47,7 @@ interface Task {
   planned_start: string;
   planned_end: string;
   delay_days: number;
+  budget: number;
 }
 
 interface ExtractedTask {
@@ -105,7 +106,9 @@ export default function SchedulingPage() {
     planned_progress: 100, actual_progress: 0,
     status: "pending", priority: "medium",
     planned_start: "", planned_end: "", delay_days: 0,
+    budget: 0,
   });
+  const [editBudget, setEditBudget] = useState(0);
 
   const inputClass = "w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500";
 
@@ -154,7 +157,7 @@ export default function SchedulingPage() {
     try {
       await axios.patch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projectId}/schedule/${taskId}`,
-        { actual_progress: editProgress, status: editStatus }
+        { actual_progress: editProgress, status: editStatus, budget: editBudget }
       );
       toast.success("Task updated!");
       setEditingTask(null);
@@ -162,7 +165,7 @@ export default function SchedulingPage() {
       triggerRefresh("schedule");
     } catch {
       setTasks(prev => prev.map(t =>
-        t.id === taskId ? { ...t, actual_progress: editProgress, status: editStatus } : t
+        t.id === taskId ? { ...t, actual_progress: editProgress, status: editStatus, budget: editBudget } : t
       ));
       toast.success("Task updated!");
       setEditingTask(null);
@@ -202,6 +205,7 @@ export default function SchedulingPage() {
         planned_progress: 100, actual_progress: 0,
         status: "pending", priority: "medium",
         planned_start: "", planned_end: "", delay_days: 0,
+        budget: 0,
       });
       fetchTasks();
       triggerRefresh("schedule");
@@ -489,6 +493,12 @@ export default function SchedulingPage() {
                   <option value="medium">Medium</option>
                   <option value="low">Low</option>
                 </select>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1.5 block">Budget ($)</label>
+                <input type="number" min="0" placeholder="50000" value={newTask.budget}
+                  onChange={(e) => setNewTask({ ...newTask, budget: parseFloat(e.target.value) || 0 })}
+                  className={inputClass} />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground mb-1.5 block">Status</label>
@@ -819,6 +829,9 @@ export default function SchedulingPage() {
                           <option value="atrisk">At Risk</option>
                           <option value="done">Done</option>
                         </select>
+                        <input type="number" min="0" placeholder="Budget ($)" value={editBudget}
+                          onChange={(e) => setEditBudget(parseFloat(e.target.value) || 0)}
+                          className="w-full px-2 py-1 bg-secondary border border-border rounded-lg text-xs text-foreground focus:outline-none" />
                       </div>
                     ) : (
                       <div className="flex items-center gap-2">
@@ -856,7 +869,7 @@ export default function SchedulingPage() {
                            task.status === "done" ? "Done" :
                            task.status?.charAt(0).toUpperCase() + task.status?.slice(1) || "—"}
                         </span>
-                        <button onClick={() => { setEditingTask(task.id); setEditProgress(task.actual_progress || 0); setEditStatus(task.status || "pending"); }}
+                        <button onClick={() => { setEditingTask(task.id); setEditProgress(task.actual_progress || 0); setEditStatus(task.status || "pending"); setEditBudget(task.budget || 0); }}
                           className="p-1.5 rounded-lg hover:bg-blue-500/10 transition-colors opacity-0 group-hover:opacity-100">
                           <Edit2 className="w-3.5 h-3.5 text-blue-400" />
                         </button>

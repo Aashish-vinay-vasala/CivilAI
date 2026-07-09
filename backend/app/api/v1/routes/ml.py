@@ -1,13 +1,13 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from fastapi import Query
+from starlette.concurrency import run_in_threadpool
 from app.services.ml_service import (
     predict_cost_overrun,
     predict_delay,
     predict_safety_risk,
     predict_turnover,
     predict_equipment_failure,
-    get_material_prices,
     get_safety_stats,
     get_delay_stats,
     get_workforce_stats,
@@ -15,6 +15,7 @@ from app.services.ml_service import (
     get_performance_trend,
     get_auto_cost_overrun,
 )
+from app.services.cost_overrun_trainer import train as train_cost_overrun_model
 
 router = APIRouter()
 
@@ -98,13 +99,6 @@ async def equipment_failure(data: EquipmentInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/material-prices")
-async def material_prices():
-    try:
-        return await get_material_prices()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 @router.get("/safety-stats")
 async def safety_stats(project_id: str | None = Query(default=None)):
     try:
@@ -146,5 +140,16 @@ async def performance_trend(months: int = Query(default=6, ge=1, le=24)):
 async def cost_overrun_auto(project_id: str | None = Query(default=None)):
     try:
         return await get_auto_cost_overrun(project_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cost-overrun/train")
+async def cost_overrun_train():
+    """Retrain the cost-overrun classifier + regressor on the synthetic baseline
+    plus any completed projects in Supabase, and hot-swap the served model."""
+    try:
+        result = await run_in_threadpool(train_cost_overrun_model)
+        return {"status": "success", **result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

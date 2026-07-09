@@ -7,11 +7,12 @@ import {
   DollarSign,
   TrendingUp,
   TrendingDown,
-  AlertTriangle,
   Upload,
   Loader2,
   Brain,
   Sparkles,
+  CheckCircle2,
+  RefreshCw,
 } from "lucide-react";
 import {
   AreaChart,
@@ -24,22 +25,21 @@ import {
   BarChart,
   Bar,
 } from "recharts";
-import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import GlassModal from "@/components/shared/GlassModal";
+import Sparkline from "@/components/shared/Sparkline";
+import MaterialPricesPanel from "@/components/shared/MaterialPricesPanel";
+import TimeRangeSelector, { type TimeRange, rangeToParams } from "@/components/shared/TimeRangeSelector";
 import { MarkdownText } from "@/lib/renderMarkdown";
 import {
   CHART_TOOLTIP_STYLE,
-  CHART_LOOKBACK_MONTHS,
-  CHART_FORECAST_MONTHS,
-  DEFAULT_PROJECT_TYPE,
-  DEFAULT_TEAM_SIZE,
-  DEFAULT_AVG_DURATION_MONTHS,
   BURN_CHART_COLORS,
   CASHFLOW_CHART_COLORS,
 } from "@/lib/constants";
+import { ACCENT, glassInputClass, glassInputStyle, gradientButtonStyle, glassButtonStyle } from "@/lib/theme";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 const EVMPage       = dynamic(() => import("../evm/page"),      { ssr: false });
@@ -63,9 +63,28 @@ const PROJECT_TABS = [
 interface CostKpis {
   totalBudget: number;
   spentToDate: number;
+  committedAmount: number;
   remaining: number;
   overrunPct: number;
   projectCount: number;
+}
+
+interface ExtractedItem {
+  _id: number;
+  description: string;
+  category?: string | null;
+  amount: number;
+  entry_date?: string | null;
+  item_type: "budget" | "actual" | "other";
+  approved: boolean;
+}
+
+interface RawExtractedItem {
+  description: string;
+  category?: string | null;
+  amount: number;
+  entry_date?: string | null;
+  item_type?: "budget" | "actual" | "other";
 }
 
 function fmtMoney(v: number) {
@@ -74,18 +93,33 @@ function fmtMoney(v: number) {
   return `$${v.toFixed(0)}`;
 }
 
+// burnChartData ("budget"/"actual") comes from the API already scaled to $K — a formatter
+// expecting raw dollars would show values 1000x too small in sparkline tooltips.
+function fmtMoneyK(v: number) {
+  const sign = v < 0 ? "-" : "";
+  const abs = Math.abs(v);
+  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}M`;
+  return `${sign}$${abs.toFixed(0)}K`;
+}
+
+const fmtPct = (v: number) => `${v.toFixed(1)}%`;
+
 export default function CostPage() {
-  const { counters } = useDataRefreshStore();
+  const { counters, triggerRefresh } = useDataRefreshStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [subTab, setSubTab] = useState("overview");
   const [loading, setLoading] = useState(false);
   const [analysis, setAnalysis] = useState("");
   const [mlData, setMlData] = useState<any>(null);
-  const [materialPrices, setMaterialPrices] = useState<{ name: string; risk: number; price: number; unit: string; change_pct: number }[]>([]);
   const [mlLoading, setMlLoading] = useState(true);
+  const [trainLoading, setTrainLoading] = useState(false);
   const [costKpis, setCostKpis] = useState<CostKpis | null>(null);
   const [burnChartData, setBurnChartData] = useState<any[]>([]);
+  const [burnLoading, setBurnLoading] = useState(true);
+  const [burnRange, setBurnRange] = useState<TimeRange>({ preset: "6m" });
   const [cashflowChartData, setCashflowChartData] = useState<any[]>([]);
+  const [cashflowLoading, setCashflowLoading] = useState(true);
+  const [cashflowRange, setCashflowRange] = useState<TimeRange>({ preset: "6m" });
   const [allProjects, setAllProjects] = useState<any[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("all");
 
@@ -95,22 +129,45 @@ export default function CostPage() {
   const [forecastResult, setForecastResult] = useState("");
   const [forecastLoading, setForecastLoading] = useState(false);
 
+  // Upload -> validate -> extract -> review/approve line items
+  const [extractOpen, setExtractOpen] = useState(false);
+  const [extractedItems, setExtractedItems] = useState<ExtractedItem[]>([]);
+  const [extractDocType, setExtractDocType] = useState("");
+  const [extractValidation, setExtractValidation] = useState("");
+  const [confirmStep, setConfirmStep] = useState(false);
+  const [addingEntries, setAddingEntries] = useState(false);
+
   useEffect(() => {
     fetchRealData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-fetch when cost entries change elsewhere (e.g. added/deleted on the EVM page)
+  // Re-fetch when cost entries change elsewhere (e.g. added/deleted on the EVM page) or when
+  // an invoice changes in Payments — committed_amount is derived from pending/overdue invoices
   useEffect(() => {
     fetchRealData();
-  }, [counters.cost]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [counters.cost, counters.payments]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ML prediction reacts to the selected project and to new cost entries
+  useEffect(() => {
+    fetchMlPrediction(selectedProjectId);
+  }, [selectedProjectId, counters.cost]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    fetchBurnChart(burnRange);
+  }, [burnRange, counters.cost]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    fetchCashflowChart(cashflowRange);
+  }, [cashflowRange, counters.cost]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const computeKpis = (projects: any[], filterProjectId: string) => {
     const filtered = filterProjectId === "all" ? projects : projects.filter((p) => p.id === filterProjectId);
     const totalBudget = filtered.reduce((s, p) => s + (p.total_budget || 0), 0);
     const spentToDate = filtered.reduce((s, p) => s + (p.spent_to_date || 0), 0);
+    const committedAmount = filtered.reduce((s, p) => s + (p.committed_amount || 0), 0);
     const remaining   = totalBudget - spentToDate;
     const overrunPct  = totalBudget > 0 ? Math.max(0, ((spentToDate - totalBudget) / totalBudget) * 100) : 0;
-    setCostKpis({ totalBudget, spentToDate, remaining, overrunPct, projectCount: filtered.length });
+    setCostKpis({ totalBudget, spentToDate, committedAmount, remaining, overrunPct, projectCount: filtered.length });
     return { totalBudget, spentToDate, filtered };
   };
 
@@ -127,93 +184,77 @@ export default function CostPage() {
   }, [burnChartData]);
 
   const fetchRealData = async () => {
+    try {
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
+      const projects: any[] = res.data.projects || [];
+      setAllProjects(projects);
+      computeKpis(projects, selectedProjectId);
+    } catch (err) {
+      console.error("Failed to fetch projects", err);
+    }
+  };
+
+  // Same real-data-driven prediction the Predictive Analytics and Analytics pages use —
+  // derives duration/team/change-orders/material-price/weather/subcontractor inputs
+  // server-side from this project (or all projects) instead of guessing client-side.
+  const fetchMlPrediction = async (projectId: string) => {
     setMlLoading(true);
     try {
-      const [pricesRes, projectsRes, burnRes, cashflowRes] = await Promise.allSettled([
-        axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/ml/material-prices`),
-        axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`),
-        axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/charts/costs`),
-        axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/charts/cashflow`),
-      ]);
-
-      let materialPriceIncrease = 0;
-      if (pricesRes.status === "fulfilled") {
-        const prices = pricesRes.value.data;
-        const latest: any = {};
-        prices.forEach((p: any) => {
-          if (!latest[p.material] || p.year > latest[p.material].year) {
-            latest[p.material] = p;
-          }
-        });
-        const processed = Object.entries(latest).map(([name, data]: any) => ({
-          name:       name.charAt(0).toUpperCase() + name.slice(1),
-          price:      data.price as number,
-          unit:       (data.unit as string) || "unit",
-          change_pct: (data.change_pct as number) || 0,
-          risk:       Math.min(Math.round(Math.abs(data.change_pct || 0) * 10), 100),
-        }));
-        if (processed.length > 0) setMaterialPrices(processed);
-        if (processed.length > 0) {
-          const avgChange = processed.reduce((s, m) => s + m.change_pct, 0) / processed.length;
-          materialPriceIncrease = Math.max(0, avgChange);
-        }
-      }
-
-      if (projectsRes.status === "fulfilled") {
-        const projects: any[] = projectsRes.value.data.projects || [];
-        setAllProjects(projects);
-        computeKpis(projects, selectedProjectId);
-
-        // Derive real ML inputs from project aggregates
-        let totalMonths = 0, count = 0, totalWorkers = 0, totalContracts = 0;
-        for (const p of projects) {
-          if (p.start_date && p.end_date) {
-            const s = new Date(p.start_date), e = new Date(p.end_date);
-            const months = (e.getFullYear() - s.getFullYear()) * 12 + e.getMonth() - s.getMonth();
-            totalMonths += Math.max(1, months);
-            count++;
-          }
-        }
-        const avgDurationMonths = count > 0 ? Math.round(totalMonths / count) : DEFAULT_AVG_DURATION_MONTHS;
-
-        const [workforceRes, contractsRes] = await Promise.allSettled([
-          axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/workforce/`),
-          projects.length > 0
-            ? axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${projects[0].id}/contracts`)
-            : Promise.reject(),
-        ]);
-        if (workforceRes.status === "fulfilled") {
-          const wf = workforceRes.value.data.workforce || workforceRes.value.data || [];
-          totalWorkers = Array.isArray(wf) ? wf.length : 0;
-        }
-        if (contractsRes.status === "fulfilled") {
-          const contracts = contractsRes.value.data.contracts || [];
-          totalContracts = contracts.length;
-        }
-
-        const predRes = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/ml/cost-overrun`, {
-          project_type: DEFAULT_PROJECT_TYPE,
-          duration_months: avgDurationMonths,
-          team_size: totalWorkers || DEFAULT_TEAM_SIZE,
-          change_orders: 0,
-          material_price_increase: Math.round(materialPriceIncrease * 10) / 10,
-          weather_impact_days: 0,
-          subcontractor_count: totalContracts,
-        }).catch(() => null);
-        if (predRes) setMlData(predRes.data);
-      }
-
-      if (burnRes.status === "fulfilled") {
-        setBurnChartData(burnRes.value.data.data || []);
-      }
-
-      if (cashflowRes.status === "fulfilled") {
-        setCashflowChartData(cashflowRes.value.data.data || []);
-      }
+      const url = projectId !== "all"
+        ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1/ml/cost-overrun-auto?project_id=${projectId}`
+        : `${process.env.NEXT_PUBLIC_API_URL}/api/v1/ml/cost-overrun-auto`;
+      const res = await axios.get(url);
+      setMlData(res.data);
     } catch (err) {
-      console.error("Failed to fetch cost data", err);
+      console.error("Failed to fetch cost-overrun prediction", err);
+      setMlData(null);
     } finally {
       setMlLoading(false);
+    }
+  };
+
+  const trainMlModel = async () => {
+    setTrainLoading(true);
+    try {
+      const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/ml/cost-overrun/train`);
+      const { accuracy, real_project_rows, total_rows } = res.data;
+      toast.success(
+        `Model retrained on ${total_rows.toLocaleString()} rows (${real_project_rows} from your projects) — ${(accuracy * 100).toFixed(1)}% accuracy`
+      );
+      fetchMlPrediction(selectedProjectId);
+    } catch (err) {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
+      toast.error(detail || "Failed to retrain model");
+    } finally {
+      setTrainLoading(false);
+    }
+  };
+
+  const fetchBurnChart = async (range: TimeRange) => {
+    setBurnLoading(true);
+    try {
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/charts/costs`, {
+        params: rangeToParams(range),
+      });
+      setBurnChartData(res.data.data || []);
+    } catch (err) {
+      console.error("Failed to fetch burn chart", err);
+    } finally {
+      setBurnLoading(false);
+    }
+  };
+
+  const fetchCashflowChart = async (range: TimeRange) => {
+    setCashflowLoading(true);
+    try {
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/charts/cashflow`, {
+        params: rangeToParams(range),
+      });
+      setCashflowChartData(res.data.data || []);
+    } catch (err) {
+      console.error("Failed to fetch cashflow chart", err);
+    } finally {
+      setCashflowLoading(false);
     }
   };
 
@@ -254,22 +295,84 @@ export default function CostPage() {
         `${process.env.NEXT_PUBLIC_API_URL}/api/v1/cost/analyze-report`,
         formData
       );
-      setAnalysis(response.data.analysis);
-      toast.success("Cost report analyzed!");
-    } catch {
-      toast.error("Failed to analyze report");
+      const data = response.data;
+      if (!data.is_cost_document) {
+        toast.error(data.validation_message || "That doesn't look like a cost report — please try again with a different file.");
+        return;
+      }
+      setAnalysis(data.analysis || "");
+      const items: ExtractedItem[] = ((data.items || []) as RawExtractedItem[]).map((it, i) => ({
+        _id: i,
+        description: it.description,
+        category: it.category,
+        amount: it.amount,
+        entry_date: it.entry_date,
+        item_type: it.item_type || "actual",
+        approved: true,
+      }));
+      setExtractedItems(items);
+      setExtractDocType(data.document_type || "Cost Document");
+      setExtractValidation(data.validation_message || "");
+      setConfirmStep(false);
+      setExtractOpen(true);
+      toast.success(items.length > 0
+        ? `Validated — found ${items.length} line item${items.length !== 1 ? "s" : ""} to review`
+        : "Validated as a cost document");
+    } catch (err) {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
+      toast.error(detail || "Failed to analyze report");
     } finally {
       setLoading(false);
+      e.target.value = "";
+    }
+  };
+
+  const toggleExtractedItem = (id: number) =>
+    setExtractedItems((items) => items.map((i) => (i._id === id ? { ...i, approved: !i.approved } : i)));
+
+  const toggleAllExtractedItems = (val: boolean) =>
+    setExtractedItems((items) => items.map((i) => ({ ...i, approved: val })));
+
+  const approvedItems = extractedItems.filter((i) => i.approved);
+  const approvedTotal = approvedItems.reduce((s, i) => s + (i.amount || 0), 0);
+
+  const confirmAddEntries = async () => {
+    if (selectedProjectId === "all") { toast.error("Select a specific project first"); return; }
+    if (approvedItems.length === 0) { toast.error("Select at least one item to add"); return; }
+    setAddingEntries(true);
+    try {
+      await Promise.all(approvedItems.map((it) =>
+        axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/${selectedProjectId}/cost`, {
+          amount: it.amount,
+          description: it.description,
+          category: it.category || undefined,
+          entry_date: it.entry_date || undefined,
+        })
+      ));
+      toast.success(`Added ${approvedItems.length} cost ${approvedItems.length === 1 ? "entry" : "entries"}`);
+      triggerRefresh("cost");
+      setExtractOpen(false);
+      setExtractedItems([]);
+      setConfirmStep(false);
+      fetchRealData();
+    } catch {
+      toast.error("Failed to add some entries — please try again");
+    } finally {
+      setAddingEntries(false);
     }
   };
 
   const tabBar = (
-    <div className="flex gap-0 border-b border-border">
+    <div className="flex gap-0.5 p-1 rounded-xl w-fit"
+      style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
       {COST_TABS.map((t) => (
         <button key={t.id} onClick={() => setSubTab(t.id)}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
-            subTab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}>{t.label}</button>
+          className="px-3.5 py-1.5 rounded-lg text-[13px] font-medium whitespace-nowrap transition-colors"
+          style={subTab === t.id
+            ? { background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)", color: "#00D4FF" }
+            : { border: "1px solid transparent", color: "rgba(255,255,255,0.4)" }}>
+          {t.label}
+        </button>
       ))}
     </div>
   );
@@ -294,8 +397,8 @@ export default function CostPage() {
         className="flex items-center justify-between flex-wrap gap-3"
       >
         <div>
-          <h1 className="text-4xl font-bold text-foreground">Cost & Budget</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-4xl font-bold text-white tracking-tight">Cost & Budget</h1>
+          <p className="text-white/35 text-[13px] mt-1">
             AI-powered cost intelligence &amp; forecasting
           </p>
         </div>
@@ -304,7 +407,8 @@ export default function CostPage() {
             <select
               value={selectedProjectId}
               onChange={(e) => setSelectedProjectId(e.target.value)}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none"
+              className={glassInputClass + " w-auto"}
+              style={glassInputStyle}
             >
               <option value="all">All Projects</option>
               {allProjects.map((p) => (
@@ -312,64 +416,182 @@ export default function CostPage() {
               ))}
             </select>
           )}
-          <Button variant="outline" onClick={() => setForecastOpen(!forecastOpen)}>
-            <Sparkles className="w-4 h-4 mr-2 text-cyan-400" />
-            AI Cashflow Forecast
-          </Button>
+          <button onClick={() => setForecastOpen(!forecastOpen)}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-white/80 whitespace-nowrap transition-all hover:scale-105"
+            style={glassButtonStyle}>
+            <Sparkles className="w-4 h-4 text-cyan-400" />
+            AI Forecast
+          </button>
           <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.xlsx,.xls,.docx" onChange={handleFileUpload} />
-          <Button className="gradient-blue text-white border-0" onClick={() => fileInputRef.current?.click()}>
-            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-            Upload Report
-          </Button>
+          <div className="relative group">
+            <button onClick={() => fileInputRef.current?.click()} disabled={loading}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-60"
+              style={gradientButtonStyle}>
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              Upload
+            </button>
+            <div className="absolute right-0 top-full mt-2 w-64 p-3 rounded-xl text-[11px] text-white/60 leading-relaxed opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-20"
+              style={{ background: "rgba(4,11,25,0.95)", border: "1px solid rgba(0,212,255,0.15)", boxShadow: "0 8px 30px rgba(0,0,0,0.5)" }}>
+              <p className="text-white/80 font-medium mb-1">Upload a cost report</p>
+              Accepts PDF, Excel (.xlsx/.xls) or Word (.docx). AI validates it&apos;s a real cost/budget document, extracts line items, and lets you approve which ones to add.
+            </div>
+          </div>
         </div>
       </motion.div>
 
       {/* AI Cash Flow Narrative Forecast */}
       {forecastOpen && (
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-cyan-500/30 rounded-2xl p-6">
-          <h3 className="font-semibold text-foreground mb-1">AI Cash Flow Forecast</h3>
-          <p className="text-xs text-muted-foreground mb-4">
+          className="glass-card p-6" style={{ borderColor: "rgba(0,212,255,0.25)" }}>
+          <h3 className="font-semibold text-white text-[15px] mb-1">AI Cash Flow Forecast</h3>
+          <p className="text-[11px] text-white/35 mb-4">
             {selectedProjectId === "all"
               ? "Select a specific project above to generate a narrative cash flow forecast"
               : `Forecasting for ${allProjects.find((p) => p.id === selectedProjectId)?.name ?? "the selected project"}`}
           </p>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Completion (%)</label>
+              <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Completion (%)</label>
               <input type="number" min={0} max={100} value={forecastForm.completion_percentage || ""}
                 onChange={(e) => setForecastForm(p => ({ ...p, completion_percentage: parseFloat(e.target.value) || 0 }))}
-                className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                className={glassInputClass} style={glassInputStyle} />
             </div>
             <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Monthly Burn Rate ($)</label>
+              <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Monthly Burn Rate ($)</label>
               <input type="number" value={forecastForm.monthly_burn_rate || ""}
                 onChange={(e) => setForecastForm(p => ({ ...p, monthly_burn_rate: parseFloat(e.target.value) || 0 }))}
-                className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                className={glassInputClass} style={glassInputStyle} />
             </div>
           </div>
-          <Button onClick={runCashflowForecast} disabled={forecastLoading || selectedProjectId === "all"}
-            className="bg-cyan-500 hover:bg-cyan-600 text-white border-0">
-            {forecastLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+          <button onClick={runCashflowForecast} disabled={forecastLoading || selectedProjectId === "all"}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-50"
+            style={gradientButtonStyle}>
+            {forecastLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             Generate Forecast
-          </Button>
+          </button>
           {forecastResult && (
-            <div className="mt-4 p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
-              <MarkdownText text={forecastResult} className="text-sm text-foreground leading-relaxed" />
+            <div className="mt-4 p-4 rounded-xl" style={{ background: "rgba(0,212,255,0.05)", border: "1px solid rgba(0,212,255,0.15)" }}>
+              <MarkdownText text={forecastResult} className="text-sm text-white/70 leading-relaxed" />
             </div>
           )}
         </motion.div>
       )}
 
+      {/* Upload -> validate -> review extracted line items */}
+      <GlassModal
+        open={extractOpen}
+        onClose={() => { setExtractOpen(false); setConfirmStep(false); }}
+        title={confirmStep ? "Confirm changes" : `Review extracted items — ${extractDocType}`}
+        subtitle={confirmStep ? undefined : extractValidation}
+        maxWidth="max-w-2xl"
+      >
+        {!confirmStep ? (
+          <>
+            {extractedItems.length === 0 ? (
+              <p className="text-sm text-white/50">
+                This looks like a valid cost document, but no distinct line items could be extracted.
+                {analysis ? " See the AI Analysis card below for a narrative summary." : ""}
+              </p>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-[11px] text-white/35">{approvedItems.length} of {extractedItems.length} selected</p>
+                  <div className="flex gap-3">
+                    <button onClick={() => toggleAllExtractedItems(true)} className="text-[11px] text-cyan-400 hover:underline">Select all</button>
+                    <button onClick={() => toggleAllExtractedItems(false)} className="text-[11px] text-white/40 hover:underline">Select none</button>
+                  </div>
+                </div>
+                <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-1">
+                  {extractedItems.map((item) => (
+                    <label key={item._id}
+                      className="flex items-start gap-3 p-3 rounded-xl cursor-pointer transition-colors"
+                      style={{
+                        background: item.approved ? "rgba(0,212,255,0.05)" : "rgba(255,255,255,0.02)",
+                        border: item.approved ? "1px solid rgba(0,212,255,0.2)" : "1px solid rgba(255,255,255,0.06)",
+                      }}>
+                      <input type="checkbox" checked={item.approved} onChange={() => toggleExtractedItem(item._id)}
+                        className="mt-1 w-4 h-4 accent-cyan-500 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[13px] text-white/85 truncate">{item.description}</p>
+                          <p className="text-[13px] font-semibold text-white shrink-0">{fmtMoney(item.amount)}</p>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                          {item.category && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full text-white/50"
+                              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                              {item.category}
+                            </span>
+                          )}
+                          <span className="text-[10px] px-2 py-0.5 rounded-full capitalize" style={{
+                            background: item.item_type === "budget" ? ACCENT.cyan.bg : item.item_type === "actual" ? ACCENT.amber.bg : "rgba(255,255,255,0.05)",
+                            border: `1px solid ${item.item_type === "budget" ? ACCENT.cyan.border : item.item_type === "actual" ? ACCENT.amber.border : "rgba(255,255,255,0.08)"}`,
+                            color: item.item_type === "budget" ? ACCENT.cyan.text : item.item_type === "actual" ? ACCENT.amber.text : "rgba(255,255,255,0.5)",
+                          }}>
+                            {item.item_type}
+                          </span>
+                          {item.entry_date && <span className="text-[10px] text-white/30">{item.entry_date}</span>}
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button onClick={() => { setExtractOpen(false); toast("Discarded — nothing was added"); }}
+                className="px-4 py-2 rounded-xl text-sm text-white/50 hover:text-white/80 transition-colors">
+                Discard all
+              </button>
+              {extractedItems.length > 0 && (
+                <button onClick={() => setConfirmStep(true)}
+                  disabled={approvedItems.length === 0}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
+                  style={gradientButtonStyle}>
+                  Continue with {approvedItems.length} item{approvedItems.length !== 1 ? "s" : ""}
+                </button>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-white/70 leading-relaxed">
+              You&apos;re about to add <span className="text-white font-semibold">{approvedItems.length}</span> cost{" "}
+              {approvedItems.length === 1 ? "entry" : "entries"} totaling{" "}
+              <span className="text-white font-semibold">{fmtMoney(approvedTotal)}</span> to{" "}
+              <span className="text-cyan-400 font-medium">
+                {selectedProjectId === "all" ? "—" : allProjects.find((p) => p.id === selectedProjectId)?.name ?? "the selected project"}
+              </span>. This updates the project&apos;s spend and budget charts immediately.
+            </p>
+            {selectedProjectId === "all" && (
+              <p className="text-[12px] text-amber-400 mt-3">Select a specific project from the dropdown above before confirming.</p>
+            )}
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button onClick={() => setConfirmStep(false)} className="px-4 py-2 rounded-xl text-sm text-white/50 hover:text-white/80 transition-colors">
+                Back
+              </button>
+              <button onClick={confirmAddEntries} disabled={addingEntries || selectedProjectId === "all"}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-50"
+                style={gradientButtonStyle}>
+                {addingEntries ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Confirm & Update
+              </button>
+            </div>
+          </>
+        )}
+      </GlassModal>
+
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         {(costKpis ? [
           {
             label: "Total Budget",
             value: fmtMoney(costKpis.totalBudget),
             trend: "up" as const,
             change: `${costKpis.projectCount} project${costKpis.projectCount !== 1 ? "s" : ""}`,
-            color: "border-blue-500/20 bg-blue-500/5",
+            accent: "cyan" as const, icon: DollarSign,
+            trendData: burnChartData.map((d) => d.budget), trendType: "area" as const,
+            trendLabels: burnChartData.map((d) => d.month), trendFmt: fmtMoneyK,
           },
           {
             label: "Spent to Date",
@@ -378,7 +600,18 @@ export default function CostPage() {
             change: costKpis.totalBudget > 0
               ? `${((costKpis.spentToDate / costKpis.totalBudget) * 100).toFixed(1)}% of budget`
               : "—",
-            color: "border-orange-500/20 bg-orange-500/5",
+            accent: "amber" as const, icon: TrendingUp,
+            trendData: burnChartData.map((d) => d.actual), trendType: "area" as const,
+            trendLabels: burnChartData.map((d) => d.month), trendFmt: fmtMoneyK,
+          },
+          {
+            label: "Committed",
+            value: fmtMoney(costKpis.committedAmount),
+            trend: "up" as const,
+            change: "Pending / overdue invoices",
+            accent: "blue" as const, icon: DollarSign,
+            trendData: [] as number[], trendType: "bar" as const,
+            trendLabels: [] as string[], trendFmt: fmtMoneyK,
           },
           {
             label: "Remaining",
@@ -387,105 +620,142 @@ export default function CostPage() {
             change: costKpis.totalBudget > 0
               ? `${((Math.abs(costKpis.remaining) / costKpis.totalBudget) * 100).toFixed(1)}% ${costKpis.remaining >= 0 ? "left" : "over"}`
               : "—",
-            color: "border-red-500/20 bg-red-500/5",
+            accent: "red" as const, icon: DollarSign,
+            trendData: burnChartData.map((d) => d.budget - d.actual), trendType: "bar" as const,
+            trendLabels: burnChartData.map((d) => d.month), trendFmt: fmtMoneyK,
           },
           {
             label: "Cost Overrun",
             value: `${costKpis.overrunPct.toFixed(1)}%`,
             trend: (costKpis.overrunPct > 0 ? "down" : "up") as "up" | "down",
             change: costKpis.overrunPct > 0 ? "Over budget" : "On budget",
-            color: "border-emerald-500/20 bg-emerald-500/5",
+            accent: "green" as const, icon: TrendingDown,
+            trendData: burnChartData.map((d) => d.budget > 0 ? Math.max(0, ((d.actual - d.budget) / d.budget) * 100) : 0), trendType: "line" as const,
+            trendLabels: burnChartData.map((d) => d.month), trendFmt: fmtPct,
           },
         ] : [
-          { label: "Total Budget", value: "—", trend: "up" as const, change: "Loading…", color: "border-blue-500/20 bg-blue-500/5" },
-          { label: "Spent to Date", value: "—", trend: "up" as const, change: "Loading…", color: "border-orange-500/20 bg-orange-500/5" },
-          { label: "Remaining", value: "—", trend: "up" as const, change: "Loading…", color: "border-red-500/20 bg-red-500/5" },
-          { label: "Cost Overrun", value: "—", trend: "up" as const, change: "Loading…", color: "border-emerald-500/20 bg-emerald-500/5" },
-        ]).map((kpi, i) => (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
-            whileHover={{ y: -2 }}
-            className={`rounded-2xl border p-5 ${kpi.color}`}
-          >
-            <p className="text-sm text-muted-foreground">{kpi.label}</p>
-            <p className="text-2xl font-bold text-foreground mt-1">{kpi.value}</p>
-            <div className={`flex items-center gap-1 mt-1 text-xs ${kpi.trend === "up" ? "text-emerald-400" : "text-red-400"}`}>
-              {kpi.trend === "up" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-              {kpi.change}
-            </div>
-          </motion.div>
-        ))}
+          { label: "Total Budget", value: "—", trend: "up" as const, change: "Loading…", accent: "cyan" as const, icon: DollarSign, trendData: [] as number[], trendType: "area" as const, trendLabels: [] as string[], trendFmt: fmtMoneyK },
+          { label: "Spent to Date", value: "—", trend: "up" as const, change: "Loading…", accent: "amber" as const, icon: TrendingUp, trendData: [] as number[], trendType: "area" as const, trendLabels: [] as string[], trendFmt: fmtMoneyK },
+          { label: "Committed", value: "—", trend: "up" as const, change: "Loading…", accent: "blue" as const, icon: DollarSign, trendData: [] as number[], trendType: "bar" as const, trendLabels: [] as string[], trendFmt: fmtMoneyK },
+          { label: "Remaining", value: "—", trend: "up" as const, change: "Loading…", accent: "red" as const, icon: DollarSign, trendData: [] as number[], trendType: "bar" as const, trendLabels: [] as string[], trendFmt: fmtMoneyK },
+          { label: "Cost Overrun", value: "—", trend: "up" as const, change: "Loading…", accent: "green" as const, icon: TrendingDown, trendData: [] as number[], trendType: "line" as const, trendLabels: [] as string[], trendFmt: fmtPct },
+        ]).map((kpi, i) => {
+          const a = ACCENT[kpi.accent];
+          return (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.08 }}
+              whileHover={{ y: -4, scale: 1.02 }}
+              className="glass-card p-5 group relative overflow-hidden"
+              style={{ borderColor: a.border }}
+            >
+              <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                style={{ background: `radial-gradient(ellipse at top left, ${a.bg}, transparent 70%)` }} />
+              <div className="relative flex items-start justify-between mb-4">
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center"
+                  style={{ background: a.bg, border: `1px solid ${a.border}`, boxShadow: `0 0 16px ${a.shadow}` }}>
+                  <kpi.icon className="w-5 h-5" style={{ color: a.text }} />
+                </div>
+                <div className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-full"
+                  style={{
+                    background: kpi.trend === "up" ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)",
+                    color: kpi.trend === "up" ? "#10B981" : "#EF4444",
+                    border: kpi.trend === "up" ? "1px solid rgba(16,185,129,0.2)" : "1px solid rgba(239,68,68,0.2)",
+                  }}>
+                  {kpi.trend === "up" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                  {kpi.change}
+                </div>
+              </div>
+              <p className="relative text-[28px] font-bold" style={{ color: a.text, textShadow: `0 0 20px ${a.shadow}` }}>{kpi.value}</p>
+              <p className="relative text-[13px] text-white/40 mt-1">{kpi.label}</p>
+              {kpi.trendData.length >= 2 && (
+                <div className="relative -mx-1 mt-2 opacity-70">
+                  <Sparkline data={kpi.trendData} color={a.text} type={kpi.trendType} labels={kpi.trendLabels} valueFormatter={kpi.trendFmt} />
+                </div>
+              )}
+            </motion.div>
+          );
+        })}
       </div>
 
       {/* ML Prediction Card */}
       {mlLoading ? (
-        <div className="rounded-2xl border border-border p-5 flex items-center gap-3">
-          <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-          <p className="text-sm text-muted-foreground">Loading AI prediction...</p>
+        <div className="glass-card p-5 flex items-center gap-3">
+          <Loader2 className="w-5 h-5 animate-spin text-cyan-400" />
+          <p className="text-sm text-white/40">Loading AI prediction...</p>
         </div>
-      ) : mlData && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className={`rounded-2xl border p-5 ${
-            mlData.risk_level === "High"
-              ? "border-red-500/30 bg-red-500/5"
-              : mlData.risk_level === "Medium"
-              ? "border-orange-500/30 bg-orange-500/5"
-              : "border-emerald-500/30 bg-emerald-500/5"
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
-                <Brain className="w-5 h-5 text-blue-400" />
+      ) : mlData && (() => {
+        const riskAccent = mlData.risk_level === "High" ? ACCENT.red : mlData.risk_level === "Medium" ? ACCENT.amber : ACCENT.green;
+        return (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="glass-card p-5"
+            style={{ borderColor: riskAccent.border }}
+          >
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                  style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}`, boxShadow: `0 0 16px ${ACCENT.cyan.shadow}` }}>
+                  <Brain className="w-5 h-5 text-cyan-400" />
+                </div>
+                <div>
+                  <p className="text-[11px] text-white/35 mb-0.5">AI Cost Overrun Prediction</p>
+                  <p className="text-xl font-bold text-white">
+                    {mlData.probability}% probability of overrun
+                  </p>
+                  <p className="text-[13px] text-white/40 mt-0.5">
+                    Estimated overrun: {mlData.estimated_overrun_pct}% — {mlData.will_overrun ? "Action required" : "Under control"}
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-xs text-muted-foreground mb-0.5">AI Cost Overrun Prediction</p>
-                <p className="text-xl font-bold text-foreground">
-                  {mlData.probability}% probability of overrun
-                </p>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  Estimated overrun: {mlData.estimated_overrun_pct}% — {mlData.will_overrun ? "Action required" : "Under control"}
-                </p>
+              <div className="flex items-center gap-2">
+                <span className="text-sm px-3 py-1.5 rounded-full font-medium"
+                  style={{ background: riskAccent.bg, border: `1px solid ${riskAccent.border}`, color: riskAccent.text }}>
+                  {mlData.risk_level} Risk
+                </span>
+                <button onClick={trainMlModel} disabled={trainLoading}
+                  title="Retrain on the synthetic baseline plus your completed projects"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-medium text-white/80 whitespace-nowrap transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100"
+                  style={glassButtonStyle}>
+                  {trainLoading
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />}
+                  Train Model
+                </button>
               </div>
             </div>
-            <span className={`text-sm px-3 py-1.5 rounded-full font-medium ${
-              mlData.risk_level === "High"
-                ? "bg-red-500/10 text-red-400"
-                : mlData.risk_level === "Medium"
-                ? "bg-orange-500/10 text-orange-400"
-                : "bg-emerald-500/10 text-emerald-400"
-            }`}>
-              {mlData.risk_level} Risk
-            </span>
-          </div>
-        </motion.div>
-      )}
+            {mlData.trained_on && (
+              <p className="text-[10px] text-white/25 mt-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                {mlData.model_version} — trained on {mlData.trained_on}
+              </p>
+            )}
+          </motion.div>
+        );
+      })()}
 
       {/* Budget Burn Chart */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.3 }}
-        className="bg-card border border-border rounded-2xl p-6"
+        className="glass-card p-6"
       >
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
           <div>
-            <h3 className="font-semibold text-foreground">Budget Burn Rate</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">Budget vs Actual ($K)</p>
+            <h3 className="font-semibold text-white text-[14px]">Budget Burn Rate</h3>
+            <p className="text-[11px] text-white/35 mt-0.5">Budget vs Actual ($K)</p>
           </div>
-          <span className="text-xs px-3 py-1 rounded-full bg-blue-500/10 text-blue-400">{CHART_LOOKBACK_MONTHS} Months</span>
+          <TimeRangeSelector value={burnRange} onChange={setBurnRange} accent="cyan" />
         </div>
-        {mlLoading ? (
+        {burnLoading && burnChartData.length === 0 ? (
           <div className="flex items-center justify-center h-56">
-            <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+            <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
           </div>
         ) : burnChartData.length === 0 ? (
-          <div className="flex items-center justify-center h-56 text-muted-foreground text-sm">
+          <div className="flex items-center justify-center h-56 text-white/25 text-[12px]">
             No cost entries found — add cost entries to see burn rate
           </div>
         ) : (
@@ -494,116 +764,85 @@ export default function CostPage() {
             <AreaChart data={burnChartData}>
               <defs>
                 <linearGradient id="budget" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={BURN_CHART_COLORS.budget} stopOpacity={0.2} />
+                  <stop offset="5%" stopColor={BURN_CHART_COLORS.budget} stopOpacity={0.25} />
                   <stop offset="95%" stopColor={BURN_CHART_COLORS.budget} stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="actual" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={BURN_CHART_COLORS.actual} stopOpacity={0.2} />
+                  <stop offset="5%" stopColor={BURN_CHART_COLORS.actual} stopOpacity={0.25} />
                   <stop offset="95%" stopColor={BURN_CHART_COLORS.actual} stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-              <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+              <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
               <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
               <Area type="monotone" dataKey="budget" stroke={BURN_CHART_COLORS.budget} fill="url(#budget)" strokeWidth={2} name="Budget" />
               <Area type="monotone" dataKey="actual" stroke={BURN_CHART_COLORS.actual} fill="url(#actual)" strokeWidth={2} name="Actual" />
             </AreaChart>
           </ResponsiveContainer>
-          <div className="flex gap-4 mt-2">
-            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-blue-400" /><span className="text-xs text-muted-foreground">Budget</span></div>
-            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-orange-400" /><span className="text-xs text-muted-foreground">Actual</span></div>
+          <div className="flex gap-5 mt-3">
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full" style={{ background: BURN_CHART_COLORS.budget, boxShadow: `0 0 6px ${BURN_CHART_COLORS.budget}` }} /><span className="text-[11px] text-white/35">Budget</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full" style={{ background: BURN_CHART_COLORS.actual, boxShadow: `0 0 6px ${BURN_CHART_COLORS.actual}` }} /><span className="text-[11px] text-white/35">Actual</span></div>
           </div>
         </>
         )}
       </motion.div>
 
       {/* Cash Flow + Material Risk */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <motion.div
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.4 }}
-          className="bg-card border border-border rounded-2xl p-6"
+          className="glass-card p-6"
         >
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
             <div>
-              <h3 className="font-semibold text-foreground">Cash Flow Forecast</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">Inflow vs Outflow ($K) — {CHART_LOOKBACK_MONTHS}mo historical + {CHART_FORECAST_MONTHS}mo projected</p>
+              <h3 className="font-semibold text-white text-[14px]">Cash Flow Forecast</h3>
+              <p className="text-[11px] text-white/35 mt-0.5">Inflow vs Outflow ($K)</p>
             </div>
+            <TimeRangeSelector value={cashflowRange} onChange={setCashflowRange} accent="green" />
           </div>
-          {mlLoading ? (
+          {cashflowLoading && cashflowChartData.length === 0 ? (
             <div className="flex items-center justify-center h-52">
-              <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+              <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
             </div>
           ) : cashflowChartData.length === 0 ? (
-            <div className="flex items-center justify-center h-52 text-muted-foreground text-sm">
+            <div className="flex items-center justify-center h-52 text-white/25 text-[12px]">
               No data — set project budgets to generate cash flow forecast
             </div>
           ) : (
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={cashflowChartData} barGap={4}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-              <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+              <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
               <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={{ fill: "rgba(0,212,255,0.06)" }} />
               <Bar dataKey="inflow"  fill={CASHFLOW_CHART_COLORS.inflow}  radius={[6, 6, 0, 0]} name="Inflow" />
               <Bar dataKey="outflow" fill={CASHFLOW_CHART_COLORS.outflow} radius={[6, 6, 0, 0]} name="Outflow" />
             </BarChart>
           </ResponsiveContainer>
           )}
-          <div className="flex gap-4 mt-2">
-            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-400" /><span className="text-xs text-muted-foreground">Inflow</span></div>
-            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-400" /><span className="text-xs text-muted-foreground">Outflow</span></div>
+          <div className="flex gap-5 mt-3">
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full" style={{ background: CASHFLOW_CHART_COLORS.inflow, boxShadow: `0 0 6px ${CASHFLOW_CHART_COLORS.inflow}` }} /><span className="text-[11px] text-white/35">Inflow</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full" style={{ background: CASHFLOW_CHART_COLORS.outflow, boxShadow: `0 0 6px ${CASHFLOW_CHART_COLORS.outflow}` }} /><span className="text-[11px] text-white/35">Outflow</span></div>
           </div>
         </motion.div>
 
-        <motion.div
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.5 }}
-          className="bg-card border border-border rounded-2xl p-6"
-        >
-          <div className="flex items-center gap-2 mb-6">
-            <AlertTriangle className="w-4 h-4 text-orange-400" />
-            <h3 className="font-semibold text-foreground">
-              Material Price Risk
-              {materialPrices.length > 0 && (
-                <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Market Prices</span>
-              )}
-            </h3>
-          </div>
-          <div className="space-y-4">
-            {materialPrices.map((m, i) => (
-              <div key={i} className="flex items-center gap-3">
-                <span className="text-sm text-foreground w-14">{m.name}</span>
-                <div className="flex-1 bg-secondary rounded-full h-2">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${m.risk}%` }}
-                    transition={{ delay: 0.5 + i * 0.1, duration: 0.8 }}
-                    className={`h-2 rounded-full ${m.risk > 80 ? "bg-red-500" : m.risk > 60 ? "bg-orange-500" : "bg-emerald-500"}`}
-                  />
-                </div>
-                <span className="text-xs text-muted-foreground w-8 text-right">{m.risk}%</span>
-                <span className="text-xs font-medium text-foreground w-16 text-right">${Number(m.price).toFixed(2)}/{m.unit}</span>
-              </div>
-            ))}
-          </div>
-        </motion.div>
+        <MaterialPricesPanel />
       </div>
 
       {analysis && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-blue-500/30 rounded-2xl p-6"
+          className="glass-card p-6" style={{ borderColor: ACCENT.cyan.border }}
         >
           <div className="flex items-center gap-2 mb-3">
-            <DollarSign className="w-5 h-5 text-blue-400" />
-            <h3 className="font-semibold text-foreground">AI Analysis</h3>
+            <DollarSign className="w-5 h-5 text-cyan-400" />
+            <h3 className="font-semibold text-white text-[15px]">AI Analysis</h3>
           </div>
-          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
+          <MarkdownText text={analysis} className="text-sm text-white/60 leading-relaxed" />
         </motion.div>
       )}
 
@@ -613,10 +852,10 @@ export default function CostPage() {
         pageSummaryData={{
           totalBudget: costKpis ? fmtMoney(costKpis.totalBudget) : "—",
           spentToDate: costKpis ? fmtMoney(costKpis.spentToDate) : "—",
+          committedAmount: costKpis ? fmtMoney(costKpis.committedAmount) : "—",
           remaining: costKpis ? fmtMoney(Math.abs(costKpis.remaining)) : "—",
           costOverrun: costKpis ? `${costKpis.overrunPct.toFixed(1)}%` : "—",
           mlPrediction: mlData,
-          materialPrices,
         }}
       />
     </div>

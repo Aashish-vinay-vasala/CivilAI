@@ -68,13 +68,23 @@ interface RoleStore {
   can: (permission: keyof RolePermissions) => boolean;
 }
 
+// Demo mode: every role gets full access. `role` is kept purely for display
+// (labels/colors/settings picker) — `can()` always returns true regardless of
+// which role is selected, so there's no permission gate on any module.
 export const useRoleStore = create<RoleStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       role: "admin",
       setRole: (role) => set({ role }),
-      permissions: () => ROLE_PERMISSIONS[get().role],
-      can: (permission) => ROLE_PERMISSIONS[get().role][permission],
+      permissions: () => ({
+        canEdit: true,
+        canDelete: true,
+        canExport: true,
+        canManageUsers: true,
+        canViewFinancials: true,
+        canApproveContracts: true,
+      }),
+      can: () => true,
     }),
     { name: "civilai-role" }
   )

@@ -300,6 +300,69 @@ def _save_budget_items(
     return {"imported_rows": len(parsed_rows), "import_id": import_id, "project_budget": synced_budget}
 
 
+# ── Live cost allocation ───────────────────────────────────────────────────────
+# There is no column linking a specific invoice or cost entry to a specific CSI
+# line item, so exact per-item attribution isn't possible. Instead, each project's
+# live direct/committed totals (the same figures the KPI cards and /live-actuals
+# use) are distributed across that project's line items in proportion to their
+# share of original_budget. This keeps the Grand Total row equal to the live KPI
+# totals instead of drifting from whatever was typed in at import/creation time.
+
+def _compute_live_totals(project_ids: list[str]) -> dict[str, dict]:
+    totals = {pid: {"direct_costs": 0.0, "committed_costs": 0.0} for pid in project_ids}
+    if not project_ids:
+        return totals
+    try:
+        cost_rows = supabase.table("cost_entries").select("project_id,amount").in_("project_id", project_ids).execute().data or []
+        for r in cost_rows:
+            pid = r.get("project_id")
+            if pid in totals:
+                totals[pid]["direct_costs"] += float(r.get("amount") or 0)
+    except Exception:
+        pass
+    try:
+        inv_rows = supabase.table("invoices").select("project_id,amount,status").in_("project_id", project_ids).execute().data or []
+        for r in inv_rows:
+            pid = r.get("project_id")
+            if pid in totals and r.get("status") in ("pending", "overdue"):
+                totals[pid]["committed_costs"] += float(r.get("amount") or 0)
+    except Exception:
+        pass
+    return totals
+
+
+def _apply_live_costs(items: list[dict]) -> None:
+    """Overwrite each item's committed_costs/direct_costs in place with a live,
+    proportionally-allocated value. Items without a project_id (rare — only
+    possible for imports done with no project selected) are left untouched."""
+    by_project: dict[str, list[dict]] = {}
+    for it in items:
+        pid = it.get("project_id")
+        if pid:
+            by_project.setdefault(pid, []).append(it)
+    if not by_project:
+        return
+
+    live = _compute_live_totals(list(by_project.keys()))
+    for pid, group in by_project.items():
+        proj_totals = live.get(pid, {"direct_costs": 0.0, "committed_costs": 0.0})
+        weight_total = sum(float(it.get("original_budget") or 0) for it in group)
+        for field in ("direct_costs", "committed_costs"):
+            target = proj_totals[field]
+            allocated = 0.0
+            # Round every item except the last, then give the last item whatever's
+            # left — rounding each share independently can make the parts sum to a
+            # cent or two off the live total, which would make the Grand Total row
+            # disagree with the KPI card by a penny.
+            for it in group[:-1]:
+                weight = float(it.get("original_budget") or 0)
+                share = (weight / weight_total) if weight_total > 0 else (1 / len(group))
+                it[field] = round(target * share, 2)
+                allocated += it[field]
+            if group:
+                group[-1][field] = round(target - allocated, 2)
+
+
 # ── GET endpoints ──────────────────────────────────────────────────────────────
 
 @router.get("/live-actuals")
@@ -339,7 +402,11 @@ def get_live_actuals(project_id: Optional[str] = None):
         if pid:
             iq = iq.eq("project_id", pid)
         inv_rows = iq.execute().data or []
-        committed = sum(float(r.get("amount") or 0) for r in inv_rows if r.get("status") in ("pending", "approved"))
+        # Committed = obligated, unpaid (pending/overdue). invoices.status only ever
+        # takes received/pending/overdue, so this — not "approved", which never
+        # occurs — must match db_service.get_projects() and accounting.py exactly,
+        # or "Committed Costs" disagrees across pages for the same project.
+        committed = sum(float(r.get("amount") or 0) for r in inv_rows if r.get("status") in ("pending", "overdue"))
         received  = sum(float(r.get("amount") or 0) for r in inv_rows if r.get("status") == "received")
     except Exception:
         committed = 0.0
@@ -400,7 +467,9 @@ def get_budget_items(project_id: Optional[str] = None):
         if project_id and project_id != "all":
             query = query.eq("project_id", project_id)
         res = query.order("div_code").order("code").execute()
-        return {"items": res.data or []}
+        items = res.data or []
+        _apply_live_costs(items)
+        return {"items": items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -483,6 +552,47 @@ def delete_budget_item(item_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/items")
+def delete_all_budget_items(project_id: str):
+    """
+    Delete every budget line item for one project. Destructive and irreversible —
+    scoped to a single project (never "all") to bound the blast radius. The UI
+    must gate this behind an explicit, typed-out-loud confirmation; this endpoint
+    performs no confirmation of its own.
+    """
+    if not project_id or project_id == "all":
+        raise HTTPException(status_code=422, detail="A specific project_id is required")
+    try:
+        rows = (
+            supabase.table("financial_budget_items")
+            .select("id,original_budget")
+            .eq("project_id", project_id)
+            .execute()
+            .data or []
+        )
+        if not rows:
+            return {"deleted_count": 0, "deleted_total": 0.0}
+
+        supabase.table("financial_budget_items").delete().eq("project_id", project_id).execute()
+
+        deleted_total = sum(float(r.get("original_budget") or 0) for r in rows)
+        supabase.table("financial_change_history").insert({
+            "project_id": project_id,
+            "date":       datetime.date.today().isoformat(),
+            "user_name":  "User",
+            "field":      "Delete All",
+            "division":   "All Divisions",
+            "delta":      -deleted_total,
+            "reason":     f"Deleted all {len(rows)} budget line items",
+        }).execute()
+
+        return {"deleted_count": len(rows), "deleted_total": deleted_total}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/budget-sync-preview")
 def budget_sync_preview(project_id: str):
     """
@@ -554,6 +664,33 @@ def get_change_history(project_id: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/change-history")
+def delete_all_change_history(project_id: str):
+    """
+    Delete every change-history entry for one project. Destructive and irreversible
+    (clears the audit trail itself) — scoped to a single project, never "all". The
+    UI must gate this behind an explicit confirmation; this endpoint doesn't.
+    """
+    if not project_id or project_id == "all":
+        raise HTTPException(status_code=422, detail="A specific project_id is required")
+    try:
+        rows = (
+            supabase.table("financial_change_history")
+            .select("id")
+            .eq("project_id", project_id)
+            .execute()
+            .data or []
+        )
+        if not rows:
+            return {"deleted_count": 0}
+        supabase.table("financial_change_history").delete().eq("project_id", project_id).execute()
+        return {"deleted_count": len(rows)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/export")
 def export_budget(project_id: Optional[str] = None):
     """Download current budget items as CSV."""
@@ -563,6 +700,7 @@ def export_budget(project_id: Optional[str] = None):
             query = query.eq("project_id", project_id)
         res = query.order("div_code").order("code").execute()
         items = res.data or []
+        _apply_live_costs(items)
     except Exception:
         items = []
 
@@ -603,7 +741,7 @@ def sync_from_modules(project_id: str):
         invoices = []
 
     total_direct    = sum(i.get("amount", 0) for i in invoices if i.get("status") == "received")
-    total_committed = sum(i.get("amount", 0) for i in invoices if i.get("status") in ("pending", "approved"))
+    total_committed = sum(i.get("amount", 0) for i in invoices if i.get("status") in ("pending", "overdue"))
 
     items = []
     for cc in cost_codes:

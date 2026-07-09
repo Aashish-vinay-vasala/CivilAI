@@ -15,6 +15,8 @@ import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import Sparkline from "@/components/shared/Sparkline";
+import { ACCENT, gradientButtonStyle, glassButtonStyle } from "@/lib/theme";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 
 const PROJECT_TABS = [
@@ -56,6 +58,7 @@ interface ProjectInfo {
 interface ChangeHistoryEntry {
   id: string; date: string; user_name: string; field: string;
   division: string; delta: number; reason: string;
+  project_id?: string | null;
 }
 
 type Totals = Record<ColKey, number>;
@@ -74,14 +77,14 @@ interface ColDef {
 }
 
 const COL_DEFS: ColDef[] = [
-  { key: "originalBudget",  header: "Original Budget",  hColor: "text-muted-foreground", cellColor: ()  => "text-foreground",      bold: true },
-  { key: "budgetMods",      header: "Budget Mods",      hColor: "text-muted-foreground", cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-foreground" },
-  { key: "approvedCOs",     header: "Approved COs",     hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-blue-400 font-medium" },
-  { key: "revisedBudget",   header: "Revised Budget",   hColor: "text-muted-foreground", cellColor: ()  => "text-foreground",      bold: true },
-  { key: "pendingChanges",  header: "Pending COs",      hColor: "text-muted-foreground", cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-foreground" },
-  { key: "projectedBudget", header: "Projected Budget", hColor: "text-muted-foreground", cellColor: ()  => "text-foreground",      bold: true },
-  { key: "committedCosts",  header: "Committed Costs",  hColor: "text-orange-400",       cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-orange-400 font-medium" },
-  { key: "directCosts",     header: "Direct Costs",     hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-muted-foreground" : "text-blue-400 font-medium" },
+  { key: "originalBudget",  header: "Original Budget",  hColor: "text-white/40", cellColor: ()  => "text-white",      bold: true },
+  { key: "budgetMods",      header: "Budget Mods",      hColor: "text-white/40", cellColor: (v) => v === 0 ? "text-white/40" : "text-white" },
+  { key: "approvedCOs",     header: "Approved COs",     hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-white/40" : "text-blue-400 font-medium" },
+  { key: "revisedBudget",   header: "Revised Budget",   hColor: "text-white/40", cellColor: ()  => "text-white",      bold: true },
+  { key: "pendingChanges",  header: "Pending COs",      hColor: "text-white/40", cellColor: (v) => v === 0 ? "text-white/40" : "text-white" },
+  { key: "projectedBudget", header: "Projected Budget", hColor: "text-white/40", cellColor: ()  => "text-white",      bold: true },
+  { key: "committedCosts",  header: "Committed Costs (Live)",  hColor: "text-orange-400",       cellColor: (v) => v === 0 ? "text-white/40" : "text-orange-400 font-medium" },
+  { key: "directCosts",     header: "Direct Costs (Live)",     hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-white/40" : "text-blue-400 font-medium" },
 ];
 
 const COL_TOOLTIPS: Record<ColKey, string> = {
@@ -91,8 +94,8 @@ const COL_TOOLTIPS: Record<ColKey, string> = {
   revisedBudget:   "Original Budget + Budget Mods + Approved COs",
   pendingChanges:  "Change orders submitted but not yet approved",
   projectedBudget: "Revised Budget + Pending COs — expected final budget",
-  committedCosts:  "Amounts obligated via subcontracts & purchase orders",
-  directCosts:     "Labor, materials & expenses paid directly (actual spend)",
+  committedCosts:  "Live — pending/approved invoice amounts, allocated across this project's line items by budget share. Not editable here; add or update invoices on the Payments page to change it.",
+  directCosts:     "Live — actual spend from cost entries, allocated across this project's line items by budget share. Not editable here; add or update cost entries on the Cost & Budget page to change it.",
 };
 
 const VIEW_KEYS: Record<ViewMode, ColKey[]> = {
@@ -243,6 +246,13 @@ function fmtMoney(v: number) {
   if (v >= 1_000)     return `$${(v / 1_000).toFixed(0)}K`;
   return `$${v.toFixed(0)}`;
 }
+// costTrend ("budget"/"actual") comes from the same chart API the Cost & Budget page uses,
+// already scaled to $K — needs its own formatter so sparkline tooltips aren't 1000x too small.
+function fmtMoneyK(v: number) {
+  const abs = Math.abs(v);
+  if (abs >= 1000) return `$${(abs / 1000).toFixed(1)}M`;
+  return `$${abs.toFixed(0)}K`;
+}
 function sumItems(items: BudgetItem[]): Totals {
   return items.reduce((acc, i) => ({
     originalBudget:  acc.originalBudget  + i.originalBudget,
@@ -324,29 +334,29 @@ function ValidateModal({ onClose }: { onClose: () => void }) {
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 10 }}
-        className="bg-card border border-border rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl"
+        className="bg-[rgba(4,11,25,0.94)] border border-[rgba(0,212,255,0.15)] backdrop-blur-2xl rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl"
       >
-        <div className="flex items-center justify-between p-5 border-b border-border">
+        <div className="flex items-center justify-between p-5 border-b border-[rgba(255,255,255,0.07)]">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-cyan-500/10 flex items-center justify-center">
               <ShieldCheck className="w-4 h-4 text-cyan-400" />
             </div>
             <div>
-              <h2 className="font-semibold text-foreground">Validate File</h2>
-              <p className="text-xs text-muted-foreground">Check column headers before importing — no AI, no DB writes</p>
+              <h2 className="font-semibold text-white">Validate File</h2>
+              <p className="text-xs text-white/40">Check column headers before importing — no AI, no DB writes</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+          <button onClick={onClose} className="text-white/40 hover:text-white"><X className="w-5 h-5" /></button>
         </div>
 
         <div className="p-5 space-y-4">
           <input ref={fileInputRef} type="file" className="hidden" accept=".csv,.xlsx,.xls"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) pickFile(f); }} />
           <button onClick={() => fileInputRef.current?.click()}
-            className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-2xl border-2 border-dashed border-border hover:border-cyan-500/50 hover:bg-cyan-500/5 transition-colors">
-            {checking ? <Loader2 className="w-6 h-6 animate-spin text-cyan-400" /> : <FileSpreadsheet className="w-6 h-6 text-muted-foreground" />}
-            <span className="text-sm text-foreground font-medium">{fileName || "Choose a CSV or Excel file"}</span>
-            <span className="text-xs text-muted-foreground">Only column headers are checked — nothing is saved</span>
+            className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-2xl border-2 border-dashed border-[rgba(255,255,255,0.07)] hover:border-cyan-500/50 hover:bg-cyan-500/5 transition-colors">
+            {checking ? <Loader2 className="w-6 h-6 animate-spin text-cyan-400" /> : <FileSpreadsheet className="w-6 h-6 text-white/40" />}
+            <span className="text-sm text-white font-medium">{fileName || "Choose a CSV or Excel file"}</span>
+            <span className="text-xs text-white/40">Only column headers are checked — nothing is saved</span>
           </button>
 
           {result && (
@@ -379,10 +389,10 @@ function ValidateModal({ onClose }: { onClose: () => void }) {
 
               {result.column_mapping.length > 0 && (
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Recognized Columns</p>
+                  <p className="text-xs font-semibold text-white/40 uppercase tracking-wide mb-1.5">Recognized Columns</p>
                   <div className="flex flex-wrap gap-1.5">
                     {result.column_mapping.map((m, i) => (
-                      <span key={i} className="text-xs px-2 py-1 rounded-lg bg-secondary text-foreground">
+                      <span key={i} className="text-xs px-2 py-1 rounded-lg bg-[rgba(255,255,255,0.05)] text-white">
                         "{m.file_header}" → {m.canonical}
                       </span>
                     ))}
@@ -392,21 +402,21 @@ function ValidateModal({ onClose }: { onClose: () => void }) {
 
               {result.preview.length > 0 && (
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Preview (first {result.preview.length} rows)</p>
-                  <div className="overflow-x-auto rounded-xl border border-border">
+                  <p className="text-xs font-semibold text-white/40 uppercase tracking-wide mb-1.5">Preview (first {result.preview.length} rows)</p>
+                  <div className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.07)]">
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="bg-secondary/60">
+                        <tr className="bg-[rgba(255,255,255,0.06)]">
                           {Object.keys(result.preview[0]).map((k) => (
-                            <th key={k} className="text-left px-2.5 py-1.5 text-muted-foreground font-medium whitespace-nowrap">{k}</th>
+                            <th key={k} className="text-left px-2.5 py-1.5 text-white/40 font-medium whitespace-nowrap">{k}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {result.preview.map((row, i) => (
-                          <tr key={i} className="border-t border-border">
+                          <tr key={i} className="border-t border-[rgba(255,255,255,0.07)]">
                             {Object.values(row).map((v, j) => (
-                              <td key={j} className="px-2.5 py-1.5 text-foreground whitespace-nowrap">{String(v)}</td>
+                              <td key={j} className="px-2.5 py-1.5 text-white whitespace-nowrap">{String(v)}</td>
                             ))}
                           </tr>
                         ))}
@@ -418,7 +428,7 @@ function ValidateModal({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          <Button variant="outline" size="sm" onClick={onClose} className="w-full border-border">Close</Button>
+          <Button style={glassButtonStyle} variant="outline" size="sm" onClick={onClose} className="w-full border-[rgba(255,255,255,0.07)]">Close</Button>
         </div>
       </motion.div>
     </div>
@@ -550,20 +560,20 @@ function ImportModal({
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 10 }}
-        className="bg-card border border-border rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+        className="bg-[rgba(4,11,25,0.94)] border border-[rgba(0,212,255,0.15)] backdrop-blur-2xl rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-border">
+        <div className="flex items-center justify-between p-5 border-b border-[rgba(255,255,255,0.07)]">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-blue-500/10 flex items-center justify-center">
               <Upload className="w-4 h-4 text-blue-400" />
             </div>
             <div>
-              <h2 className="font-semibold text-foreground">Import Budget Data</h2>
-              <p className="text-xs text-muted-foreground">CSV · XLSX · XLS · PDF · Word — AI-powered detection</p>
+              <h2 className="font-semibold text-white">Import Budget Data</h2>
+              <p className="text-xs text-white/40">CSV · XLSX · XLS · PDF · Word — AI-powered detection</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+          <button onClick={onClose} className="text-white/40 hover:text-white transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -575,10 +585,10 @@ function ImportModal({
               const reached = currentIdx >= stepOrder.indexOf(s) || step === "analyzing";
               return (
                 <Fragment key={s}>
-                  <span className={`px-2.5 py-1 rounded-full font-medium transition-colors ${reached ? "bg-blue-500/15 text-blue-400" : "text-muted-foreground"}`}>
+                  <span className={`px-2.5 py-1 rounded-full font-medium transition-colors ${reached ? "bg-blue-500/15 text-blue-400" : "text-white/40"}`}>
                     {stepLabels[s]}
                   </span>
-                  {i < 3 && <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+                  {i < 3 && <ChevronRight className="w-3 h-3 text-white/40 shrink-0" />}
                 </Fragment>
               );
             })}
@@ -593,7 +603,7 @@ function ImportModal({
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
                 className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
-                  dragOver ? "border-blue-400 bg-blue-500/5" : "border-border hover:border-blue-500/50"
+                  dragOver ? "border-blue-400 bg-blue-500/5" : "border-[rgba(255,255,255,0.07)] hover:border-blue-500/50"
                 }`}
               >
                 <input
@@ -601,14 +611,14 @@ function ImportModal({
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) pickFile(f); e.target.value = ""; }}
                 />
                 <Sparkles className="w-10 h-10 text-blue-400/60 mx-auto mb-3" />
-                <p className="text-sm font-medium text-foreground">Drop any budget document here</p>
-                <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
+                <p className="text-sm font-medium text-white">Drop any budget document here</p>
+                <p className="text-xs text-white/40 mt-1">or click to browse</p>
                 <div className="flex flex-wrap justify-center gap-2 mt-4">
                   {[".csv", ".xlsx", ".xls", ".pdf", ".doc", ".docx"].map((ext) => (
-                    <span key={ext} className="text-[10px] px-2 py-0.5 rounded-md bg-secondary text-muted-foreground border border-border">{ext}</span>
+                    <span key={ext} className="text-[10px] px-2 py-0.5 rounded-md bg-[rgba(255,255,255,0.05)] text-white/40 border border-[rgba(255,255,255,0.07)]">{ext}</span>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground mt-3">
+                <p className="text-xs text-white/40 mt-3">
                   Column names are auto-detected — case-insensitive, flexible naming accepted
                 </p>
               </div>
@@ -633,8 +643,8 @@ function ImportModal({
                 <Loader2 className="w-7 h-7 animate-spin text-blue-400" />
               </div>
               <div className="text-center">
-                <p className="text-sm font-medium text-foreground">Analyzing {file?.name}</p>
-                <p className="text-xs text-muted-foreground mt-1">AI is detecting budget structure and extracting line items…</p>
+                <p className="text-sm font-medium text-white">Analyzing {file?.name}</p>
+                <p className="text-xs text-white/40 mt-1">AI is detecting budget structure and extracting line items…</p>
               </div>
             </div>
           )}
@@ -643,11 +653,11 @@ function ImportModal({
           {step === "review" && (
             <div className="space-y-4">
               {/* File info */}
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary/40 border border-border">
+              <div className="flex items-center gap-3 p-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.07)]">
                 <FileText className="w-4 h-4 text-blue-400 shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground truncate">{file?.name}</p>
-                  <p className="text-xs text-muted-foreground">{(file?.size ?? 0 / 1024).toFixed(1)} KB</p>
+                  <p className="text-sm font-medium text-white truncate">{file?.name}</p>
+                  <p className="text-xs text-white/40">{(file?.size ?? 0 / 1024).toFixed(1)} KB</p>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {isAiPath
@@ -655,7 +665,7 @@ function ImportModal({
                     : <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1"><CheckCheck className="w-3 h-3" />Structured parse</span>
                   }
                 </div>
-                <button onClick={() => { setFile(null); setStep("upload"); }} className="text-muted-foreground hover:text-foreground">
+                <button onClick={() => { setFile(null); setStep("upload"); }} className="text-white/40 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -680,14 +690,14 @@ function ImportModal({
               {/* Column mapping (for structured parse) */}
               {colMapping.length > 0 && (
                 <div className="space-y-1.5">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Detected Column Mapping</p>
+                  <p className="text-xs font-semibold text-white/40 uppercase tracking-wide">Detected Column Mapping</p>
                   <div className="grid grid-cols-2 gap-1.5">
                     {colMapping.map((m, i) => (
-                      <div key={i} className="flex items-center gap-2 text-xs bg-secondary/30 rounded-lg px-3 py-1.5">
+                      <div key={i} className="flex items-center gap-2 text-xs bg-[rgba(255,255,255,0.03)] rounded-lg px-3 py-1.5">
                         <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                        <span className="text-muted-foreground truncate">{m.file_header}</span>
-                        <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
-                        <span className="font-medium text-foreground truncate">{m.canonical}</span>
+                        <span className="text-white/40 truncate">{m.file_header}</span>
+                        <ChevronRight className="w-3 h-3 text-white/40 shrink-0" />
+                        <span className="font-medium text-white truncate">{m.canonical}</span>
                       </div>
                     ))}
                   </div>
@@ -697,25 +707,25 @@ function ImportModal({
               {/* Preview table */}
               {aiItems.length > 0 && (
                 <div className="space-y-1.5">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Preview (first 5 rows)</p>
-                  <div className="rounded-xl border border-border overflow-hidden">
+                  <p className="text-xs font-semibold text-white/40 uppercase tracking-wide">Preview (first 5 rows)</p>
+                  <div className="rounded-xl border border-[rgba(255,255,255,0.07)] overflow-hidden">
                     <div className="overflow-x-auto max-h-48">
                       <table className="w-full text-xs">
                         <thead>
-                          <tr className="bg-secondary/50">
-                            <th className="px-3 py-2 text-left text-muted-foreground font-medium">Code</th>
-                            <th className="px-3 py-2 text-left text-muted-foreground font-medium">Description</th>
-                            <th className="px-3 py-2 text-right text-muted-foreground font-medium">Orig. Budget</th>
-                            <th className="px-3 py-2 text-right text-muted-foreground font-medium">Direct Costs</th>
+                          <tr className="bg-[rgba(255,255,255,0.05)]">
+                            <th className="px-3 py-2 text-left text-white/40 font-medium">Code</th>
+                            <th className="px-3 py-2 text-left text-white/40 font-medium">Description</th>
+                            <th className="px-3 py-2 text-right text-white/40 font-medium">Orig. Budget</th>
+                            <th className="px-3 py-2 text-right text-white/40 font-medium">Direct Costs</th>
                           </tr>
                         </thead>
                         <tbody>
                           {aiItems.slice(0, 5).map((item, i) => (
-                            <tr key={i} className="border-t border-border/50">
+                            <tr key={i} className="border-t border-[rgba(255,255,255,0.045)]">
                               <td className="px-3 py-1.5 text-blue-400 font-mono">{String(item.code || "—")}</td>
-                              <td className="px-3 py-1.5 text-foreground max-w-48 truncate">{String(item.description || "")}</td>
-                              <td className="px-3 py-1.5 text-right text-foreground">{fmtCurrency(Number(item.original_budget || 0))}</td>
-                              <td className="px-3 py-1.5 text-right text-foreground">{fmtCurrency(Number(item.direct_costs || 0))}</td>
+                              <td className="px-3 py-1.5 text-white max-w-48 truncate">{String(item.description || "")}</td>
+                              <td className="px-3 py-1.5 text-right text-white">{fmtCurrency(Number(item.original_budget || 0))}</td>
+                              <td className="px-3 py-1.5 text-right text-white">{fmtCurrency(Number(item.direct_costs || 0))}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -723,16 +733,16 @@ function ImportModal({
                     </div>
                   </div>
                   {aiItems.length > 5 && (
-                    <p className="text-xs text-muted-foreground text-right">+{aiItems.length - 5} more rows</p>
+                    <p className="text-xs text-white/40 text-right">+{aiItems.length - 5} more rows</p>
                   )}
                 </div>
               )}
 
               <div className="flex gap-3">
-                <Button variant="outline" size="sm" onClick={() => { setFile(null); setStep("upload"); }} className="border-border flex-1">
+                <Button style={glassButtonStyle} variant="outline" size="sm" onClick={() => { setFile(null); setStep("upload"); }} className="border-[rgba(255,255,255,0.07)] flex-1">
                   Choose Different File
                 </Button>
-                <Button className="gradient-blue text-white border-0 flex-1" size="sm" onClick={() => setStep("details")}>
+                <Button style={gradientButtonStyle} className="gradient-blue text-white border-0 flex-1" size="sm" onClick={() => setStep("details")}>
                   Continue
                 </Button>
               </div>
@@ -742,70 +752,71 @@ function ImportModal({
           {/* ── STEP 3: Details form ── */}
           {step === "details" && (
             <div className="space-y-4">
-              <div className="p-3 rounded-xl bg-secondary/30 border border-border text-xs text-muted-foreground flex items-center gap-2">
+              <div className="p-3 rounded-xl bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.07)] text-xs text-white/40 flex items-center gap-2">
                 <CheckCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 {file?.name} · {rowCount} rows ready
               </div>
 
               <div className="space-y-3">
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">
+                  <label className="text-xs text-white/40 block mb-1.5">
                     Company / Organization Name <span className="text-red-400">*</span>
                   </label>
-                  <div className="flex items-center gap-2 bg-secondary border border-border rounded-xl px-3 py-2.5">
-                    <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div className="flex items-center gap-2 bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-xl px-3 py-2.5">
+                    <Building2 className="w-4 h-4 text-white/40 shrink-0" />
                     <input
                       value={companyName}
                       onChange={(e) => setCompanyName(e.target.value)}
                       placeholder="e.g. Acme Construction Ltd."
-                      className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                      className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/40"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">Project</label>
-                  <div className="relative flex items-center bg-secondary border border-border rounded-xl px-3 py-2.5">
-                    <FolderOpen className="w-4 h-4 text-muted-foreground shrink-0 mr-2" />
+                  <label className="text-xs text-white/40 block mb-1.5">Project</label>
+                  <div className="relative flex items-center bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-xl px-3 py-2.5">
+                    <FolderOpen className="w-4 h-4 text-white/40 shrink-0 mr-2" />
                     <select
                       value={projectId}
                       onChange={(e) => setProjectId(e.target.value)}
-                      className="flex-1 bg-transparent text-sm text-foreground outline-none appearance-none"
+                      className="flex-1 bg-transparent text-sm text-white outline-none appearance-none"
                     >
                       {projects.map((p) => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
-                    <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 pointer-events-none" />
+                    <ChevronDown className="w-4 h-4 text-white/40 shrink-0 pointer-events-none" />
                   </div>
                 </div>
 
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">Uploaded by (optional)</label>
+                  <label className="text-xs text-white/40 block mb-1.5">Uploaded by (optional)</label>
                   <input
                     value={userName}
                     onChange={(e) => setUserName(e.target.value)}
                     placeholder="Your name or role"
-                    className="w-full bg-secondary border border-border rounded-xl px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-blue-500"
+                    className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-xl px-3 py-2.5 text-sm text-white outline-none placeholder:text-white/40 focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
 
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">Notes (optional)</label>
+                  <label className="text-xs text-white/40 block mb-1.5">Notes (optional)</label>
                   <textarea
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     rows={2}
                     placeholder="e.g. Q2 budget revision, approved by PM"
-                    className="w-full bg-secondary border border-border rounded-xl px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground resize-none focus:ring-1 focus:ring-blue-500"
+                    className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-xl px-3 py-2.5 text-sm text-white outline-none placeholder:text-white/40 resize-none focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
               </div>
 
               <div className="flex gap-3">
-                <Button variant="outline" size="sm" onClick={() => setStep("review")} className="border-border flex-1">Back</Button>
+                <Button style={glassButtonStyle} variant="outline" size="sm" onClick={() => setStep("review")} className="border-[rgba(255,255,255,0.07)] flex-1">Back</Button>
                 <Button
-                  className="gradient-blue text-white border-0 flex-1"
+                  style={gradientButtonStyle}
+                  className="text-white border-0 flex-1"
                   size="sm"
                   disabled={!companyName.trim()}
                   onClick={() => setStep("confirm")}
@@ -819,35 +830,35 @@ function ImportModal({
           {/* ── STEP 4: Confirm ── */}
           {step === "confirm" && (
             <div className="space-y-4">
-              <div className="space-y-2 rounded-xl bg-secondary/30 border border-border p-4 text-sm">
+              <div className="space-y-2 rounded-xl bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.07)] p-4 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">File</span>
-                  <span className="text-foreground font-medium">{file?.name}</span>
+                  <span className="text-white/40">File</span>
+                  <span className="text-white font-medium">{file?.name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Line items</span>
-                  <span className="text-foreground font-medium">{rowCount}</span>
+                  <span className="text-white/40">Line items</span>
+                  <span className="text-white font-medium">{rowCount}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Method</span>
+                  <span className="text-white/40">Method</span>
                   <span className={`font-medium ${isAiPath ? "text-cyan-400" : "text-emerald-400"}`}>
                     {isAiPath ? "AI Extraction" : "Structured Parse"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Company</span>
-                  <span className="text-foreground font-medium">{companyName}</span>
+                  <span className="text-white/40">Company</span>
+                  <span className="text-white font-medium">{companyName}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Project</span>
-                  <span className="text-foreground font-medium">
+                  <span className="text-white/40">Project</span>
+                  <span className="text-white font-medium">
                     {projects.find((p) => p.id === projectId)?.name ?? projectId}
                   </span>
                 </div>
                 {userName && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Uploaded by</span>
-                    <span className="text-foreground font-medium">{userName}</span>
+                    <span className="text-white/40">Uploaded by</span>
+                    <span className="text-white font-medium">{userName}</span>
                   </div>
                 )}
               </div>
@@ -857,8 +868,8 @@ function ImportModal({
               </p>
 
               <div className="flex gap-3">
-                <Button variant="outline" size="sm" onClick={() => setStep("details")} className="border-border flex-1" disabled={importing}>Back</Button>
-                <Button className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleConfirmImport} disabled={importing}>
+                <Button style={glassButtonStyle} variant="outline" size="sm" onClick={() => setStep("details")} className="border-[rgba(255,255,255,0.07)] flex-1" disabled={importing}>Back</Button>
+                <Button style={gradientButtonStyle} className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleConfirmImport} disabled={importing}>
                   {importing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Importing…</> : "Confirm Import"}
                 </Button>
               </div>
@@ -927,40 +938,40 @@ function SyncModal({
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl"
+        className="bg-[rgba(4,11,25,0.94)] border border-[rgba(0,212,255,0.15)] backdrop-blur-2xl rounded-2xl w-full max-w-lg shadow-2xl"
       >
-        <div className="flex items-center justify-between p-5 border-b border-border">
+        <div className="flex items-center justify-between p-5 border-b border-[rgba(255,255,255,0.07)]">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-teal-500/10 flex items-center justify-center">
               <Link2 className="w-4 h-4 text-teal-400" />
             </div>
             <div>
-              <h2 className="font-semibold text-foreground">Sync from Modules</h2>
-              <p className="text-xs text-muted-foreground">Pull cost codes from Construction module</p>
+              <h2 className="font-semibold text-white">Sync from Modules</h2>
+              <p className="text-xs text-white/40">Pull cost codes from Construction module</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+          <button onClick={onClose} className="text-white/40 hover:text-white">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         <div className="p-5 space-y-4">
           <div>
-            <label className="text-xs text-muted-foreground block mb-1.5">Select Project</label>
+            <label className="text-xs text-white/40 block mb-1.5">Select Project</label>
             <div className="flex gap-2">
-              <div className="flex-1 flex items-center bg-secondary border border-border rounded-xl px-3 py-2.5">
-                <FolderOpen className="w-4 h-4 text-muted-foreground shrink-0 mr-2" />
+              <div className="flex-1 flex items-center bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-xl px-3 py-2.5">
+                <FolderOpen className="w-4 h-4 text-white/40 shrink-0 mr-2" />
                 <select
                   value={projectId}
                   onChange={(e) => { setProjectId(e.target.value); setSyncData(null); }}
-                  className="flex-1 bg-transparent text-sm text-foreground outline-none appearance-none"
+                  className="flex-1 bg-transparent text-sm text-white outline-none appearance-none"
                 >
                   {projects.map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
               </div>
-              <Button className="gradient-blue text-white border-0" size="sm" onClick={handleSync} disabled={syncing}>
+              <Button style={gradientButtonStyle} className="gradient-blue text-white border-0" size="sm" onClick={handleSync} disabled={syncing}>
                 {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Fetch"}
               </Button>
             </div>
@@ -969,40 +980,40 @@ function SyncModal({
           {syncData && (
             <div className="space-y-3">
               <div className="grid grid-cols-3 gap-2">
-                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
-                  <p className="text-lg font-bold text-foreground">{Number(syncData.summary.cost_codes_count)}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Cost Codes</p>
+                <div className="p-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.07)] text-center">
+                  <p className="text-lg font-bold text-white">{Number(syncData.summary.cost_codes_count)}</p>
+                  <p className="text-xs text-white/40 mt-0.5">Cost Codes</p>
                 </div>
-                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
+                <div className="p-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.07)] text-center">
                   <p className="text-lg font-bold text-blue-400">{fmtMoney(Number(syncData.summary.total_direct_from_invoices))}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Invoiced (Direct)</p>
+                  <p className="text-xs text-white/40 mt-0.5">Invoiced (Direct)</p>
                 </div>
-                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
+                <div className="p-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.07)] text-center">
                   <p className="text-lg font-bold text-orange-400">{fmtMoney(Number(syncData.summary.total_committed_from_invoices))}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Committed</p>
+                  <p className="text-xs text-white/40 mt-0.5">Committed</p>
                 </div>
               </div>
 
               {syncData.items.length > 0 ? (
                 <>
-                  <div className="rounded-xl border border-border overflow-hidden">
+                  <div className="rounded-xl border border-[rgba(255,255,255,0.07)] overflow-hidden">
                     <div className="overflow-y-auto max-h-48">
                       <table className="w-full text-xs">
-                        <thead className="bg-secondary/50">
+                        <thead className="bg-[rgba(255,255,255,0.05)]">
                           <tr>
-                            <th className="px-3 py-2 text-left text-muted-foreground font-medium">Code</th>
-                            <th className="px-3 py-2 text-left text-muted-foreground font-medium">Description</th>
-                            <th className="px-3 py-2 text-right text-muted-foreground font-medium">Budget</th>
-                            <th className="px-3 py-2 text-right text-muted-foreground font-medium">Actual</th>
+                            <th className="px-3 py-2 text-left text-white/40 font-medium">Code</th>
+                            <th className="px-3 py-2 text-left text-white/40 font-medium">Description</th>
+                            <th className="px-3 py-2 text-right text-white/40 font-medium">Budget</th>
+                            <th className="px-3 py-2 text-right text-white/40 font-medium">Actual</th>
                           </tr>
                         </thead>
                         <tbody>
                           {syncData.items.map((item, i) => (
-                            <tr key={i} className="border-t border-border/50">
+                            <tr key={i} className="border-t border-[rgba(255,255,255,0.045)]">
                               <td className="px-3 py-1.5 text-blue-400 font-mono">{String(item.code || "—")}</td>
-                              <td className="px-3 py-1.5 text-foreground max-w-36 truncate">{String(item.description || "")}</td>
-                              <td className="px-3 py-1.5 text-right text-foreground">{fmtCurrency(Number(item.original_budget || 0))}</td>
-                              <td className="px-3 py-1.5 text-right text-foreground">{fmtCurrency(Number(item.direct_costs || 0))}</td>
+                              <td className="px-3 py-1.5 text-white max-w-36 truncate">{String(item.description || "")}</td>
+                              <td className="px-3 py-1.5 text-right text-white">{fmtCurrency(Number(item.original_budget || 0))}</td>
+                              <td className="px-3 py-1.5 text-right text-white">{fmtCurrency(Number(item.direct_costs || 0))}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1015,14 +1026,14 @@ function SyncModal({
                   </p>
 
                   <div className="flex gap-3">
-                    <Button variant="outline" size="sm" onClick={onClose} className="border-border flex-1">Cancel</Button>
-                    <Button className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleSave} disabled={saving}>
+                    <Button style={glassButtonStyle} variant="outline" size="sm" onClick={onClose} className="border-[rgba(255,255,255,0.07)] flex-1">Cancel</Button>
+                    <Button style={gradientButtonStyle} className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleSave} disabled={saving}>
                       {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : `Sync ${syncData.items.length} items`}
                     </Button>
                   </div>
                 </>
               ) : (
-                <div className="text-center py-6 text-muted-foreground">
+                <div className="text-center py-6 text-white/40">
                   <p className="text-sm">No cost codes found for this project.</p>
                   <p className="text-xs mt-1">Add cost codes in the Construction module first.</p>
                 </div>
@@ -1031,7 +1042,7 @@ function SyncModal({
           )}
 
           {!syncData && !syncing && (
-            <p className="text-xs text-muted-foreground text-center py-4">
+            <p className="text-xs text-white/40 text-center py-4">
               Select a project and click Fetch to preview cost codes from the Construction module.
             </p>
           )}
@@ -1088,19 +1099,19 @@ function BudgetSyncModal({
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl"
+        className="bg-[rgba(4,11,25,0.94)] border border-[rgba(0,212,255,0.15)] backdrop-blur-2xl rounded-2xl w-full max-w-md shadow-2xl"
       >
-        <div className="flex items-center justify-between p-5 border-b border-border">
+        <div className="flex items-center justify-between p-5 border-b border-[rgba(255,255,255,0.07)]">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-amber-500/10 flex items-center justify-center">
               <Link2 className="w-4 h-4 text-amber-400" />
             </div>
             <div>
-              <h2 className="font-semibold text-foreground">Sync to Project Budget</h2>
-              <p className="text-xs text-muted-foreground">{preview?.project_name ?? "Loading…"}</p>
+              <h2 className="font-semibold text-white">Sync to Project Budget</h2>
+              <p className="text-xs text-white/40">{preview?.project_name ?? "Loading…"}</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+          <button onClick={onClose} className="text-white/40 hover:text-white">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -1113,12 +1124,12 @@ function BudgetSyncModal({
           ) : preview ? (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
-                  <p className="text-[11px] text-muted-foreground mb-1">Current Project Budget</p>
-                  <p className="text-lg font-bold text-foreground">{fmtMoney(preview.current_budget)}</p>
+                <div className="p-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.07)] text-center">
+                  <p className="text-[11px] text-white/40 mb-1">Current Project Budget</p>
+                  <p className="text-lg font-bold text-white">{fmtMoney(preview.current_budget)}</p>
                 </div>
-                <div className="p-3 rounded-xl bg-secondary/40 border border-border text-center">
-                  <p className="text-[11px] text-muted-foreground mb-1">Sum of Line Items</p>
+                <div className="p-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.07)] text-center">
+                  <p className="text-[11px] text-white/40 mb-1">Sum of Line Items</p>
                   <p className="text-lg font-bold text-blue-400">{fmtMoney(preview.itemized_total)}</p>
                 </div>
               </div>
@@ -1132,7 +1143,7 @@ function BudgetSyncModal({
                   <p className="font-semibold mb-1">
                     {isDecrease ? "This will DECREASE" : "This will increase"} the project budget by {fmtMoney(Math.abs(preview.difference))}.
                   </p>
-                  <p className="text-muted-foreground">
+                  <p className="text-white/40">
                     {isDecrease
                       ? "The itemized line items add up to less than the current budget — this usually means not every division has been entered yet. Only confirm if the line items are the complete, final budget."
                       : "The itemized line items add up to more than the current budget."}
@@ -1141,9 +1152,10 @@ function BudgetSyncModal({
               )}
 
               <div className="flex gap-3">
-                <Button variant="outline" size="sm" onClick={onClose} className="border-border flex-1">Cancel</Button>
+                <Button style={glassButtonStyle} variant="outline" size="sm" onClick={onClose} className="border-[rgba(255,255,255,0.07)] flex-1">Cancel</Button>
                 <Button
-                  className={`border-0 flex-1 text-white ${isDecrease ? "bg-red-600 hover:bg-red-500" : "gradient-blue"}`}
+                  style={isDecrease ? undefined : gradientButtonStyle}
+                  className={`border-0 flex-1 text-white ${isDecrease ? "bg-red-600 hover:bg-red-500" : ""}`}
                   size="sm" onClick={handleConfirm} disabled={syncing || preview.in_sync}
                 >
                   {syncing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Syncing…</> : "Confirm Sync"}
@@ -1151,7 +1163,7 @@ function BudgetSyncModal({
               </div>
             </>
           ) : (
-            <p className="text-sm text-muted-foreground text-center py-4">Could not load preview.</p>
+            <p className="text-sm text-white/40 text-center py-4">Could not load preview.</p>
           )}
         </div>
       </motion.div>
@@ -1164,8 +1176,34 @@ function BudgetSyncModal({
 const EMPTY_FORM = {
   code: "", description: "", div_code: "00", div_name: "Uncategorized",
   original_budget: "", budget_mods: "", approved_cos: "", revised_budget: "",
-  pending_changes: "", projected_budget: "", committed_costs: "", direct_costs: "",
+  pending_changes: "", projected_budget: "",
 };
+
+const FIELD_LABELS: Record<string, string> = {
+  code: "Code", description: "Description", div_code: "Division Code", div_name: "Division Name",
+  original_budget: "Original Budget", budget_mods: "Budget Mods", approved_cos: "Approved COs",
+  revised_budget: "Revised Budget", pending_changes: "Pending COs", projected_budget: "Projected Budget",
+};
+const NUMERIC_FORM_FIELDS = new Set([
+  "original_budget", "budget_mods", "approved_cos", "revised_budget", "pending_changes", "projected_budget",
+]);
+
+function formFromItem(item: BudgetItem | null): Record<string, string> {
+  return item
+    ? {
+        code:             item.code,
+        description:      item.description,
+        div_code:         item.divCode,
+        div_name:         item.divName,
+        original_budget:  String(item.originalBudget),
+        budget_mods:      String(item.budgetMods),
+        approved_cos:     String(item.approvedCOs),
+        revised_budget:   String(item.revisedBudget),
+        pending_changes:  String(item.pendingChanges),
+        projected_budget: String(item.projectedBudget),
+      }
+    : { ...EMPTY_FORM };
+}
 
 // Defined at module scope (not inside ItemFormModal) so its identity is stable across
 // re-renders — a component redefined inline on every render gets remounted by React
@@ -1175,13 +1213,13 @@ function BudgetItemField({ label, value, numeric, onChange }: {
 }) {
   return (
     <div>
-      <label className="block text-xs text-muted-foreground mb-1">{label}</label>
+      <label className="block text-xs text-white/40 mb-1">{label}</label>
       <input
         type={numeric ? "number" : "text"}
         step={numeric ? "0.01" : undefined}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-blue-500"
+        className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-xl px-3 py-2 text-sm text-white outline-none placeholder:text-white/40 focus:ring-1 focus:ring-blue-500"
         placeholder={numeric ? "0.00" : ""}
       />
     </div>
@@ -1200,25 +1238,10 @@ function ItemFormModal({
   onSuccess: () => void;
 }) {
   const isEdit = !!item?.id;
-  const [form, setForm] = useState<Record<string, string>>(
-    item
-      ? {
-          code:             item.code,
-          description:      item.description,
-          div_code:         item.divCode,
-          div_name:         item.divName,
-          original_budget:  String(item.originalBudget),
-          budget_mods:      String(item.budgetMods),
-          approved_cos:     String(item.approvedCOs),
-          revised_budget:   String(item.revisedBudget),
-          pending_changes:  String(item.pendingChanges),
-          projected_budget: String(item.projectedBudget),
-          committed_costs:  String(item.committedCosts),
-          direct_costs:     String(item.directCosts),
-        }
-      : { ...EMPTY_FORM }
-  );
+  const [initialForm] = useState<Record<string, string>>(() => formFromItem(item));
+  const [form, setForm] = useState<Record<string, string>>(() => formFromItem(item));
   const [saving, setSaving] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   function n(key: string) { return parseFloat(form[key]) || 0; }
 
@@ -1238,6 +1261,13 @@ function ItemFormModal({
     });
   }
 
+  function handleReview() {
+    if (!form.description.trim()) { toast.error("Description is required"); return; }
+    setConfirming(true);
+  }
+
+  const changedKeys = Object.keys(FIELD_LABELS).filter((k) => form[k] !== initialForm[k]);
+
   async function handleSave() {
     if (!form.description.trim()) { toast.error("Description is required"); return; }
     setSaving(true);
@@ -1254,8 +1284,6 @@ function ItemFormModal({
         revised_budget:   n("revised_budget"),
         pending_changes:  n("pending_changes"),
         projected_budget: n("projected_budget"),
-        committed_costs:  n("committed_costs"),
-        direct_costs:     n("direct_costs"),
       };
       if (isEdit) {
         await axios.put(`${API}/api/v1/financials/items/${item!.id}`, body);
@@ -1284,59 +1312,311 @@ function ItemFormModal({
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto"
+        className="bg-[rgba(4,11,25,0.94)] border border-[rgba(0,212,255,0.15)] backdrop-blur-2xl rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto"
       >
-        <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-card z-10">
+        <div className="flex items-center justify-between p-5 border-b border-[rgba(255,255,255,0.07)] sticky top-0 bg-[rgba(4,11,25,0.94)] backdrop-blur-2xl z-10">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-blue-500/10 flex items-center justify-center">
               {isEdit ? <Edit2 className="w-4 h-4 text-blue-400" /> : <Plus className="w-4 h-4 text-blue-400" />}
             </div>
             <div>
-              <h2 className="font-semibold text-foreground">{isEdit ? "Edit Line Item" : "Add Line Item"}</h2>
-              <p className="text-xs text-muted-foreground">{isEdit ? item!.description : "New budget line item"}</p>
+              <h2 className="font-semibold text-white">{isEdit ? "Edit Line Item" : "Add Line Item"}</h2>
+              <p className="text-xs text-white/40">{isEdit ? item!.description : "New budget line item"}</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+          <button onClick={onClose} className="text-white/40 hover:text-white"><X className="w-5 h-5" /></button>
         </div>
 
         <div className="p-5 space-y-5">
-          {/* Identity */}
-          <div className="grid grid-cols-2 gap-4">
-            <BudgetItemField label="Code" value={form.code} onChange={(v) => setField("code", v)} />
-            <div className="col-span-2">
-              <BudgetItemField label="Description *" value={form.description} onChange={(v) => setField("description", v)} />
+          {!confirming ? (
+            <>
+              {/* Identity */}
+              <div className="grid grid-cols-2 gap-4">
+                <BudgetItemField label="Code" value={form.code} onChange={(v) => setField("code", v)} />
+                <div className="col-span-2">
+                  <BudgetItemField label="Description *" value={form.description} onChange={(v) => setField("description", v)} />
+                </div>
+                <BudgetItemField label="Division Code" value={form.div_code} onChange={(v) => setField("div_code", v)} />
+                <BudgetItemField label="Division Name" value={form.div_name} onChange={(v) => setField("div_name", v)} />
+              </div>
+
+              <div className="border-t border-[rgba(255,255,255,0.045)]" />
+
+              {/* Numeric fields */}
+              <div>
+                <p className="text-xs font-semibold text-white/40 uppercase tracking-wide mb-3">Budget Amounts</p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                  <BudgetItemField label="Original Budget"   value={form.original_budget}  numeric onChange={(v) => handleChange("original_budget", v)} />
+                  <BudgetItemField label="Budget Mods"        value={form.budget_mods}      numeric onChange={(v) => handleChange("budget_mods", v)} />
+                  <BudgetItemField label="Approved COs"       value={form.approved_cos}     numeric onChange={(v) => handleChange("approved_cos", v)} />
+                  <BudgetItemField label="Revised Budget"     value={form.revised_budget}   numeric onChange={(v) => handleChange("revised_budget", v)} />
+                  <BudgetItemField label="Pending COs"        value={form.pending_changes}  numeric onChange={(v) => handleChange("pending_changes", v)} />
+                  <BudgetItemField label="Projected Budget"   value={form.projected_budget} numeric onChange={(v) => handleChange("projected_budget", v)} />
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold text-white/40 uppercase tracking-wide mb-3">Costs</p>
+                <div className="grid grid-cols-2 gap-4 text-xs text-white/50">
+                  <div>
+                    <p className="text-white/40 mb-1">Committed Costs</p>
+                    <p className="text-white font-medium">{isEdit ? fmtCurrency(item!.committedCosts) : "$0.00"}</p>
+                  </div>
+                  <div>
+                    <p className="text-white/40 mb-1">Direct Costs</p>
+                    <p className="text-white font-medium">{isEdit ? fmtCurrency(item!.directCosts) : "$0.00"}</p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-white/35 mt-2">
+                  Computed live from invoices &amp; cost entries — add or update spend on the Payments or Cost &amp; Budget pages to change these.
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <Button style={glassButtonStyle} variant="outline" size="sm" onClick={onClose} className="border-[rgba(255,255,255,0.07)] flex-1">Cancel</Button>
+                <Button style={gradientButtonStyle} className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleReview}>
+                  {isEdit ? "Review Changes" : "Review & Add"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              {isEdit && changedKeys.length === 0 ? (
+                <p className="text-sm text-white/50">No fields were changed.</p>
+              ) : (
+                <div className="space-y-2 rounded-xl bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.07)] p-4">
+                  {(isEdit ? changedKeys : Object.keys(FIELD_LABELS).filter((k) => form[k])).map((k) => (
+                    <div key={k} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-white/40">{FIELD_LABELS[k]}</span>
+                      {isEdit ? (
+                        <span className="text-right">
+                          <span className="text-white/40 line-through mr-2">
+                            {NUMERIC_FORM_FIELDS.has(k) ? fmtCurrency(parseFloat(initialForm[k]) || 0) : (initialForm[k] || "—")}
+                          </span>
+                          <span className="text-white font-medium">
+                            {NUMERIC_FORM_FIELDS.has(k) ? fmtCurrency(parseFloat(form[k]) || 0) : (form[k] || "—")}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-white font-medium">
+                          {NUMERIC_FORM_FIELDS.has(k) ? fmtCurrency(parseFloat(form[k]) || 0) : form[k]}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <p className="text-xs text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-xl px-3 py-2.5">
+                {isEdit
+                  ? "This updates the line item immediately. It does not change the project's overall budget — use Sync to Project Budget below the table for that."
+                  : "This adds a new line item immediately. Committed/Direct costs are computed live and can't be set here."}
+              </p>
+
+              <div className="flex gap-3 pt-2">
+                <Button style={glassButtonStyle} variant="outline" size="sm" onClick={() => setConfirming(false)} className="border-[rgba(255,255,255,0.07)] flex-1" disabled={saving}>Back</Button>
+                <Button style={gradientButtonStyle} className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleSave} disabled={saving}>
+                  {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : isEdit ? "Confirm & Save" : "Confirm & Add"}
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Delete Confirmation Modal ─────────────────────────────────────────────────
+
+function DeleteItemModal({
+  item,
+  deleting,
+  onClose,
+  onConfirm,
+}: {
+  item: BudgetItem;
+  deleting: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-[rgba(4,11,25,0.94)] border border-[rgba(0,212,255,0.15)] backdrop-blur-2xl rounded-2xl w-full max-w-md shadow-2xl"
+      >
+        <div className="flex items-center justify-between p-5 border-b border-[rgba(255,255,255,0.07)]">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-red-500/10 flex items-center justify-center">
+              <Trash2 className="w-4 h-4 text-red-400" />
             </div>
-            <BudgetItemField label="Division Code" value={form.div_code} onChange={(v) => setField("div_code", v)} />
-            <BudgetItemField label="Division Name" value={form.div_name} onChange={(v) => setField("div_name", v)} />
+            <h2 className="font-semibold text-white">Delete Line Item</h2>
           </div>
+          <button onClick={onClose} className="text-white/40 hover:text-white"><X className="w-5 h-5" /></button>
+        </div>
 
-          <div className="border-t border-border/50" />
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-white/70">
+            Delete <span className="text-white font-semibold">&quot;{item.description}&quot;</span> ({item.code || "no code"}, {item.divName})?
+          </p>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="p-2.5 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.07)]">
+              <p className="text-white/40 mb-0.5">Original Budget</p>
+              <p className="text-white font-medium">{fmtCurrency(item.originalBudget)}</p>
+            </div>
+            <div className="p-2.5 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.07)]">
+              <p className="text-white/40 mb-0.5">Revised Budget</p>
+              <p className="text-white font-medium">{fmtCurrency(item.revisedBudget)}</p>
+            </div>
+          </div>
+          <p className="text-xs text-red-400 bg-red-500/5 border border-red-500/20 rounded-xl px-3 py-2.5">
+            This can&apos;t be undone. It removes the line item only — it doesn&apos;t change the project&apos;s overall budget.
+          </p>
+          <div className="flex gap-3">
+            <Button style={glassButtonStyle} variant="outline" size="sm" onClick={onClose} className="border-[rgba(255,255,255,0.07)] flex-1" disabled={deleting}>Cancel</Button>
+            <Button size="sm" onClick={onConfirm} disabled={deleting} className="border-0 flex-1 text-white bg-red-600 hover:bg-red-500">
+              {deleting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Deleting…</> : "Delete"}
+            </Button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
-          {/* Numeric fields */}
+// ─── Delete All Confirmation Modal ─────────────────────────────────────────────
+
+function DeleteAllModal({
+  projectName,
+  itemCount,
+  itemTotal,
+  deleting,
+  onClose,
+  onConfirm,
+}: {
+  projectName: string;
+  itemCount: number;
+  itemTotal: number;
+  deleting: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const [confirmText, setConfirmText] = useState("");
+  const canDelete = confirmText.trim().toUpperCase() === "DELETE" && !deleting;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-[rgba(4,11,25,0.94)] border border-red-500/30 backdrop-blur-2xl rounded-2xl w-full max-w-md shadow-2xl"
+      >
+        <div className="flex items-center justify-between p-5 border-b border-[rgba(255,255,255,0.07)]">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-red-500/10 flex items-center justify-center">
+              <AlertTriangle className="w-4 h-4 text-red-400" />
+            </div>
+            <h2 className="font-semibold text-white">Delete All Line Items</h2>
+          </div>
+          <button onClick={onClose} className="text-white/40 hover:text-white"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-white/70">
+            This permanently deletes <span className="text-white font-semibold">{itemCount}</span> line item{itemCount !== 1 ? "s" : ""}
+            {" "}(totaling <span className="text-white font-semibold">{fmtCurrency(itemTotal)}</span> of Original Budget) from{" "}
+            <span className="text-cyan-400 font-medium">{projectName}</span>.
+          </p>
+          <p className="text-xs text-red-400 bg-red-500/5 border border-red-500/20 rounded-xl px-3 py-2.5">
+            This can&apos;t be undone. The itemized breakdown will fall back to a CSI-percentage estimate until you import or add items again.
+            It does not change the project&apos;s overall budget.
+          </p>
           <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Budget Amounts</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-              <BudgetItemField label="Original Budget"   value={form.original_budget}  numeric onChange={(v) => handleChange("original_budget", v)} />
-              <BudgetItemField label="Budget Mods"        value={form.budget_mods}      numeric onChange={(v) => handleChange("budget_mods", v)} />
-              <BudgetItemField label="Approved COs"       value={form.approved_cos}     numeric onChange={(v) => handleChange("approved_cos", v)} />
-              <BudgetItemField label="Revised Budget"     value={form.revised_budget}   numeric onChange={(v) => handleChange("revised_budget", v)} />
-              <BudgetItemField label="Pending COs"        value={form.pending_changes}  numeric onChange={(v) => handleChange("pending_changes", v)} />
-              <BudgetItemField label="Projected Budget"   value={form.projected_budget} numeric onChange={(v) => handleChange("projected_budget", v)} />
-            </div>
+            <label className="text-xs text-white/40 block mb-1.5">
+              Type <span className="text-white font-semibold">DELETE</span> to confirm
+            </label>
+            <input
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="DELETE"
+              className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-xl px-3 py-2 text-sm text-white outline-none placeholder:text-white/25 focus:ring-1 focus:ring-red-500"
+            />
           </div>
+          <div className="flex gap-3">
+            <Button style={glassButtonStyle} variant="outline" size="sm" onClick={onClose} className="border-[rgba(255,255,255,0.07)] flex-1" disabled={deleting}>Back off</Button>
+            <Button size="sm" onClick={onConfirm} disabled={!canDelete} className="border-0 flex-1 text-white bg-red-600 hover:bg-red-500 disabled:opacity-40">
+              {deleting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Deleting…</> : "Delete All"}
+            </Button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
+// ─── Delete All History Confirmation Modal ─────────────────────────────────────
+
+function DeleteAllHistoryModal({
+  projectName,
+  entryCount,
+  deleting,
+  onClose,
+  onConfirm,
+}: {
+  projectName: string;
+  entryCount: number;
+  deleting: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const [confirmText, setConfirmText] = useState("");
+  const canDelete = confirmText.trim().toUpperCase() === "DELETE" && !deleting;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-[rgba(4,11,25,0.94)] border border-red-500/30 backdrop-blur-2xl rounded-2xl w-full max-w-md shadow-2xl"
+      >
+        <div className="flex items-center justify-between p-5 border-b border-[rgba(255,255,255,0.07)]">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-red-500/10 flex items-center justify-center">
+              <AlertTriangle className="w-4 h-4 text-red-400" />
+            </div>
+            <h2 className="font-semibold text-white">Delete All Change History</h2>
+          </div>
+          <button onClick={onClose} className="text-white/40 hover:text-white"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-white/70">
+            This permanently deletes <span className="text-white font-semibold">{entryCount}</span> history entr{entryCount !== 1 ? "ies" : "y"} for{" "}
+            <span className="text-cyan-400 font-medium">{projectName}</span>.
+          </p>
+          <p className="text-xs text-red-400 bg-red-500/5 border border-red-500/20 rounded-xl px-3 py-2.5">
+            This can&apos;t be undone. It clears the audit trail only — it doesn&apos;t change any budget line item or the project&apos;s overall budget.
+          </p>
           <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Costs</p>
-            <div className="grid grid-cols-2 gap-4">
-              <BudgetItemField label="Committed Costs" value={form.committed_costs} numeric onChange={(v) => handleChange("committed_costs", v)} />
-              <BudgetItemField label="Direct Costs"    value={form.direct_costs}    numeric onChange={(v) => handleChange("direct_costs", v)} />
-            </div>
+            <label className="text-xs text-white/40 block mb-1.5">
+              Type <span className="text-white font-semibold">DELETE</span> to confirm
+            </label>
+            <input
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="DELETE"
+              className="w-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-xl px-3 py-2 text-sm text-white outline-none placeholder:text-white/25 focus:ring-1 focus:ring-red-500"
+            />
           </div>
-
-          <div className="flex gap-3 pt-2">
-            <Button variant="outline" size="sm" onClick={onClose} className="border-border flex-1" disabled={saving}>Cancel</Button>
-            <Button className="gradient-blue text-white border-0 flex-1" size="sm" onClick={handleSave} disabled={saving}>
-              {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : isEdit ? "Save Changes" : "Add Item"}
+          <div className="flex gap-3">
+            <Button style={glassButtonStyle} variant="outline" size="sm" onClick={onClose} className="border-[rgba(255,255,255,0.07)] flex-1" disabled={deleting}>Back off</Button>
+            <Button size="sm" onClick={onConfirm} disabled={!canDelete} className="border-0 flex-1 text-white bg-red-600 hover:bg-red-500 disabled:opacity-40">
+              {deleting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Deleting…</> : "Delete All"}
             </Button>
           </div>
         </div>
@@ -1361,6 +1641,11 @@ export default function FinancialsPage() {
   const [showItemForm, setShowItemForm] = useState(false);
   const [editingItem,  setEditingItem]  = useState<BudgetItem | null>(null);
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
+  const [confirmDeleteItem, setConfirmDeleteItem] = useState<BudgetItem | null>(null);
+  const [showDeleteAll, setShowDeleteAll] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
+  const [showDeleteAllHistory, setShowDeleteAllHistory] = useState(false);
+  const [deletingAllHistory, setDeletingAllHistory] = useState(false);
   const [usingFallback, setUsingFallback] = useState(false);
   const [liveActuals,  setLiveActuals]  = useState<{
     project_budget: number;
@@ -1381,6 +1666,9 @@ export default function FinancialsPage() {
   const [search,      setSearch]      = useState("");
   const [collapsed,   setCollapsed]   = useState<Record<string, boolean>>({});
   const [invoiceSummary, setInvoiceSummary] = useState({ pending: 0, pendingAmt: 0, overdue: 0, overdueAmt: 0 });
+  // Same monthly budget/actual series the Cost & Budget page charts — reused here so
+  // Original Budget / Direct Costs KPI cards can show a real sparkline instead of none.
+  const [costTrend, setCostTrend] = useState<{ month: string; budget: number; actual: number }[]>([]);
 
   // Fetch live actuals whenever the project selection changes
   useEffect(() => {
@@ -1393,12 +1681,14 @@ export default function FinancialsPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [projRes, payRes, itemsRes, histRes] = await Promise.allSettled([
+      const [projRes, payRes, itemsRes, histRes, costChartRes] = await Promise.allSettled([
         axios.get(`${API}/api/v1/projects/`),
         axios.get(`${API}/api/v1/payments/invoices`),
         axios.get(`${API}/api/v1/financials/budget-items`),
         axios.get(`${API}/api/v1/financials/change-history`),
+        axios.get(`${API}/api/v1/projects/charts/costs`),
       ]);
+      setCostTrend(costChartRes.status === "fulfilled" ? (costChartRes.value.data.data || []) : []);
 
       let rawProjects: Record<string, unknown>[] = [];
       if (projRes.status === "fulfilled") rawProjects = projRes.value.data.projects || [];
@@ -1429,7 +1719,8 @@ export default function FinancialsPage() {
       const projectList: ProjectInfo[] = rawProjects.map((p) => {
         const budget    = Number(p.total_budget    ?? 0);
         const spent     = Number(p.spent_to_date   ?? 0);
-        // committed_amount comes from invoices (pending+approved+received) via db_service
+        // committed_amount = pending+overdue invoices via db_service — matches
+        // /financials/live-actuals exactly, so this always agrees with the KPI cards.
         const committed = Number(p.committed_amount ?? 0);
         const direct    = spent; // direct costs = actual cost_entries spend
 
@@ -1516,9 +1807,14 @@ export default function FinancialsPage() {
     setShowItemForm(true);
   }
 
-  async function handleDeleteItem(item: BudgetItem) {
+  function openDeleteItem(item: BudgetItem) {
     if (!item.id) return;
-    if (!confirm(`Delete "${item.description}"?`)) return;
+    setConfirmDeleteItem(item);
+  }
+
+  async function handleDeleteItem() {
+    const item = confirmDeleteItem;
+    if (!item?.id) return;
     setDeletingItemId(item.id);
     try {
       await axios.delete(`${API}/api/v1/financials/items/${item.id}`);
@@ -1528,6 +1824,39 @@ export default function FinancialsPage() {
       toast.error("Delete failed");
     } finally {
       setDeletingItemId(null);
+      setConfirmDeleteItem(null);
+    }
+  }
+
+  async function handleDeleteAll() {
+    if (selectedPid === "all") return;
+    setDeletingAll(true);
+    try {
+      const res = await axios.delete(`${API}/api/v1/financials/items`, { params: { project_id: selectedPid } });
+      const count = res.data?.deleted_count ?? 0;
+      toast.success(count > 0 ? `Deleted all ${count} line items` : "No line items to delete");
+      handleDataChanged();
+    } catch {
+      toast.error("Delete all failed");
+    } finally {
+      setDeletingAll(false);
+      setShowDeleteAll(false);
+    }
+  }
+
+  async function handleDeleteAllHistory() {
+    if (selectedPid === "all") return;
+    setDeletingAllHistory(true);
+    try {
+      const res = await axios.delete(`${API}/api/v1/financials/change-history`, { params: { project_id: selectedPid } });
+      const count = res.data?.deleted_count ?? 0;
+      toast.success(count > 0 ? `Deleted all ${count} history entries` : "No history entries to delete");
+      handleDataChanged();
+    } catch {
+      toast.error("Delete all failed");
+    } finally {
+      setDeletingAllHistory(false);
+      setShowDeleteAllHistory(false);
     }
   }
 
@@ -1569,11 +1898,30 @@ export default function FinancialsPage() {
   const selectedProject = selectedPid !== "all" ? projects.find((p) => p.id === selectedPid) : null;
   const projectCount    = selectedPid === "all" ? projects.length : 1;
 
+  // Only real (DB-backed) items would actually be deleted by "Delete All" —
+  // CSI-fallback estimate rows have no `id` and don't exist in the database.
+  const realItemsForSelected = useMemo(
+    () => (selectedProject ? selectedProject.divisions.flatMap((d) => d.items).filter((i) => i.id) : []),
+    [selectedProject]
+  );
+
+  // The history list isn't fetched pre-filtered by project, so scope it to whatever
+  // "Delete All" would actually delete — otherwise the visible list and the count
+  // shown in the confirmation dialog wouldn't match what gets removed.
+  const historyForSelected = useMemo(
+    () => (selectedPid === "all" ? history : history.filter((h) => h.project_id === selectedPid)),
+    [history, selectedPid]
+  );
+
   const kpis = [
-    { label: "Original Budget", value: fmtMoney(liveGrand.originalBudget), sub: `${projectCount} project${projectCount !== 1 ? "s" : ""}`,  icon: DollarSign,  color: "border-blue-500/20 bg-blue-500/5",     iconColor: "text-blue-400"    },
-    { label: "Approved COs",    value: fmtMoney(grand.approvedCOs),         sub: liveGrand.originalBudget > 0 ? `${((grand.approvedCOs / liveGrand.originalBudget) * 100).toFixed(2)}% of budget` : "—", icon: CheckCircle2, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400" },
-    { label: "Direct Costs",    value: fmtMoney(liveGrand.directCosts),     sub: liveGrand.originalBudget > 0 ? `${((liveGrand.directCosts / liveGrand.originalBudget) * 100).toFixed(1)}% of budget` : "—", icon: TrendingUp, color: "border-cyan-500/20 bg-cyan-500/5", iconColor: "text-cyan-400"  },
-    { label: "Committed Costs", value: fmtMoney(liveGrand.committedCosts),  sub: liveGrand.originalBudget > 0 ? `${((liveGrand.committedCosts / liveGrand.originalBudget) * 100).toFixed(1)}% committed` : "—", icon: AlertCircle, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400" },
+    { label: "Original Budget", value: fmtMoney(liveGrand.originalBudget), sub: `${projectCount} project${projectCount !== 1 ? "s" : ""}`,  icon: DollarSign,  accent: ACCENT.blue,
+      trendData: costTrend.map((d) => d.budget), trendType: "area" as const, trendLabels: costTrend.map((d) => d.month), trendFmt: fmtMoneyK },
+    { label: "Approved COs",    value: fmtMoney(grand.approvedCOs),         sub: liveGrand.originalBudget > 0 ? `${((grand.approvedCOs / liveGrand.originalBudget) * 100).toFixed(2)}% of budget` : "—", icon: CheckCircle2, accent: ACCENT.green,
+      trendData: [] as number[], trendType: "line" as const, trendLabels: [] as string[], trendFmt: fmtMoneyK },
+    { label: "Direct Costs",    value: fmtMoney(liveGrand.directCosts),     sub: liveGrand.originalBudget > 0 ? `${((liveGrand.directCosts / liveGrand.originalBudget) * 100).toFixed(1)}% of budget` : "—", icon: TrendingUp, accent: ACCENT.cyan,
+      trendData: costTrend.map((d) => d.actual), trendType: "area" as const, trendLabels: costTrend.map((d) => d.month), trendFmt: fmtMoneyK },
+    { label: "Committed Costs", value: fmtMoney(liveGrand.committedCosts),  sub: liveGrand.originalBudget > 0 ? `${((liveGrand.committedCosts / liveGrand.originalBudget) * 100).toFixed(1)}% committed` : "—", icon: AlertCircle, accent: ACCENT.amber,
+      trendData: [] as number[], trendType: "line" as const, trendLabels: [] as string[], trendFmt: fmtMoneyK },
   ];
 
   // ── Budget distribution bar ──────────────────────────────────────────────────
@@ -1597,11 +1945,11 @@ export default function FinancialsPage() {
 
     return (
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}
-        className="bg-card border border-border rounded-2xl p-5">
+        className="bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.07)] rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <div>
-            <h3 className="font-semibold text-foreground">Budget Distribution</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <h3 className="font-semibold text-white">Budget Distribution</h3>
+            <p className="text-xs text-white/40 mt-0.5">
               Project budget {fmtMoney(baseBudget)} · Used {fmtMoney(totalSpent)} ({totalUsedPct}%)
             </p>
           </div>
@@ -1611,7 +1959,7 @@ export default function FinancialsPage() {
             <span className="text-xs px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">{(100 - Number(totalUsedPct)).toFixed(1)}% remaining</span>
           )}
         </div>
-        <div className="h-7 flex rounded-xl overflow-hidden gap-px bg-secondary">
+        <div className="h-7 flex rounded-xl overflow-hidden gap-px bg-[rgba(255,255,255,0.05)]">
           {pctCommitted > 0 && (
             <motion.div initial={{ width: 0 }} animate={{ width: `${pctCommitted}%` }} transition={{ duration: 0.8, delay: 0.3 }}
               title={`Committed Costs — ${fmtCurrency(committedAmt)}`}
@@ -1634,31 +1982,31 @@ export default function FinancialsPage() {
             </motion.div>
           ) : (
             <motion.div initial={{ width: 0 }} animate={{ width: `${pctRemaining}%` }} transition={{ duration: 0.8, delay: 0.5 }}
-              title={`Remaining — ${fmtCurrency(remaining)}`} className="bg-secondary min-w-0" />
+              title={`Remaining — ${fmtCurrency(remaining)}`} className="bg-[rgba(255,255,255,0.05)] min-w-0" />
           )}
         </div>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3 text-xs">
           <div className="flex items-center gap-1.5">
             <div className="w-2.5 h-2.5 rounded-sm bg-orange-500 shrink-0" />
-            <span className="text-muted-foreground">Committed <span className="text-foreground font-medium ml-1">{fmtMoney(committedAmt)}</span></span>
+            <span className="text-white/40">Committed <span className="text-white font-medium ml-1">{fmtMoney(committedAmt)}</span></span>
           </div>
           <div className="flex items-center gap-1.5">
             <div className="w-2.5 h-2.5 rounded-sm bg-blue-500 shrink-0" />
-            <span className="text-muted-foreground">Direct Costs <span className="text-foreground font-medium ml-1">{fmtMoney(directAmt)}</span></span>
+            <span className="text-white/40">Direct Costs <span className="text-white font-medium ml-1">{fmtMoney(directAmt)}</span></span>
           </div>
           {isOverrun ? (
             <div className="flex items-center gap-1.5">
               <div className="w-2.5 h-2.5 rounded-sm bg-red-500 shrink-0" />
-              <span className="text-muted-foreground">Overrun <span className="text-red-400 font-medium ml-1">{fmtMoney(overrun)}</span></span>
+              <span className="text-white/40">Overrun <span className="text-red-400 font-medium ml-1">{fmtMoney(overrun)}</span></span>
             </div>
           ) : (
             <div className="flex items-center gap-1.5">
-              <div className="w-2.5 h-2.5 rounded-sm bg-secondary border border-border/60 shrink-0" />
-              <span className="text-muted-foreground">Remaining <span className="text-emerald-400 font-medium ml-1">{fmtMoney(remaining)}</span></span>
+              <div className="w-2.5 h-2.5 rounded-sm bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.05)] shrink-0" />
+              <span className="text-white/40">Remaining <span className="text-emerald-400 font-medium ml-1">{fmtMoney(remaining)}</span></span>
             </div>
           )}
-          <div className="ml-auto text-muted-foreground">
-            Pending COs <span className="text-foreground font-medium">{fmtMoney(grand.pendingChanges)}</span>
+          <div className="ml-auto text-white/40">
+            Pending COs <span className="text-white font-medium">{fmtMoney(grand.pendingChanges)}</span>
           </div>
         </div>
       </motion.div>
@@ -1679,20 +2027,20 @@ export default function FinancialsPage() {
     ];
     return (
       <div>
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2.5">Connected Modules</p>
+        <p className="text-xs font-semibold text-white/40 uppercase tracking-wide mb-2.5">Connected Modules</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {tiles.map((tile, i) => (
             <Link key={i} href={tile.href}
-              className={`flex items-center gap-3 p-3.5 rounded-xl bg-card border border-border ${tile.border} transition-all group`}>
+              className={`flex items-center gap-3 p-3.5 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.07)] ${tile.border} transition-all group`}>
               <div className={`w-9 h-9 rounded-xl ${tile.bg} flex items-center justify-center shrink-0`}>
                 <tile.icon className={`w-4 h-4 ${tile.color}`} />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-[10px] text-muted-foreground">{tile.label}</p>
+                <p className="text-[10px] text-white/40">{tile.label}</p>
                 <p className={`text-sm font-semibold ${tile.color} truncate`}>{tile.value}</p>
-                <p className="text-[10px] text-muted-foreground truncate">{tile.sub}</p>
+                <p className="text-[10px] text-white/40 truncate">{tile.sub}</p>
               </div>
-              <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0" />
+              <ChevronRight className="w-3.5 h-3.5 text-white/30 group-hover:text-white/60 transition-colors shrink-0" />
             </Link>
           ))}
         </div>
@@ -1708,22 +2056,22 @@ export default function FinancialsPage() {
 
   const TableHead = () => (
     <thead>
-      <tr className="border-b border-border bg-secondary/30">
-        <th className="sticky left-0 z-10 bg-secondary/60 text-left py-3 px-4 text-xs font-semibold text-muted-foreground w-72 min-w-[288px]">Description</th>
+      <tr className="border-b border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.03)]">
+        <th className="sticky left-0 z-10 bg-[rgba(255,255,255,0.06)] text-left py-3 px-4 text-xs font-semibold text-white/40 w-72 min-w-[288px]">Description</th>
         {activeCols.map((c) => (
           <th key={c.key} title={COL_TOOLTIPS[c.key]}
             className={`py-3 px-4 text-right text-xs font-semibold ${c.hColor} whitespace-nowrap min-w-30 cursor-help`}>
             {c.header}
           </th>
         ))}
-        <th className="py-3 px-3 text-center text-xs font-semibold text-muted-foreground w-16 whitespace-nowrap">Actions</th>
+        <th className="py-3 px-3 text-center text-xs font-semibold text-white/40 w-16 whitespace-nowrap">Actions</th>
       </tr>
     </thead>
   );
 
   const GrandTotalRow = ({ totals }: { totals: Totals }) => (
-    <tr className="bg-secondary/40 border-t-2 border-border/80">
-      <td className="sticky left-0 z-10 bg-secondary/60 py-3.5 px-4 font-bold text-foreground">Grand Total</td>
+    <tr className="bg-[rgba(255,255,255,0.04)] border-t-2 border-[rgba(255,255,255,0.08)]">
+      <td className="sticky left-0 z-10 bg-[rgba(255,255,255,0.06)] py-3.5 px-4 font-bold text-white">Grand Total</td>
       {activeCols.map((c) => (
         <td key={c.key} className="py-3.5 px-4 text-right">
           <span className={`font-bold ${c.hColor}`}>{fmtCurrency(totals[c.key])}</span>
@@ -1733,27 +2081,36 @@ export default function FinancialsPage() {
     </tr>
   );
 
+  // Estimated (CSI-fallback) rows have no `id` — they aren't real database rows,
+  // they're a proportional split of the project's totals computed on the fly.
+  // Edit/Delete can't act on them (there's nothing to update or delete), so show
+  // a plain badge instead of buttons that would silently no-op or, worse, look
+  // like an edit while actually creating an unrelated new real item.
   const ItemActions = ({ item }: { item: BudgetItem }) => (
     <td className="py-2.5 px-3 text-center">
-      <div className="flex items-center justify-center gap-1">
-        <button
-          onClick={(e) => { e.stopPropagation(); openEditItem(item); }}
-          title="Edit"
-          className="p-1 rounded text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
-        >
-          <Edit2 className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); handleDeleteItem(item); }}
-          title="Delete"
-          disabled={deletingItemId === item.id}
-          className="p-1 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
-        >
-          {deletingItemId === item.id
-            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            : <Trash2 className="w-3.5 h-3.5" />}
-        </button>
-      </div>
+      {!item.id ? (
+        <span title="Estimated from the project total — add a real line item to edit or delete it" className="text-[10px] text-white/25 cursor-help">est.</span>
+      ) : (
+        <div className="flex items-center justify-center gap-1">
+          <button
+            onClick={(e) => { e.stopPropagation(); openEditItem(item); }}
+            title="Edit"
+            className="p-1 rounded text-white/40 hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
+          >
+            <Edit2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); openDeleteItem(item); }}
+            title="Delete"
+            disabled={deletingItemId === item.id}
+            className="p-1 rounded text-white/40 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+          >
+            {deletingItemId === item.id
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <Trash2 className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      )}
     </td>
   );
 
@@ -1764,13 +2121,13 @@ export default function FinancialsPage() {
         const open = !isCollapsed(div.code) || !!search;
         return (
           <Fragment key={div.code}>
-            <tr onClick={() => toggleDiv(div.code)} className="border-b border-border/60 hover:bg-secondary/30 cursor-pointer transition-colors group">
-              <td className="sticky left-0 z-10 bg-card group-hover:bg-secondary/30 transition-colors py-3 px-4">
+            <tr onClick={() => toggleDiv(div.code)} className="border-b border-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.03)] cursor-pointer transition-colors group">
+              <td className="sticky left-0 z-10 bg-[rgba(255,255,255,0.02)] group-hover:bg-[rgba(255,255,255,0.03)] transition-colors py-3 px-4">
                 <div className="flex items-center gap-2">
                   <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0.15 }} className="inline-flex">
-                    <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <ChevronRight className="w-4 h-4 text-white/40 shrink-0" />
                   </motion.span>
-                  <span className="font-semibold text-foreground text-[13px]">{div.code} — {div.name}</span>
+                  <span className="font-semibold text-white text-[13px]">{div.code} — {div.name}</span>
                 </div>
               </td>
               {activeCols.map((c) => (
@@ -1779,11 +2136,11 @@ export default function FinancialsPage() {
               <td />
             </tr>
             {open && div.items.map((item) => (
-              <tr key={item.id || item.code} className="border-b border-border/30 hover:bg-secondary/20 transition-colors group">
-                <td className="sticky left-0 z-10 bg-card group-hover:bg-secondary/20 transition-colors py-2.5 px-4">
+              <tr key={item.id || item.code} className="border-b border-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.02)] transition-colors group">
+                <td className="sticky left-0 z-10 bg-[rgba(255,255,255,0.02)] group-hover:bg-[rgba(255,255,255,0.02)] transition-colors py-2.5 px-4">
                   <div className="flex items-center gap-2 pl-7">
-                    <span className="text-xs text-muted-foreground shrink-0">{item.code} -</span>
-                    <span className="text-xs text-foreground">{item.description}</span>
+                    <span className="text-xs text-white/40 shrink-0">{item.code} -</span>
+                    <span className="text-xs text-white">{item.description}</span>
                   </div>
                 </td>
                 {activeCols.map((c) => (
@@ -1793,9 +2150,9 @@ export default function FinancialsPage() {
               </tr>
             ))}
             {open && (
-              <tr className="border-b border-border bg-secondary/25">
-                <td className="sticky left-0 z-10 bg-secondary/25 py-2 px-4">
-                  <span className="text-xs font-semibold text-muted-foreground pl-7">Subtotal {div.code} - {div.name}</span>
+              <tr className="border-b border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.025)]">
+                <td className="sticky left-0 z-10 bg-[rgba(255,255,255,0.025)] py-2 px-4">
+                  <span className="text-xs font-semibold text-white/40 pl-7">Subtotal {div.code} - {div.name}</span>
                 </td>
                 {activeCols.map((c) => (
                   <td key={c.key} className="py-2 px-4 text-right text-xs">
@@ -1814,12 +2171,12 @@ export default function FinancialsPage() {
   const CostCodeBody = () => (
     <>
       {flatItems.map((item) => (
-        <tr key={item.id || `${item.divCode}-${item.code}`} className="border-b border-border/30 hover:bg-secondary/20 transition-colors group">
-          <td className="sticky left-0 z-10 bg-card group-hover:bg-secondary/20 transition-colors py-2.5 px-4">
+        <tr key={item.id || `${item.divCode}-${item.code}`} className="border-b border-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.02)] transition-colors group">
+          <td className="sticky left-0 z-10 bg-[rgba(255,255,255,0.02)] group-hover:bg-[rgba(255,255,255,0.02)] transition-colors py-2.5 px-4">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-blue-400 shrink-0 w-14">{item.code}</span>
-              <span className="text-xs text-foreground">{item.description}</span>
-              <span className="text-[10px] text-muted-foreground/60 ml-1">{item.divCode} · {item.divName}</span>
+              <span className="text-xs text-white">{item.description}</span>
+              <span className="text-[10px] text-white/35 ml-1">{item.divCode} · {item.divName}</span>
             </div>
           </td>
           {activeCols.map((c) => (
@@ -1838,15 +2195,15 @@ export default function FinancialsPage() {
         const tot  = sumDivisions(divs);
         const pct  = tot.revisedBudget > 0 ? ((tot.committedCosts / tot.revisedBudget) * 100).toFixed(1) : "0.0";
         return (
-          <tr key={proj.id} className="border-b border-border/40 hover:bg-secondary/20 transition-colors cursor-pointer" onClick={() => setSelectedPid(proj.id)}>
-            <td className="sticky left-0 z-10 bg-card hover:bg-secondary/20 transition-colors py-3 px-4">
+          <tr key={proj.id} className="border-b border-[rgba(255,255,255,0.035)] hover:bg-[rgba(255,255,255,0.02)] transition-colors cursor-pointer" onClick={() => setSelectedPid(proj.id)}>
+            <td className="sticky left-0 z-10 bg-[rgba(255,255,255,0.02)] hover:bg-[rgba(255,255,255,0.02)] transition-colors py-3 px-4">
               <div className="flex items-center gap-2">
                 <div className="w-6 h-6 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
                   <FolderOpen className="w-3.5 h-3.5 text-blue-400" />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-foreground">{proj.name}</p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-sm font-semibold text-white">{proj.name}</p>
+                  <p className="text-xs text-white/40">
                     {pct}% committed
                     {!proj.hasRealItems && <span className="ml-1 text-amber-400">(estimated)</span>}
                     {" · click to drill in"}
@@ -1894,37 +2251,64 @@ export default function FinancialsPage() {
             onSuccess={handleDataChanged}
           />
         )}
+        {confirmDeleteItem && (
+          <DeleteItemModal
+            item={confirmDeleteItem}
+            deleting={deletingItemId === confirmDeleteItem.id}
+            onClose={() => setConfirmDeleteItem(null)}
+            onConfirm={handleDeleteItem}
+          />
+        )}
+        {showDeleteAll && selectedProject && (
+          <DeleteAllModal
+            projectName={selectedProject.name}
+            itemCount={realItemsForSelected.length}
+            itemTotal={realItemsForSelected.reduce((s, i) => s + i.originalBudget, 0)}
+            deleting={deletingAll}
+            onClose={() => setShowDeleteAll(false)}
+            onConfirm={handleDeleteAll}
+          />
+        )}
+        {showDeleteAllHistory && selectedProject && (
+          <DeleteAllHistoryModal
+            projectName={selectedProject.name}
+            entryCount={historyForSelected.length}
+            deleting={deletingAllHistory}
+            onClose={() => setShowDeleteAllHistory(false)}
+            onConfirm={handleDeleteAllHistory}
+          />
+        )}
       </AnimatePresence>
 
       <div className="space-y-5 pt-5">
         {/* Header */}
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-4xl font-bold text-foreground">Financial Budget</h1>
-            <p className="text-muted-foreground text-sm mt-1">
+            <h1 className="text-4xl font-bold text-white tracking-tight">Financial Budget</h1>
+            <p className="text-white/35 text-[13px] mt-1">
               CSI division breakdown · budget vs committed vs direct costs
-              {selectedProject && <span className="ml-2 text-blue-400 font-medium">— {selectedProject.name}</span>}
+              {selectedProject && <span className="ml-2 text-cyan-400 font-medium">— {selectedProject.name}</span>}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {selectedPid !== "all" && (
-              <Button variant="outline" size="sm" onClick={() => setSelectedPid("all")} className="border-border text-xs">
-                ← All Projects
-              </Button>
-            )}
-            <Button variant="outline" size="sm" onClick={fetchData} className="border-border">
+            <Button style={glassButtonStyle} variant="outline" size="sm" onClick={fetchData} className="border-[rgba(255,255,255,0.07)]">
               <RefreshCw className="w-4 h-4" />
             </Button>
-            <Button variant="outline" size="sm" className="border-border" onClick={() => setShowSync(true)}>
+            <select value={selectedPid} onChange={(e) => setSelectedPid(e.target.value)}
+              className="bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:ring-1 focus:ring-blue-500 max-w-45 h-9">
+              <option value="all">All Projects</option>
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <Button style={glassButtonStyle} variant="outline" size="sm" className="border-[rgba(255,255,255,0.07)]" onClick={() => setShowSync(true)}>
               <Link2 className="w-4 h-4 mr-2" />Sync Modules
             </Button>
-            <Button variant="outline" size="sm" className="border-border" onClick={() => setShowValidate(true)}>
+            <Button style={glassButtonStyle} variant="outline" size="sm" className="border-[rgba(255,255,255,0.07)]" onClick={() => setShowValidate(true)}>
               <ShieldCheck className="w-4 h-4 mr-2 text-cyan-400" />Validate File
             </Button>
-            <Button className="gradient-blue text-white border-0" size="sm" onClick={() => setShowImport(true)}>
+            <Button style={gradientButtonStyle} className="gradient-blue text-white border-0" size="sm" onClick={() => setShowImport(true)}>
               <Download className="w-4 h-4 mr-2" />Import
             </Button>
-            <Button className="gradient-blue text-white border-0" onClick={handleExport}>
+            <Button style={gradientButtonStyle} className="gradient-blue text-white border-0" onClick={handleExport}>
               <Upload className="w-4 h-4 mr-2" />Export CSV
             </Button>
           </div>
@@ -1937,7 +2321,7 @@ export default function FinancialsPage() {
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
             <span>No imported budget data — showing CSI-proportional estimates based on project budgets.</span>
             <button onClick={() => setShowImport(true)} className="underline hover:text-amber-300">Import a file</button>
-            <span className="text-muted-foreground">·</span>
+            <span className="text-white/40">·</span>
             <button onClick={() => setShowSync(true)} className="underline hover:text-amber-300">or sync from Cost Codes</button>
           </motion.div>
         )}
@@ -1968,18 +2352,26 @@ export default function FinancialsPage() {
         {/* KPI Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {kpis.map((kpi, i) => (
-            <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }} whileHover={{ y: -2 }}
-              className={`rounded-2xl border p-5 ${kpi.color}`}>
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center">
-                  <kpi.icon className={`w-4 h-4 ${kpi.iconColor}`} />
+            <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }} whileHover={{ y: -4, scale: 1.02 }}
+              className="glass-card p-5 group relative overflow-hidden" style={{ borderColor: kpi.accent.border }}>
+              <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                style={{ background: `radial-gradient(ellipse at top left, ${kpi.accent.bg}, transparent 70%)` }} />
+              <div className="relative flex items-center gap-2 mb-2">
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center"
+                  style={{ background: kpi.accent.bg, border: `1px solid ${kpi.accent.border}`, boxShadow: `0 0 16px ${kpi.accent.shadow}` }}>
+                  <kpi.icon className="w-4 h-4" style={{ color: kpi.accent.text }} />
                 </div>
-                <p className="text-sm text-muted-foreground">{kpi.label}</p>
+                <p className="text-[13px] text-white/40">{kpi.label}</p>
               </div>
-              <p className="text-2xl font-bold text-foreground">
-                {loading ? <Loader2 className="w-5 h-5 animate-spin text-muted-foreground inline" /> : kpi.value}
+              <p className="relative text-2xl font-bold" style={{ color: kpi.accent.text }}>
+                {loading ? <Loader2 className="w-5 h-5 animate-spin text-white/40 inline" /> : kpi.value}
               </p>
-              <p className="text-xs text-muted-foreground mt-1">{kpi.sub}</p>
+              <p className="relative text-[11px] text-white/35 mt-1">{kpi.sub}</p>
+              {kpi.trendData.length >= 2 && (
+                <div className="relative -mx-1 mt-2 opacity-70">
+                  <Sparkline data={kpi.trendData} color={kpi.accent.text} type={kpi.trendType} labels={kpi.trendLabels} valueFormatter={kpi.trendFmt} />
+                </div>
+              )}
             </motion.div>
           ))}
         </div>
@@ -1991,15 +2383,15 @@ export default function FinancialsPage() {
         <ConnectedModulesPanel />
 
         {/* Main card */}
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-card border border-border rounded-2xl overflow-hidden">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.07)] rounded-2xl overflow-hidden">
           {/* Budget / Change History tabs */}
-          <div className="flex items-center border-b border-border px-4 gap-1">
+          <div className="flex items-center border-b border-[rgba(255,255,255,0.07)] px-4 gap-1">
             {([
               { id: "budget",  label: "Budget",         Icon: FileSpreadsheet },
               { id: "history", label: "Change History", Icon: History },
             ] as { id: "budget"|"history"; label: string; Icon: React.ComponentType<{ className?: string }> }[]).map(({ id, label, Icon }) => (
               <button key={id} onClick={() => setActiveTab(id)}
-                className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === id ? "border-blue-500 text-blue-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+                className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === id ? "border-cyan-500 text-cyan-400" : "border-transparent text-white/40 hover:text-white"}`}>
                 <Icon className="w-3.5 h-3.5" />{label}
               </button>
             ))}
@@ -2008,40 +2400,31 @@ export default function FinancialsPage() {
           {/* ── BUDGET TAB ── */}
           {activeTab === "budget" && (
             <>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-border bg-secondary/20">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)]">
                 <label className="flex items-center gap-1.5 text-xs">
-                  <span className="text-muted-foreground">Project</span>
-                  <select value={selectedPid} onChange={(e) => setSelectedPid(e.target.value)}
-                    className="bg-secondary border border-border rounded-lg px-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-blue-500 max-w-45">
-                    <option value="all">All Projects</option>
-                    {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                </label>
-                <div className="w-px h-4 bg-border" />
-                <label className="flex items-center gap-1.5 text-xs">
-                  <span className="text-muted-foreground">View</span>
+                  <span className="text-white/40">View</span>
                   <select value={view} onChange={(e) => setView(e.target.value as ViewMode)}
-                    className="bg-secondary border border-border rounded-lg px-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-blue-500">
+                    className="bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:ring-1 focus:ring-blue-500">
                     <option value="standard">All Columns</option>
                     <option value="committed">Committed Costs</option>
                     <option value="direct">Direct Costs Only</option>
                   </select>
                 </label>
-                <div className="w-px h-4 bg-border" />
+                <div className="w-px h-4 bg-[rgba(255,255,255,0.08)]" />
                 <label className="flex items-center gap-1.5 text-xs">
-                  <span className="text-muted-foreground">Snapshot</span>
+                  <span className="text-white/40">Snapshot</span>
                   <select value={snapshot} onChange={(e) => setSnapshot(e.target.value as SnapshotMode)}
-                    className="bg-secondary border border-border rounded-lg px-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-blue-500">
+                    className="bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:ring-1 focus:ring-blue-500">
                     <option value="current">Current</option>
                     <option value="original">Original (no COs)</option>
                     <option value="last-month">Last Month</option>
                   </select>
                 </label>
-                <div className="w-px h-4 bg-border" />
+                <div className="w-px h-4 bg-[rgba(255,255,255,0.08)]" />
                 <label className="flex items-center gap-1.5 text-xs">
-                  <span className="text-muted-foreground">Group By</span>
+                  <span className="text-white/40">Group By</span>
                   <select value={group} onChange={(e) => setGroup(e.target.value as GroupMode)}
-                    className="bg-secondary border border-border rounded-lg px-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-blue-500">
+                    className="bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:ring-1 focus:ring-blue-500">
                     <option value="division">Division</option>
                     <option value="cost-code">Cost Code (Flat List)</option>
                     <option value="project">Project</option>
@@ -2059,18 +2442,29 @@ export default function FinancialsPage() {
                 >
                   <Plus className="w-3.5 h-3.5" />Add Item
                 </button>
-                <div className="flex items-center gap-1.5 bg-secondary border border-border rounded-lg px-2 py-1">
-                  <Filter className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <button
+                  onClick={() => {
+                    if (selectedPid === "all") { toast.error("Select a specific project first"); return; }
+                    if (realItemsForSelected.length === 0) { toast.error("No real line items to delete for this project — it's showing the CSI estimate"); return; }
+                    setShowDeleteAll(true);
+                  }}
+                  title="Delete all line items for this project"
+                  className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />Delete All
+                </button>
+                <div className="flex items-center gap-1.5 bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-lg px-2 py-1">
+                  <Filter className="w-3.5 h-3.5 text-white/40 shrink-0" />
                   <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Add Filter"
-                    className="text-xs bg-transparent outline-none text-foreground placeholder:text-muted-foreground w-24" />
-                  {search && <button onClick={() => setSearch("")} className="text-muted-foreground hover:text-foreground leading-none">×</button>}
+                    className="text-xs bg-transparent outline-none text-white placeholder:text-white/40 w-24" />
+                  {search && <button onClick={() => setSearch("")} className="text-white/40 hover:text-white leading-none">×</button>}
                 </div>
                 {group === "division" && (
                   <>
-                    <div className="w-px h-4 bg-border" />
+                    <div className="w-px h-4 bg-[rgba(255,255,255,0.08)]" />
                     <div className="flex items-center gap-2 text-xs">
                       <button onClick={expandAll}   className="text-blue-400 hover:text-blue-300 transition-colors">Expand All</button>
-                      <span className="text-muted-foreground">|</span>
+                      <span className="text-white/40">|</span>
                       <button onClick={collapseAll} className="text-blue-400 hover:text-blue-300 transition-colors">Collapse All</button>
                     </div>
                   </>
@@ -2080,9 +2474,9 @@ export default function FinancialsPage() {
               {loading ? (
                 <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-blue-400" /></div>
               ) : usingFallback ? (
-                <div className="flex flex-col items-center justify-center h-64 gap-4 text-muted-foreground px-6">
+                <div className="flex flex-col items-center justify-center h-64 gap-4 text-white/40 px-6">
                   <PlusCircle className="w-10 h-10 opacity-20" />
-                  <p className="text-sm font-medium text-foreground/60">No budget line items yet</p>
+                  <p className="text-sm font-medium text-white/60">No budget line items yet</p>
                   <p className="text-xs text-center max-w-sm">
                     Budget line items live in the <strong>financial_budget_items</strong> table.
                     Add items manually, import a file, or sync from your Construction cost codes.
@@ -2091,7 +2485,7 @@ export default function FinancialsPage() {
                     <button onClick={openAddItem} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors">
                       <Plus className="w-3.5 h-3.5" />Add Line Item
                     </button>
-                    <button onClick={() => setShowImport(true)} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-secondary border border-border hover:bg-secondary/80 transition-colors text-foreground">
+                    <button onClick={() => setShowImport(true)} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] hover:bg-[rgba(255,255,255,0.08)] transition-colors text-white">
                       <Download className="w-3.5 h-3.5" />Import File
                     </button>
                     <button onClick={() => setShowSync(true)} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-teal-500/10 text-teal-400 border border-teal-500/20 hover:bg-teal-500/20 transition-colors">
@@ -2118,37 +2512,51 @@ export default function FinancialsPage() {
           {/* ── CHANGE HISTORY TAB ── */}
           {activeTab === "history" && (
             <div className="p-5 space-y-3">
+              {!loading && historyForSelected.length > 0 && (
+                <div className="flex justify-end mb-1">
+                  <button
+                    onClick={() => {
+                      if (selectedPid === "all") { toast.error("Select a specific project first"); return; }
+                      setShowDeleteAllHistory(true);
+                    }}
+                    title="Delete all change history entries for this project"
+                    className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />Delete All
+                  </button>
+                </div>
+              )}
               {loading ? (
                 <div className="flex items-center justify-center h-32">
                   <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
                 </div>
-              ) : history.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-32 gap-2 text-muted-foreground">
+              ) : historyForSelected.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-32 gap-2 text-white/40">
                   <History className="w-8 h-8 opacity-30" />
                   <p className="text-sm">No change history yet — import a budget file to begin tracking</p>
                 </div>
               ) : (
-                history.map((entry, i) => (
+                historyForSelected.map((entry, i) => (
                   <motion.div key={entry.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}
-                    className="flex items-start gap-4 p-4 rounded-xl bg-secondary/30 border border-border/50 hover:bg-secondary/50 transition-colors">
+                    className="flex items-start gap-4 p-4 rounded-xl bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.045)] hover:bg-[rgba(255,255,255,0.05)] transition-colors">
                     <div className="w-9 h-9 rounded-xl bg-blue-500/10 flex items-center justify-center shrink-0">
                       <ReceiptText className="w-4 h-4 text-blue-400" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <span className="text-sm font-semibold text-foreground">{entry.field}</span>
+                        <span className="text-sm font-semibold text-white">{entry.field}</span>
                         <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">{entry.division}</span>
                       </div>
-                      <p className="text-xs text-muted-foreground">{entry.reason}</p>
+                      <p className="text-xs text-white/40">{entry.reason}</p>
                     </div>
                     <div className="text-right shrink-0 space-y-1">
                       <p className={`text-sm font-semibold ${entry.delta >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                         {entry.delta >= 0 ? "+" : ""}{fmtCurrency(entry.delta)}
                       </p>
-                      <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+                      <div className="flex items-center justify-end gap-1 text-xs text-white/40">
                         <Clock className="w-3 h-3" /><span>{entry.date}</span>
                       </div>
-                      <p className="text-xs text-muted-foreground">{entry.user_name}</p>
+                      <p className="text-xs text-white/40">{entry.user_name}</p>
                     </div>
                   </motion.div>
                 ))

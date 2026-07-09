@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 logger = logging.getLogger("civilai.projects")
+from app.services.cache_service import cached_response
 from app.services.db_service import (
     get_projects,
     get_project_by_id,
@@ -75,6 +76,7 @@ class TaskCreate(BaseModel):
     planned_end: Optional[str] = None
     delay_days: Optional[int] = 0
     project_id: Optional[str] = None
+    budget: Optional[float] = 0
 
 class TaskUpdate(BaseModel):
     actual_progress: Optional[int] = None
@@ -83,6 +85,7 @@ class TaskUpdate(BaseModel):
     delay_days: Optional[int] = None
     phase: Optional[str] = None
     priority: Optional[str] = None
+    budget: Optional[float] = None
 
 @router.get("/")
 def list_projects():
@@ -117,6 +120,7 @@ def create_project(body: ProjectCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/kpis")
+@cached_response
 def get_dashboard_kpis():
     try:
         projects_res = supabase.table("projects").select("budget").execute()
@@ -138,10 +142,47 @@ def get_dashboard_kpis():
         low_c = incident_count - high - med
         safety_score = round(max(0, 100 - high * 10 - med * 5 - low_c * 2))
 
+        costs_res = supabase.table("cost_entries").select("amount").execute()
+        spent_to_date = sum(float(c.get("amount", 0)) for c in (costs_res.data or []))
+
+        # Committed = obligated but not yet paid (pending/overdue). Must match the same
+        # filter used by db_service.get_projects(), /financials/live-actuals, and
+        # /accounting/dashboard, or "committed spend" disagrees across pages.
+        try:
+            invoices_res = supabase.table("invoices").select("amount,status").execute()
+            committed_amount = sum(
+                float(inv.get("amount", 0)) for inv in (invoices_res.data or [])
+                if inv.get("status") in ("pending", "overdue")
+            )
+        except Exception:
+            committed_amount = 0.0
+
+        # Record today's values so /charts/kpi-trends can plot a real history
+        # instead of reconstructing one from unrelated row timestamps. Upserted
+        # on snapshot_date, so repeated reads the same day just keep it current —
+        # only the day boundary freezes a value into history. Never let this
+        # break the KPI response itself.
+        try:
+            today = datetime.now().date().isoformat()
+            supabase.table("kpi_daily_snapshots").upsert({
+                "snapshot_date": today,
+                "total_budget": total_budget,
+                "spent_to_date": spent_to_date,
+                "committed_amount": committed_amount,
+                "avg_progress": avg_progress,
+                "active_workers": active_workers,
+                "safety_score": safety_score,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }, on_conflict="snapshot_date").execute()
+        except Exception:
+            logger.warning("Failed to record KPI snapshot", exc_info=True)
+
         return {
             "status": "success",
             "kpis": {
                 "total_budget": total_budget,
+                "spent_to_date": spent_to_date,
+                "committed_amount": committed_amount,
                 "avg_progress": avg_progress,
                 "active_workers": active_workers,
                 "safety_score": safety_score,
@@ -152,11 +193,20 @@ def get_dashboard_kpis():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/charts/progress")
-def get_progress_chart(start_date: Optional[str] = None, end_date: Optional[str] = None, months: Optional[int] = None):
+@cached_response
+def get_progress_chart(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    months: Optional[int] = None,
+    project_id: Optional[str] = None,
+):
     try:
-        tasks_res = supabase.table("schedule_tasks").select(
+        query = supabase.table("schedule_tasks").select(
             "planned_progress,actual_progress,planned_start"
-        ).execute()
+        )
+        if project_id and project_id != "all":
+            query = query.eq("project_id", project_id)
+        tasks_res = query.execute()
         tasks = tasks_res.data or []
 
         # Key by (year, month) to avoid cross-year collisions
@@ -216,10 +266,19 @@ def get_progress_chart(start_date: Optional[str] = None, end_date: Optional[str]
 
 
 @router.get("/charts/kpi-trends")
+@cached_response
 def get_kpi_trends():
-    """Short (6-month) trend series for the Active Workers and Safety Score KPIs,
-    used to render dashboard sparklines. Budget/Schedule sparklines are derived
-    client-side from the existing costs/progress chart series."""
+    """Short (6-month) trend series for the Active Workers, Safety Score and
+    Committed Spend KPIs, used to render dashboard sparklines. Budget/Schedule
+    sparklines are derived client-side from the existing costs/progress chart series.
+
+    Sourced from kpi_daily_snapshots — one row per calendar day, upserted by
+    GET /kpis every time it's read — rather than reconstructed from unrelated
+    row timestamps (workforce.created_at, invoice dates, etc). A month with no
+    snapshot simply isn't emitted rather than being guessed at; once at least
+    one snapshot exists, its value is carried forward (last-observation-
+    carried-forward) into any later month that has no newer snapshot, since
+    these are point-in-time levels, not per-month flows."""
     try:
         SPARK_MONTHS = 6
         now = datetime.now()
@@ -228,49 +287,110 @@ def get_kpi_trends():
             total_months = now.year * 12 + (now.month - 1) - i
             months_list.append((total_months // 12, (total_months % 12) + 1))
 
-        workforce_res = supabase.table("workforce").select("created_at").execute()
-        worker_dates = []
-        for w in (workforce_res.data or []):
-            c = w.get("created_at")
-            if c:
-                try:
-                    worker_dates.append(datetime.fromisoformat(str(c).replace("Z", "+00:00")).replace(tzinfo=None))
-                except Exception:
-                    pass
+        earliest = datetime(months_list[0][0], months_list[0][1], 1).date().isoformat()
+        try:
+            snap_res = supabase.table("kpi_daily_snapshots").select(
+                "snapshot_date,active_workers,safety_score,committed_amount"
+            ).gte("snapshot_date", earliest).order("snapshot_date").execute()
+            snapshots = snap_res.data or []
+        except Exception:
+            snapshots = []
 
-        incidents_res = supabase.table("safety_incidents").select("created_at,severity").execute()
-        month_incidents: dict = defaultdict(list)
-        for inc in (incidents_res.data or []):
-            c = inc.get("created_at")
-            if c:
-                try:
-                    dt = datetime.fromisoformat(str(c).replace("Z", "+00:00"))
-                    month_incidents[(dt.year, dt.month)].append(str(inc.get("severity") or "").lower())
-                except Exception:
-                    pass
+        # Keep the *last* snapshot seen in each (year, month) — rows arrive
+        # ordered ascending by date, so a later row simply overwrites an
+        # earlier one for the same month.
+        by_month: dict = {}
+        for s in snapshots:
+            d = s.get("snapshot_date")
+            if not d:
+                continue
+            try:
+                dt = datetime.strptime(str(d)[:10], "%Y-%m-%d")
+            except Exception:
+                continue
+            by_month[(dt.year, dt.month)] = s
 
-        workers_trend, safety_trend = [], []
+        workers_trend, safety_trend, committed_trend = [], [], []
+        have_data = False
+        last_workers = last_safety = last_committed = 0.0
         for (y, m) in months_list:
-            month_end = (datetime(y, m, 28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
-            cumulative = sum(1 for d in worker_dates if d <= month_end)
-            workers_trend.append({"month": MONTH_NAMES[m - 1], "value": cumulative})
+            snap = by_month.get((y, m))
+            if snap:
+                have_data = True
+                last_workers = snap.get("active_workers") or 0
+                last_safety = snap.get("safety_score") or 0
+                last_committed = float(snap.get("committed_amount") or 0)
+            if not have_data:
+                continue  # no snapshot yet for this or any earlier month — omit, don't guess
+            workers_trend.append({"month": MONTH_NAMES[m - 1], "value": last_workers})
+            safety_trend.append({"month": MONTH_NAMES[m - 1], "value": last_safety})
+            committed_trend.append({"month": MONTH_NAMES[m - 1], "value": round(last_committed, 2)})
 
-            sevs = month_incidents.get((y, m), [])
-            high = sum(1 for s in sevs if s == "high")
-            med = sum(1 for s in sevs if s == "medium")
-            low_c = len(sevs) - high - med
-            score = round(max(0, 100 - high * 10 - med * 5 - low_c * 2))
-            safety_trend.append({"month": MONTH_NAMES[m - 1], "value": score})
-
-        return {"status": "success", "workers": workers_trend, "safety": safety_trend}
+        return {
+            "status": "success",
+            "workers": workers_trend,
+            "safety": safety_trend,
+            "committed": committed_trend,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/charts/costs")
-def get_cost_chart():
+_MAX_RANGE_MONTHS = 240  # 20y sanity cap
+
+
+def _months_back(n: int, now_dt: datetime, include_current: bool) -> list[tuple[int, int]]:
+    base = now_dt.year * 12 + (now_dt.month - 1)
+    start = base - n + 1 if include_current else base - n
+    end = base if include_current else base - 1
+    return [(total // 12, (total % 12) + 1) for total in range(start, end + 1)]
+
+
+def _months_forward(n: int, now_dt: datetime) -> list[tuple[int, int]]:
+    base = now_dt.year * 12 + (now_dt.month - 1)
+    return [(total // 12, (total % 12) + 1) for total in range(base + 1, base + n + 1)]
+
+
+def _month_span(start_date: str, end_date: str) -> list[tuple[int, int]] | None:
+    """Inclusive list of (year, month) between two YYYY-MM-DD dates, or None if unparseable."""
     try:
-        projects_res = supabase.table("projects").select("budget,start_date,end_date").execute()
+        sd = datetime.strptime(str(start_date)[:10], "%Y-%m-%d")
+        ed = datetime.strptime(str(end_date)[:10], "%Y-%m-%d")
+    except Exception:
+        return None
+    if sd > ed:
+        return None
+    keys = []
+    y, m = sd.year, sd.month
+    while (y, m) <= (ed.year, ed.month):
+        keys.append((y, m))
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+        if len(keys) > _MAX_RANGE_MONTHS:
+            break
+    return keys
+
+
+def _month_label(y: int, m: int, multi_year: bool) -> str:
+    return f"{MONTH_NAMES[m - 1]} {str(y)[2:]}" if multi_year else MONTH_NAMES[m - 1]
+
+
+@router.get("/charts/costs")
+@cached_response
+def get_cost_chart(
+    months: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    project_id: Optional[str] = None,
+):
+    try:
+        pid = project_id if project_id and project_id != "all" else None
+
+        projects_query = supabase.table("projects").select("budget,start_date,end_date")
+        if pid:
+            projects_query = projects_query.eq("id", pid)
+        projects_res = projects_query.execute()
         projects_data = projects_res.data or []
         total_budget = sum(float(p.get("budget", 0)) for p in projects_data)
 
@@ -289,7 +409,10 @@ def get_cost_chart():
         monthly_budget_k = round(total_budget / avg_duration / 1000, 1) if total_budget else 0
 
         # Key by (year, month) to avoid cross-year collisions
-        cost_res = supabase.table("cost_entries").select("amount,created_at").execute()
+        cost_query = supabase.table("cost_entries").select("amount,created_at")
+        if pid:
+            cost_query = cost_query.eq("project_id", pid)
+        cost_res = cost_query.execute()
         month_actuals: dict = defaultdict(float)
         for c in (cost_res.data or []):
             created = c.get("created_at")
@@ -301,16 +424,20 @@ def get_cost_chart():
                     pass
 
         now_dt = datetime.now()
-        result = []
-        for i in range(CHART_LOOKBACK_MONTHS, 0, -1):
-            total_months = now_dt.year * 12 + (now_dt.month - 1) - i
-            y = total_months // 12
-            m = (total_months % 12) + 1
-            result.append({
-                "month": MONTH_NAMES[m - 1],
+        month_keys = _month_span(start_date, end_date) if (start_date and end_date) else None
+        if month_keys is None:
+            n = max(1, min(months or CHART_LOOKBACK_MONTHS, _MAX_RANGE_MONTHS))
+            month_keys = _months_back(n, now_dt, include_current=False)
+
+        multi_year = len(month_keys) > 12
+        result = [
+            {
+                "month": _month_label(y, m, multi_year),
                 "budget": monthly_budget_k,
                 "actual": round(month_actuals.get((y, m), 0), 1),
-            })
+            }
+            for (y, m) in month_keys
+        ]
 
         return {"status": "success", "data": result}
     except Exception as e:
@@ -318,7 +445,11 @@ def get_cost_chart():
 
 
 @router.get("/charts/cashflow")
-def get_cashflow_chart():
+def get_cashflow_chart(
+    months: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
     try:
         projects_res = supabase.table("projects").select("budget,start_date,end_date").execute()
         projects_data = projects_res.data or []
@@ -335,8 +466,8 @@ def get_cashflow_chart():
                 try:
                     s = datetime.strptime(str(start)[:10], "%Y-%m-%d")
                     e = datetime.strptime(str(end)[:10], "%Y-%m-%d")
-                    months = max(1, (e.year - s.year) * 12 + e.month - s.month)
-                    total_months += months
+                    proj_duration_months = max(1, (e.year - s.year) * 12 + e.month - s.month)
+                    total_months += proj_duration_months
                     count += 1
                 except Exception:
                     pass
@@ -363,16 +494,20 @@ def get_cashflow_chart():
         avg_outflow_k = (sum(month_outflow[k] for k in recent) / len(recent)
                          if recent else monthly_inflow_k * BURN_RATE_MULTIPLIER)
 
+        custom_keys = _month_span(start_date, end_date) if (start_date and end_date) else None
+        if custom_keys is not None:
+            month_keys = custom_keys
+        else:
+            n = max(1, min(months or CHART_LOOKBACK_MONTHS, _MAX_RANGE_MONTHS))
+            month_keys = _months_back(n, now, include_current=True) + _months_forward(CHART_FORECAST_MONTHS, now)
+
+        multi_year = len(month_keys) > 12
         result = []
-        past = CHART_LOOKBACK_MONTHS - 1
-        for offset in range(-past, CHART_FORECAST_MONTHS + 1):
-            total = now.year * 12 + (now.month - 1) + offset
-            y = total // 12
-            m = (total % 12) + 1
+        for (y, m) in month_keys:
             is_future = (y, m) > (now.year, now.month)
             outflow = round(avg_outflow_k, 1) if is_future else round(month_outflow.get((y, m), 0), 1)
             result.append({
-                "month": MONTH_NAMES[m - 1],
+                "month": _month_label(y, m, multi_year),
                 "inflow": monthly_inflow_k,
                 "outflow": outflow,
             })
@@ -521,6 +656,7 @@ def add_task(project_id: str, task: TaskCreate):
             "planned_start": task.planned_start,
             "planned_end": task.planned_end,
             "delay_days": task.delay_days,
+            "budget": task.budget or 0,
         }
         response = supabase.table("schedule_tasks").insert(data).execute()
         return {"status": "success", "task": response.data[0] if response.data else data}

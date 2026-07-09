@@ -1,5 +1,7 @@
 import logging
 
+from app.services.trained_classifiers import TrainedClassifier
+
 logger = logging.getLogger(__name__)
 
 
@@ -11,7 +13,10 @@ def _risk_level(probability: float) -> str:
     return "Low"
 
 
-async def predict_cost_overrun(data: dict) -> dict:
+def _heuristic_cost_overrun_fallback(data: dict) -> dict:
+    """Rule-based fallback — used only when the trained model can't be loaded.
+    Never returned as if it were a real prediction: callers get model_version
+    set to 'heuristic-fallback' so the distinction is visible end-to-end."""
     score = 30.0
     score += min(data.get("change_orders", 0) * 3.5, 25)
     score += min(data.get("material_price_increase", 0) * 1.5, 20)
@@ -29,10 +34,13 @@ async def predict_cost_overrun(data: dict) -> dict:
         "will_overrun": will_overrun,
         "estimated_overrun_pct": overrun_pct,
         "risk_level": _risk_level(probability),
+        "model_version": "heuristic-fallback",
+        "trained_on": None,
+        "feature_importances": None,
     }
 
 
-async def predict_delay(data: dict) -> dict:
+def _heuristic_delay_fallback(data: dict) -> dict:
     score = 25.0
     score += min(data.get("weather_delays", 0) * 1.2, 20)
     score += data.get("labor_shortage", 0) * 15
@@ -44,12 +52,13 @@ async def predict_delay(data: dict) -> dict:
     probability = round(min(max(score, 5), 95), 1)
     return {
         "probability": probability,
-        "will_be_delayed": probability > 45,
-        "risk_level": _risk_level(probability),
+        "model_version": "heuristic-fallback",
+        "trained_on": None,
+        "feature_importances": None,
     }
 
 
-async def predict_safety_risk(data: dict) -> dict:
+def _heuristic_safety_risk_fallback(data: dict) -> dict:
     score = 20.0
     score += min(data.get("workers_involved", 0) * 2, 20)
     score += data.get("near_miss", 0) * 12
@@ -63,12 +72,13 @@ async def predict_safety_risk(data: dict) -> dict:
     probability = round(min(max(score, 10), 95), 1)
     return {
         "probability": probability,
-        "severe_risk": probability > 60,
-        "risk_level": _risk_level(probability),
+        "model_version": "heuristic-fallback",
+        "trained_on": None,
+        "feature_importances": None,
     }
 
 
-async def predict_turnover(data: dict) -> dict:
+def _heuristic_turnover_fallback(data: dict) -> dict:
     score = 25.0
     salary = data.get("salary", 80000)
     if salary < 60000:
@@ -87,12 +97,13 @@ async def predict_turnover(data: dict) -> dict:
     probability = round(min(max(score, 10), 95), 1)
     return {
         "probability": probability,
-        "will_leave": probability > 45,
-        "risk_level": _risk_level(probability),
+        "model_version": "heuristic-fallback",
+        "trained_on": None,
+        "feature_importances": None,
     }
 
 
-async def predict_equipment_failure(data: dict) -> dict:
+def _heuristic_equipment_failure_fallback(data: dict) -> dict:
     score = 15.0
     score += min(data.get("age_years", 0) * 3, 20)
     score += min(data.get("operating_hours", 0) / 200, 15)
@@ -102,9 +113,168 @@ async def predict_equipment_failure(data: dict) -> dict:
     probability = round(min(max(score, 5), 95), 1)
     return {
         "probability": probability,
-        "will_fail": probability > 50,
-        "risk_level": _risk_level(probability),
+        "model_version": "heuristic-fallback",
+        "trained_on": None,
+        "feature_importances": None,
     }
+
+
+_delay_classifier = TrainedClassifier(
+    model_file="delay_prediction_model.pkl",
+    encoder_files=["delay_prediction_encoder.pkl"],
+    report_key="delay_prediction",
+    model_version="xgboost-delay-v1",
+)
+_DELAY_FEATURES = [
+    "project_type_enc", "planned_duration_days", "weather_delays",
+    "labor_shortage", "material_delays", "design_changes", "subcontractor_issues",
+]
+
+_safety_classifier = TrainedClassifier(
+    model_file="safety_risk_model.pkl",
+    encoder_files=["safety_incident_encoder.pkl", "safety_zone_encoder.pkl"],
+    report_key="safety_risk",
+    model_version="random-forest-safety-risk-v1",
+)
+_SAFETY_FEATURES = [
+    "incident_type_enc", "zone_enc", "workers_involved",
+    "ppe_worn", "training_completed", "near_miss", "month",
+]
+
+_turnover_classifier = TrainedClassifier(
+    model_file="turnover_model.pkl",
+    encoder_files=["turnover_role_encoder.pkl"],
+    report_key="turnover",
+    model_version="xgboost-turnover-v1",
+)
+_TURNOVER_FEATURES = [
+    "role_enc", "experience_years", "salary", "performance_score",
+    "safety_violations", "training_hours", "overtime_hours", "tenure_months",
+]
+
+_equipment_classifier = TrainedClassifier(
+    model_file="equipment_failure_model.pkl",
+    encoder_files=["equipment_type_encoder.pkl"],
+    report_key="equipment_failure",
+    model_version="random-forest-equipment-failure-v1",
+)
+_EQUIPMENT_FEATURES = [
+    "equipment_type_enc", "age_years", "operating_hours",
+    "maintenance_count", "last_service_days_ago", "breakdowns",
+]
+
+
+async def predict_cost_overrun(data: dict) -> dict:
+    from app.services import cost_overrun_model
+    if cost_overrun_model.is_available():
+        try:
+            return cost_overrun_model.predict(data)
+        except Exception:
+            logger.exception("Trained cost-overrun model failed at inference time — using heuristic fallback")
+    return _heuristic_cost_overrun_fallback(data)
+
+
+async def predict_delay(data: dict) -> dict:
+    if _delay_classifier.is_available():
+        try:
+            result = _delay_classifier.predict(
+                categorical_values=[data.get("project_type", "Commercial")],
+                numeric_values=[
+                    data.get("planned_duration_days", 180),
+                    data.get("weather_delays", 0),
+                    data.get("labor_shortage", 0),
+                    data.get("material_delays", 0),
+                    data.get("design_changes", 0),
+                    data.get("subcontractor_issues", 0),
+                ],
+                feature_names=_DELAY_FEATURES,
+            )
+            result["will_be_delayed"] = result["probability"] > 45
+            result["risk_level"] = _risk_level(result["probability"])
+            return result
+        except Exception:
+            logger.exception("Trained delay model failed at inference time — using heuristic fallback")
+    result = _heuristic_delay_fallback(data)
+    result["will_be_delayed"] = result["probability"] > 45
+    result["risk_level"] = _risk_level(result["probability"])
+    return result
+
+
+async def predict_safety_risk(data: dict) -> dict:
+    if _safety_classifier.is_available():
+        try:
+            result = _safety_classifier.predict(
+                categorical_values=[data.get("incident_type", ""), data.get("zone", "")],
+                numeric_values=[
+                    data.get("workers_involved", 0),
+                    data.get("ppe_worn", 0),
+                    data.get("training_completed", 0),
+                    data.get("near_miss", 0),
+                    data.get("month", 1),
+                ],
+                feature_names=_SAFETY_FEATURES,
+            )
+            result["severe_risk"] = result["probability"] > 60
+            result["risk_level"] = _risk_level(result["probability"])
+            return result
+        except Exception:
+            logger.exception("Trained safety-risk model failed at inference time — using heuristic fallback")
+    result = _heuristic_safety_risk_fallback(data)
+    result["severe_risk"] = result["probability"] > 60
+    result["risk_level"] = _risk_level(result["probability"])
+    return result
+
+
+async def predict_turnover(data: dict) -> dict:
+    if _turnover_classifier.is_available():
+        try:
+            result = _turnover_classifier.predict(
+                categorical_values=[data.get("role", "")],
+                numeric_values=[
+                    data.get("experience_years", 0),
+                    data.get("salary", 80000),
+                    data.get("performance_score", 3.0),
+                    data.get("safety_violations", 0),
+                    data.get("training_hours", 0),
+                    data.get("overtime_hours", 0),
+                    data.get("tenure_months", 0),
+                ],
+                feature_names=_TURNOVER_FEATURES,
+            )
+            result["will_leave"] = result["probability"] > 45
+            result["risk_level"] = _risk_level(result["probability"])
+            return result
+        except Exception:
+            logger.exception("Trained turnover model failed at inference time — using heuristic fallback")
+    result = _heuristic_turnover_fallback(data)
+    result["will_leave"] = result["probability"] > 45
+    result["risk_level"] = _risk_level(result["probability"])
+    return result
+
+
+async def predict_equipment_failure(data: dict) -> dict:
+    if _equipment_classifier.is_available():
+        try:
+            result = _equipment_classifier.predict(
+                categorical_values=[data.get("equipment_type", "")],
+                numeric_values=[
+                    data.get("age_years", 0),
+                    data.get("operating_hours", 0),
+                    data.get("maintenance_count", 0),
+                    data.get("last_service_days_ago", 0),
+                    data.get("breakdowns", 0),
+                ],
+                feature_names=_EQUIPMENT_FEATURES,
+            )
+            result["will_fail"] = result["probability"] > 50
+            result["risk_level"] = _risk_level(result["probability"])
+            return result
+        except Exception:
+            logger.exception("Trained equipment-failure model failed at inference time — using heuristic fallback")
+    result = _heuristic_equipment_failure_fallback(data)
+    result["will_fail"] = result["probability"] > 50
+    result["risk_level"] = _risk_level(result["probability"])
+    return result
 
 
 _supabase_client = None
@@ -117,25 +287,6 @@ def _get_supabase():
         from app.config import settings
         _supabase_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SECRET_KEY)
     return _supabase_client
-
-
-async def get_material_prices() -> list:
-    try:
-        sb = _get_supabase()
-        res = sb.table("material_prices").select(
-            "material,price,unit,change_pct,year"
-        ).order("year", desc=True).execute()
-        if res.data:
-            return res.data
-    except Exception:
-        logger.exception("get_material_prices: Supabase query failed, returning fallback")
-    return [
-        {"material": "Concrete", "price": 95.50,  "unit": "m³",  "change_pct": 3.2,  "year": 2025},
-        {"material": "Steel",    "price": 850.00,  "unit": "ton", "change_pct": -1.5, "year": 2025},
-        {"material": "Lumber",   "price": 0.65,    "unit": "bf",  "change_pct": 8.4,  "year": 2025},
-        {"material": "Copper",   "price": 9.80,    "unit": "kg",  "change_pct": 5.1,  "year": 2025},
-        {"material": "Asphalt",  "price": 75.00,   "unit": "ton", "change_pct": 2.8,  "year": 2025},
-    ]
 
 
 async def get_safety_stats(project_id: str | None = None) -> dict:
@@ -590,7 +741,10 @@ async def get_auto_cost_overrun(project_id: str | None = None) -> dict:
         sb = _get_supabase()
 
         # Average project duration in months
-        projects_query = sb.table("projects").select("start_date,end_date,project_type")
+        # Note: the projects table has no project_type column in this deployment's schema —
+        # selecting it 500s the whole prediction, so it isn't requested. Every prediction
+        # uses the "Commercial" default until a real project_type column/UI field exists.
+        projects_query = sb.table("projects").select("start_date,end_date")
         if project_id:
             projects_query = projects_query.eq("id", project_id)
         projects_res = projects_query.execute()
@@ -607,7 +761,7 @@ async def get_auto_cost_overrun(project_id: str | None = None) -> dict:
                 except Exception:
                     pass
         avg_duration = round(sum(durations) / max(len(durations), 1)) if durations else 12
-        project_type = (projects[0].get("project_type") if projects else None) or "Commercial"
+        project_type = "Commercial"
 
         # Active workforce (team size)
         workforce_query = sb.table("workforce").select("status,role")

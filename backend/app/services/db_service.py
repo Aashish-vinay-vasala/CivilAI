@@ -39,7 +39,12 @@ def get_projects():
 
         for inv in all_invs:
             pid = inv.get("project_id")
-            if inv.get("status") in ("pending", "approved", "received"):
+            # Committed = obligated but not yet paid (pending/overdue). "received" invoices
+            # are already paid, so they don't belong here — and "approved" never occurs
+            # (invoices.status only allows received/pending/overdue). Must match the same
+            # filter used by /financials/live-actuals and /accounting/dashboard, or the
+            # "Committed Costs" figure disagrees across pages for the same project.
+            if inv.get("status") in ("pending", "overdue"):
                 committed_by_proj.setdefault(pid, 0)
                 committed_by_proj[pid] += float(inv.get("amount", 0))
 

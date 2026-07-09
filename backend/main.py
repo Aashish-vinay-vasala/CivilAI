@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import sys
+from contextlib import asynccontextmanager
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -10,14 +12,53 @@ from app.config import settings
 from app.core.telemetry import setup_all
 from app.core.security import require_module_access
 from app.middleware.rate_limiter import RateLimiterMiddleware
-from app.api.v1.routes import copilot, chatbot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction, transcribe, email_notifications, preconstruction, financials, review, support, voice, agent, evaluation, accounting, notifications, tenders
+from app.api.v1.routes import copilot, chatbot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction, transcribe, email_notifications, preconstruction, financials, review, support, voice, agent, evaluation, accounting, notifications, tenders, material_prices
 
 setup_all()   # boot LangSmith tracing + OTel before the app object is created
+
+logger = logging.getLogger("civilai.main")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    scheduler = None
+    if settings.MATERIAL_PRICE_SYNC_ENABLED and settings.FRED_API_KEY:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from app.services.material_price_sync import sync_all_material_prices
+
+        async def _run_sync():
+            try:
+                result = await sync_all_material_prices()
+                logger.info("Material price sync completed: %s", result)
+            except Exception:
+                logger.exception("Scheduled material price sync failed")
+
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(
+            _run_sync,
+            "interval",
+            hours=settings.MATERIAL_PRICE_SYNC_INTERVAL_HOURS,
+            id="material_price_sync",
+        )
+        scheduler.start()
+        logger.info(
+            "Material price sync scheduler started (every %sh)",
+            settings.MATERIAL_PRICE_SYNC_INTERVAL_HOURS,
+        )
+    elif settings.MATERIAL_PRICE_SYNC_ENABLED and not settings.FRED_API_KEY:
+        logger.warning("MATERIAL_PRICE_SYNC_ENABLED is true but FRED_API_KEY is unset — sync will not run")
+
+    yield
+
+    if scheduler:
+        scheduler.shutdown(wait=False)
+
 
 app = FastAPI(
     title="CivilAI API",
     description="AI-Powered Construction Management Platform",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 _origins = settings.get_origins()
@@ -87,6 +128,13 @@ app.include_router(
     ml.router,
     prefix="/api/v1/ml",
     tags=["ML Predictions"],
+    dependencies=[Depends(require_module_access("ml"))],
+)
+
+app.include_router(
+    material_prices.router,
+    prefix="/api/v1/material-prices",
+    tags=["Material Prices"],
     dependencies=[Depends(require_module_access("ml"))],
 )
 

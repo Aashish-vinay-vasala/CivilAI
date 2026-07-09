@@ -10,6 +10,7 @@ interface CountUpProps {
   prefix?: string;
   suffix?: string;
   className?: string;
+  style?: React.CSSProperties;
 }
 
 export default function CountUp({
@@ -19,6 +20,7 @@ export default function CountUp({
   prefix = "",
   suffix = "",
   className = "",
+  style,
 }: CountUpProps) {
   const [value, setValue] = useState(0);
   const ref = useRef<HTMLSpanElement>(null);
@@ -41,7 +43,7 @@ export default function CountUp({
   }, [isInView, to, duration]);
 
   return (
-    <span ref={ref} className={className}>
+    <span ref={ref} className={className} style={style}>
       {prefix}{value.toFixed(decimals)}{suffix}
     </span>
   );

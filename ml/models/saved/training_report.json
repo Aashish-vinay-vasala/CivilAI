@@ -1,0 +1,40 @@
+{
+  "timestamp": "2026-07-09T05:41:02.299677+00:00",
+  "models": {
+    "cost_overrun": {
+      "accuracy": 0.85,
+      "f1_score": 0.85,
+      "rows": 1000,
+      "model_type": "XGBoost"
+    },
+    "delay_prediction": {
+      "accuracy": 0.875,
+      "f1_score": 0.8768,
+      "rows": 1000,
+      "model_type": "XGBoost"
+    },
+    "safety_risk": {
+      "accuracy": 0.8725,
+      "f1_score": 0.8496,
+      "rows": 2000,
+      "model_type": "Random Forest"
+    },
+    "turnover": {
+      "accuracy": 0.87,
+      "f1_score": 0.8785,
+      "rows": 1000,
+      "model_type": "XGBoost"
+    },
+    "equipment_failure": {
+      "accuracy": 0.85,
+      "f1_score": 0.8544,
+      "rows": 500,
+      "model_type": "Random Forest"
+    },
+    "cost_overrun_regression": {
+      "r2_score": 0.6644,
+      "rows": 1000,
+      "model_type": "XGBoost Regressor"
+    }
+  }
+}

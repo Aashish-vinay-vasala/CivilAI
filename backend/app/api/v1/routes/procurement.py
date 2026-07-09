@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
@@ -35,17 +36,23 @@ class DemandForecastRequest(BaseModel):
 
 class PurchaseOrderRecord(BaseModel):
     project_id: str
-    po_number: str
-    vendor: str
-    item: str = ""
+    supplier_name: str
+    material: str = ""
+    quantity: float = 0
+    unit_price: float = 0
     total_amount: float = 0
+    order_date: Optional[str] = None
+    delivery_date: Optional[str] = None
     status: str = "pending"
 
 class PurchaseOrderUpdate(BaseModel):
     status: Optional[str] = None
     total_amount: Optional[float] = None
-    vendor: Optional[str] = None
-    item: Optional[str] = None
+    supplier_name: Optional[str] = None
+    material: Optional[str] = None
+    quantity: Optional[float] = None
+    unit_price: Optional[float] = None
+    delivery_date: Optional[str] = None
 
 @router.post("/analyze")
 async def analyze_procurement_route(
@@ -118,11 +125,25 @@ async def demand_forecast_route(
 
 # ── Purchase order records (persisted, tracked against the purchase_orders table) ──
 
+@router.get("/purchase-orders")
+async def list_purchase_order_records(project_id: Optional[str] = None):
+    try:
+        query = supabase.table("purchase_orders").select("*").order("created_at", desc=True)
+        if project_id:
+            query = query.eq("project_id", project_id)
+        res = query.execute()
+        return {"status": "success", "purchase_orders": res.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/purchase-orders")
 async def create_purchase_order_record(body: PurchaseOrderRecord):
     try:
-        res = supabase.table("purchase_orders").insert(body.model_dump()).execute()
-        return {"status": "success", "purchase_order": res.data[0] if res.data else body.model_dump()}
+        data = body.model_dump(exclude_none=True)
+        data.setdefault("order_date", date.today().isoformat())
+        res = supabase.table("purchase_orders").insert(data).execute()
+        return {"status": "success", "purchase_order": res.data[0] if res.data else data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

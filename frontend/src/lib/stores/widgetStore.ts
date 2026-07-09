@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type WidgetId = "kpi-budget" | "kpi-schedule" | "kpi-workers" | "kpi-safety" | "chart-progress" | "chart-cost" | "alerts" | "modules" | "projects";
+export type WidgetId = "kpi-budget" | "kpi-committed" | "kpi-schedule" | "kpi-workers" | "kpi-safety" | "chart-progress" | "chart-cost" | "alerts" | "modules" | "projects";
 
 export interface Widget {
   id: WidgetId;
@@ -12,6 +12,7 @@ export interface Widget {
 
 const DEFAULT_WIDGETS: Widget[] = [
   { id: "kpi-budget",    title: "Total Budget",       visible: true, size: "sm" },
+  { id: "kpi-committed", title: "Committed Spend",    visible: true, size: "sm" },
   { id: "kpi-schedule",  title: "Schedule Progress",  visible: true, size: "sm" },
   { id: "kpi-workers",   title: "Active Workers",     visible: true, size: "sm" },
   { id: "kpi-safety",    title: "Safety Score",       visible: true, size: "sm" },
@@ -46,6 +47,17 @@ export const useWidgetStore = create<WidgetStore>()(
         })),
       reset: () => set({ widgets: DEFAULT_WIDGETS }),
     }),
-    { name: "civilai-widgets" }
+    {
+      name: "civilai-widgets",
+      // Appends any newly-introduced default widgets (e.g. a widget added in a later
+      // release) to a user's already-persisted layout instead of silently dropping them.
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<WidgetStore> | undefined;
+        if (!persisted?.widgets) return { ...currentState, ...persisted };
+        const knownIds = new Set(persisted.widgets.map((w) => w.id));
+        const missing = DEFAULT_WIDGETS.filter((w) => !knownIds.has(w.id));
+        return { ...currentState, ...persisted, widgets: [...persisted.widgets, ...missing] };
+      },
+    }
   )
 );

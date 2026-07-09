@@ -442,8 +442,8 @@ def get_evm_snapshots(project_id: str):
 @router.post("/evm-snapshots")
 def save_evm_snapshot(data: dict):
     try:
-        data["id"] = str(uuid.uuid4())
-        res = supabase.table("evm_snapshots").insert(data).execute()
+        data.setdefault("id", str(uuid.uuid4()))
+        res = supabase.table("evm_snapshots").upsert(data, on_conflict="project_id,snapshot_date").execute()
         return {"status": "success", "snapshot": res.data[0] if res.data else data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
