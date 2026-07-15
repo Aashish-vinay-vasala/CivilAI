@@ -167,6 +167,10 @@ body {
   background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
 }
 
+.gradient-cyan {
+  background: linear-gradient(135deg, #0e7490 0%, #00d4ff 100%);
+}
+
 .gradient-green {
   background: linear-gradient(135deg, #065f46 0%, #10b981 100%);
 }

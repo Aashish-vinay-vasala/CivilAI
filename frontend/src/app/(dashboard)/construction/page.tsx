@@ -8,7 +8,6 @@ import {
   Clock, Search, Edit2, Save, Trash2, Sparkles,
   DollarSign, BarChart3, Upload,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
@@ -16,17 +15,24 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
+import { ACCENT, AccentKey, glassInputClass, glassInputStyle, gradientButtonStyle, glassButtonStyle, pillStyle } from "@/lib/theme";
+import { CHART_TOOLTIP_STYLE } from "@/lib/constants";
 
-const tabs = [
-  { id: "punch", label: "Punch List", icon: ClipboardList, color: "text-red-400" },
-  { id: "rfi", label: "RFI Tracker", icon: MessageSquare, color: "text-blue-400" },
-  { id: "submittals", label: "Submittals", icon: FileCheck, color: "text-cyan-400" },
-  { id: "daily", label: "Daily Reports", icon: FileText, color: "text-emerald-400" },
-  { id: "meetings", label: "Meetings", icon: Users, color: "text-orange-400" },
-  { id: "costcodes", label: "Cost Codes", icon: DollarSign, color: "text-yellow-400" },
+const tabs: { id: string; label: string; icon: any; accent: AccentKey }[] = [
+  { id: "punch", label: "Punch List", icon: ClipboardList, accent: "red" },
+  { id: "rfi", label: "RFI Tracker", icon: MessageSquare, accent: "blue" },
+  { id: "submittals", label: "Submittals", icon: FileCheck, accent: "cyan" },
+  { id: "daily", label: "Daily Reports", icon: FileText, accent: "green" },
+  { id: "meetings", label: "Meetings", icon: Users, accent: "orange" },
+  { id: "costcodes", label: "Cost Codes", icon: DollarSign, accent: "amber" },
 ];
 
-const inputClass = "w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500";
+// ─── Shared glass button styles (mirrors Cost & Safety pages) ─
+
+const primaryBtn =
+  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white whitespace-nowrap transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
+const ghostBtn =
+  "flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-white/70 hover:text-white whitespace-nowrap transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
 
 export default function ConstructionPage() {
   const [activeTab, setActiveTab] = useState("punch");
@@ -282,17 +288,17 @@ export default function ConstructionPage() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case "open": return "bg-red-500/10 text-red-400 border-red-500/20";
-      case "in_progress": case "under_review": return "bg-blue-500/10 text-blue-400 border-blue-500/20";
+      case "in_progress": case "under_review": return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
       case "closed": case "approved": case "done": return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-      case "approved_with_comments": return "bg-orange-500/10 text-orange-400 border-orange-500/20";
-      default: return "bg-secondary text-muted-foreground border-border";
+      case "approved_with_comments": return "bg-amber-500/10 text-amber-400 border-amber-500/20";
+      default: return "bg-white/5 text-white/40 border-white/10";
     }
   };
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
       case "high": return "text-red-400";
-      case "medium": return "text-orange-400";
+      case "medium": return "text-amber-400";
       default: return "text-emerald-400";
     }
   };
@@ -312,21 +318,28 @@ export default function ConstructionPage() {
     variance: (c.budgeted_amount - c.actual_amount) / 1000,
   }));
 
+  const kpis = [
+    { label: "Open Punch Items", value: openPunch.toString(), icon: ClipboardList, accent: "red" as const },
+    { label: "Open RFIs", value: openRfi.toString(), icon: MessageSquare, accent: "blue" as const },
+    { label: "Pending Submittals", value: pendingSubmittals.toString(), icon: FileCheck, accent: "cyan" as const },
+    { label: "Cost Codes", value: totalCostCodes.toString(), icon: DollarSign, accent: "amber" as const },
+  ];
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-4xl font-bold text-foreground">Construction Management</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-4xl font-bold text-white tracking-tight">Construction Management</h1>
+          <p className="text-white/35 text-[13px] mt-1">
             Punch List · RFI · Submittals · Daily Reports · Meetings · Cost Codes
           </p>
         </div>
         <div className="flex gap-2">
           {projects.length > 0 && (
             <select value={projectId} onChange={(e) => setProjectId(e.target.value)}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none">
+              className={glassInputClass + " w-auto"} style={glassInputStyle}>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           )}
@@ -334,15 +347,15 @@ export default function ConstructionPage() {
             <>
               <input ref={extractFileRef} type="file" className="hidden"
                 accept=".pdf,.xlsx,.xls,.docx,.doc,.csv" onChange={handleExtractUpload} />
-              <Button className="gradient-blue text-white border-0" disabled={extractLoading || !projectId}
+              <button className={primaryBtn} style={gradientButtonStyle} disabled={extractLoading || !projectId}
                 onClick={() => extractFileRef.current?.click()}>
-                {extractLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                {extractLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                 Upload
-              </Button>
+              </button>
             </>
           )}
           <button onClick={() => { setShowAdd(true); setAiSummary(""); }}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium">
+            className={primaryBtn} style={gradientButtonStyle}>
             <Plus className="w-4 h-4" />
             Add {tabs.find(t => t.id === activeTab)?.label}
           </button>
@@ -351,33 +364,33 @@ export default function ConstructionPage() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { label: "Open Punch Items", value: openPunch.toString(), icon: ClipboardList, color: "border-red-500/20 bg-red-500/5", iconColor: "text-red-400" },
-          { label: "Open RFIs", value: openRfi.toString(), icon: MessageSquare, color: "border-blue-500/20 bg-blue-500/5", iconColor: "text-blue-400" },
-          { label: "Pending Submittals", value: pendingSubmittals.toString(), icon: FileCheck, color: "border-cyan-500/20 bg-cyan-500/5", iconColor: "text-cyan-400" },
-          { label: "Cost Codes", value: totalCostCodes.toString(), icon: DollarSign, color: "border-yellow-500/20 bg-yellow-500/5", iconColor: "text-yellow-400" },
-        ].map((kpi, i) => (
-          <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }} whileHover={{ y: -2 }}
-            className={`rounded-2xl border p-5 ${kpi.color}`}>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm text-muted-foreground">{kpi.label}</p>
-              <kpi.icon className={`w-4 h-4 ${kpi.iconColor}`} />
-            </div>
-            <p className="text-2xl font-bold text-foreground">{kpi.value}</p>
-          </motion.div>
-        ))}
+        {kpis.map((kpi, i) => {
+          const a = ACCENT[kpi.accent];
+          return (
+            <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.08 }} whileHover={{ y: -4, scale: 1.02 }}
+              className="glass-card p-5 group relative overflow-hidden" style={{ borderColor: a.border }}>
+              <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                style={{ background: `radial-gradient(ellipse at top left, ${a.bg}, transparent 70%)` }} />
+              <div className="relative flex items-center justify-between mb-4">
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center"
+                  style={{ background: a.bg, border: `1px solid ${a.border}`, boxShadow: `0 0 16px ${a.shadow}` }}>
+                  <kpi.icon className="w-5 h-5" style={{ color: a.text }} />
+                </div>
+              </div>
+              <p className="relative text-[28px] font-bold" style={{ color: a.text, textShadow: `0 0 20px ${a.shadow}` }}>{kpi.value}</p>
+              <p className="relative text-[13px] text-white/40 mt-1">{kpi.label}</p>
+            </motion.div>
+          );
+        })}
       </div>
 
       {/* Tabs */}
       <div className="flex gap-2 flex-wrap">
         {tabs.map(tab => (
           <button key={tab.id} onClick={() => { setActiveTab(tab.id); setShowAdd(false); setSearch(""); }}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium border transition-all ${
-              activeTab === tab.id
-                ? "bg-blue-500 text-white border-blue-500"
-                : "bg-secondary text-muted-foreground border-border hover:text-foreground"
-            }`}>
+            className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium border transition-all"
+            style={pillStyle(activeTab === tab.id, tab.accent)}>
             <tab.icon className="w-3.5 h-3.5" />
             {tab.label}
           </button>
@@ -388,13 +401,13 @@ export default function ConstructionPage() {
       <AnimatePresence>
         {showAdd && (
           <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-            className={`bg-card border rounded-2xl p-6 ${editItem ? "border-orange-500/30" : "border-blue-500/30"}`}>
+            className="glass-card p-6" style={{ borderColor: editItem ? ACCENT.amber.border : ACCENT.cyan.border }}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-foreground">
+              <h3 className="font-semibold text-white">
                 {editItem ? "Edit" : "Add"} {tabs.find(t => t.id === activeTab)?.label}
               </h3>
               <button onClick={closeForm}>
-                <X className="w-4 h-4 text-muted-foreground" />
+                <X className="w-4 h-4 text-white/40" />
               </button>
             </div>
 
@@ -402,28 +415,28 @@ export default function ConstructionPage() {
             {activeTab === "punch" && (
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Item *</label>
-                  <input className={inputClass} placeholder="e.g. Fix cracked wall tile"
+                  <label className="text-xs text-white/35 mb-1 block">Item *</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Fix cracked wall tile"
                     value={punchForm.item} onChange={(e) => setPunchForm(f => ({ ...f, item: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Location</label>
-                  <input className={inputClass} placeholder="e.g. Ground Floor - Lobby"
+                  <label className="text-xs text-white/35 mb-1 block">Location</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Ground Floor - Lobby"
                     value={punchForm.location} onChange={(e) => setPunchForm(f => ({ ...f, location: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Assigned To</label>
-                  <input className={inputClass} placeholder="Worker name"
+                  <label className="text-xs text-white/35 mb-1 block">Assigned To</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="Worker name"
                     value={punchForm.assigned_to} onChange={(e) => setPunchForm(f => ({ ...f, assigned_to: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Category</label>
-                  <input className={inputClass} placeholder="e.g. Finishing, Plumbing"
+                  <label className="text-xs text-white/35 mb-1 block">Category</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Finishing, Plumbing"
                     value={punchForm.category} onChange={(e) => setPunchForm(f => ({ ...f, category: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Priority</label>
-                  <select className={inputClass} value={punchForm.priority}
+                  <label className="text-xs text-white/35 mb-1 block">Priority</label>
+                  <select className={glassInputClass} style={glassInputStyle} value={punchForm.priority}
                     onChange={(e) => setPunchForm(f => ({ ...f, priority: e.target.value }))}>
                     <option value="high">High</option>
                     <option value="medium">Medium</option>
@@ -431,13 +444,13 @@ export default function ConstructionPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Due Date</label>
-                  <input type="date" className={inputClass} value={punchForm.due_date}
+                  <label className="text-xs text-white/35 mb-1 block">Due Date</label>
+                  <input type="date" className={glassInputClass} style={glassInputStyle} value={punchForm.due_date}
                     onChange={(e) => setPunchForm(f => ({ ...f, due_date: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Description</label>
-                  <textarea className={`${inputClass} resize-none`} rows={2} placeholder="Describe the defect..."
+                  <label className="text-xs text-white/35 mb-1 block">Description</label>
+                  <textarea className={`${glassInputClass} resize-none`} style={glassInputStyle} rows={2} placeholder="Describe the defect..."
                     value={punchForm.description} onChange={(e) => setPunchForm(f => ({ ...f, description: e.target.value }))} />
                 </div>
               </div>
@@ -447,28 +460,28 @@ export default function ConstructionPage() {
             {activeTab === "rfi" && (
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Subject *</label>
-                  <input className={inputClass} placeholder="e.g. Foundation depth clarification"
+                  <label className="text-xs text-white/35 mb-1 block">Subject *</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Foundation depth clarification"
                     value={rfiForm.subject} onChange={(e) => setRfiForm(f => ({ ...f, subject: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Question</label>
-                  <textarea className={`${inputClass} resize-none`} rows={3} placeholder="Describe the question in detail..."
+                  <label className="text-xs text-white/35 mb-1 block">Question</label>
+                  <textarea className={`${glassInputClass} resize-none`} style={glassInputStyle} rows={3} placeholder="Describe the question in detail..."
                     value={rfiForm.question} onChange={(e) => setRfiForm(f => ({ ...f, question: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Submitted By</label>
-                  <input className={inputClass} placeholder="Your name"
+                  <label className="text-xs text-white/35 mb-1 block">Submitted By</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="Your name"
                     value={rfiForm.submitted_by} onChange={(e) => setRfiForm(f => ({ ...f, submitted_by: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Assigned To</label>
-                  <input className={inputClass} placeholder="Engineer/Architect name"
+                  <label className="text-xs text-white/35 mb-1 block">Assigned To</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="Engineer/Architect name"
                     value={rfiForm.assigned_to} onChange={(e) => setRfiForm(f => ({ ...f, assigned_to: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Priority</label>
-                  <select className={inputClass} value={rfiForm.priority}
+                  <label className="text-xs text-white/35 mb-1 block">Priority</label>
+                  <select className={glassInputClass} style={glassInputStyle} value={rfiForm.priority}
                     onChange={(e) => setRfiForm(f => ({ ...f, priority: e.target.value }))}>
                     <option value="high">High</option>
                     <option value="medium">Medium</option>
@@ -476,8 +489,8 @@ export default function ConstructionPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Due Date</label>
-                  <input type="date" className={inputClass} value={rfiForm.due_date}
+                  <label className="text-xs text-white/35 mb-1 block">Due Date</label>
+                  <input type="date" className={glassInputClass} style={glassInputStyle} value={rfiForm.due_date}
                     onChange={(e) => setRfiForm(f => ({ ...f, due_date: e.target.value }))} />
                 </div>
               </div>
@@ -487,13 +500,13 @@ export default function ConstructionPage() {
             {activeTab === "submittals" && (
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Title *</label>
-                  <input className={inputClass} placeholder="e.g. Concrete Mix Design"
+                  <label className="text-xs text-white/35 mb-1 block">Title *</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Concrete Mix Design"
                     value={submittalForm.title} onChange={(e) => setSubmittalForm(f => ({ ...f, title: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Type</label>
-                  <select className={inputClass} value={submittalForm.type}
+                  <label className="text-xs text-white/35 mb-1 block">Type</label>
+                  <select className={glassInputClass} style={glassInputStyle} value={submittalForm.type}
                     onChange={(e) => setSubmittalForm(f => ({ ...f, type: e.target.value }))}>
                     <option>Shop Drawing</option>
                     <option>Material Sample</option>
@@ -503,23 +516,23 @@ export default function ConstructionPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Submitted By</label>
-                  <input className={inputClass} placeholder="Contractor name"
+                  <label className="text-xs text-white/35 mb-1 block">Submitted By</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="Contractor name"
                     value={submittalForm.submitted_by} onChange={(e) => setSubmittalForm(f => ({ ...f, submitted_by: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Reviewed By</label>
-                  <input className={inputClass} placeholder="Engineer name"
+                  <label className="text-xs text-white/35 mb-1 block">Reviewed By</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="Engineer name"
                     value={submittalForm.reviewed_by} onChange={(e) => setSubmittalForm(f => ({ ...f, reviewed_by: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Submitted Date</label>
-                  <input type="date" className={inputClass} value={submittalForm.submitted_date}
+                  <label className="text-xs text-white/35 mb-1 block">Submitted Date</label>
+                  <input type="date" className={glassInputClass} style={glassInputStyle} value={submittalForm.submitted_date}
                     onChange={(e) => setSubmittalForm(f => ({ ...f, submitted_date: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Description</label>
-                  <textarea className={`${inputClass} resize-none`} rows={2}
+                  <label className="text-xs text-white/35 mb-1 block">Description</label>
+                  <textarea className={`${glassInputClass} resize-none`} style={glassInputStyle} rows={2}
                     value={submittalForm.description} onChange={(e) => setSubmittalForm(f => ({ ...f, description: e.target.value }))} />
                 </div>
               </div>
@@ -529,48 +542,48 @@ export default function ConstructionPage() {
             {activeTab === "daily" && (
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Date *</label>
-                  <input type="date" className={inputClass} value={dailyForm.report_date}
+                  <label className="text-xs text-white/35 mb-1 block">Date *</label>
+                  <input type="date" className={glassInputClass} style={glassInputStyle} value={dailyForm.report_date}
                     onChange={(e) => setDailyForm(f => ({ ...f, report_date: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Created By</label>
-                  <input className={inputClass} placeholder="Your name" value={dailyForm.created_by}
+                  <label className="text-xs text-white/35 mb-1 block">Created By</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="Your name" value={dailyForm.created_by}
                     onChange={(e) => setDailyForm(f => ({ ...f, created_by: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Weather</label>
-                  <input className={inputClass} placeholder="e.g. Sunny, Cloudy" value={dailyForm.weather}
+                  <label className="text-xs text-white/35 mb-1 block">Weather</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Sunny, Cloudy" value={dailyForm.weather}
                     onChange={(e) => setDailyForm(f => ({ ...f, weather: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Temp (°C)</label>
-                  <input type="number" className={inputClass} placeholder="e.g. 32" value={dailyForm.temperature}
+                  <label className="text-xs text-white/35 mb-1 block">Temp (°C)</label>
+                  <input type="number" className={glassInputClass} style={glassInputStyle} placeholder="e.g. 32" value={dailyForm.temperature}
                     onChange={(e) => setDailyForm(f => ({ ...f, temperature: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Workers On Site</label>
-                  <input type="number" className={inputClass} placeholder="e.g. 45" value={dailyForm.workers_on_site}
+                  <label className="text-xs text-white/35 mb-1 block">Workers On Site</label>
+                  <input type="number" className={glassInputClass} style={glassInputStyle} placeholder="e.g. 45" value={dailyForm.workers_on_site}
                     onChange={(e) => setDailyForm(f => ({ ...f, workers_on_site: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Equipment Used</label>
-                  <input className={inputClass} placeholder="e.g. Tower Crane, Pump" value={dailyForm.equipment_used}
+                  <label className="text-xs text-white/35 mb-1 block">Equipment Used</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Tower Crane, Pump" value={dailyForm.equipment_used}
                     onChange={(e) => setDailyForm(f => ({ ...f, equipment_used: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Work Completed</label>
-                  <textarea className={`${inputClass} resize-none`} rows={2} placeholder="Describe work done today..."
+                  <label className="text-xs text-white/35 mb-1 block">Work Completed</label>
+                  <textarea className={`${glassInputClass} resize-none`} style={glassInputStyle} rows={2} placeholder="Describe work done today..."
                     value={dailyForm.work_completed} onChange={(e) => setDailyForm(f => ({ ...f, work_completed: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Issues / Delays</label>
-                  <textarea className={`${inputClass} resize-none`} rows={2} placeholder="Any issues or delays..."
+                  <label className="text-xs text-white/35 mb-1 block">Issues / Delays</label>
+                  <textarea className={`${glassInputClass} resize-none`} style={glassInputStyle} rows={2} placeholder="Any issues or delays..."
                     value={dailyForm.issues} onChange={(e) => setDailyForm(f => ({ ...f, issues: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Materials Used</label>
-                  <input className={inputClass} placeholder="e.g. Concrete 30m3, Rebar 2 tons" value={dailyForm.materials_used}
+                  <label className="text-xs text-white/35 mb-1 block">Materials Used</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Concrete 30m3, Rebar 2 tons" value={dailyForm.materials_used}
                     onChange={(e) => setDailyForm(f => ({ ...f, materials_used: e.target.value }))} />
                 </div>
               </div>
@@ -580,13 +593,13 @@ export default function ConstructionPage() {
             {activeTab === "meetings" && (
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Date *</label>
-                  <input type="date" className={inputClass} value={meetingForm.meeting_date}
+                  <label className="text-xs text-white/35 mb-1 block">Date *</label>
+                  <input type="date" className={glassInputClass} style={glassInputStyle} value={meetingForm.meeting_date}
                     onChange={(e) => setMeetingForm(f => ({ ...f, meeting_date: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Meeting Type</label>
-                  <select className={inputClass} value={meetingForm.meeting_type}
+                  <label className="text-xs text-white/35 mb-1 block">Meeting Type</label>
+                  <select className={glassInputClass} style={glassInputStyle} value={meetingForm.meeting_type}
                     onChange={(e) => setMeetingForm(f => ({ ...f, meeting_type: e.target.value }))}>
                     <option>Progress Meeting</option>
                     <option>Safety Meeting</option>
@@ -596,33 +609,33 @@ export default function ConstructionPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Location</label>
-                  <input className={inputClass} placeholder="e.g. Site Office" value={meetingForm.location}
+                  <label className="text-xs text-white/35 mb-1 block">Location</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Site Office" value={meetingForm.location}
                     onChange={(e) => setMeetingForm(f => ({ ...f, location: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Created By</label>
-                  <input className={inputClass} placeholder="Your name" value={meetingForm.created_by}
+                  <label className="text-xs text-white/35 mb-1 block">Created By</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="Your name" value={meetingForm.created_by}
                     onChange={(e) => setMeetingForm(f => ({ ...f, created_by: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Attendees</label>
-                  <input className={inputClass} placeholder="e.g. John Smith, Sarah Johnson, Client Rep"
+                  <label className="text-xs text-white/35 mb-1 block">Attendees</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. John Smith, Sarah Johnson, Client Rep"
                     value={meetingForm.attendees} onChange={(e) => setMeetingForm(f => ({ ...f, attendees: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Agenda</label>
-                  <textarea className={`${inputClass} resize-none`} rows={2} placeholder="Meeting agenda items..."
+                  <label className="text-xs text-white/35 mb-1 block">Agenda</label>
+                  <textarea className={`${glassInputClass} resize-none`} style={glassInputStyle} rows={2} placeholder="Meeting agenda items..."
                     value={meetingForm.agenda} onChange={(e) => setMeetingForm(f => ({ ...f, agenda: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Discussion</label>
-                  <textarea className={`${inputClass} resize-none`} rows={3} placeholder="Key discussion points..."
+                  <label className="text-xs text-white/35 mb-1 block">Discussion</label>
+                  <textarea className={`${glassInputClass} resize-none`} style={glassInputStyle} rows={3} placeholder="Key discussion points..."
                     value={meetingForm.discussion} onChange={(e) => setMeetingForm(f => ({ ...f, discussion: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Action Items</label>
-                  <textarea className={`${inputClass} resize-none`} rows={2} placeholder="List action items with owners..."
+                  <label className="text-xs text-white/35 mb-1 block">Action Items</label>
+                  <textarea className={`${glassInputClass} resize-none`} style={glassInputStyle} rows={2} placeholder="List action items with owners..."
                     value={meetingForm.action_items} onChange={(e) => setMeetingForm(f => ({ ...f, action_items: e.target.value }))} />
                 </div>
               </div>
@@ -632,33 +645,33 @@ export default function ConstructionPage() {
             {activeTab === "costcodes" && (
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Code *</label>
-                  <input className={inputClass} placeholder="e.g. 03000" value={costCodeForm.code}
+                  <label className="text-xs text-white/35 mb-1 block">Code *</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. 03000" value={costCodeForm.code}
                     onChange={(e) => setCostCodeForm(f => ({ ...f, code: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Category</label>
-                  <input className={inputClass} placeholder="e.g. Structural, MEP" value={costCodeForm.category}
+                  <label className="text-xs text-white/35 mb-1 block">Category</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Structural, MEP" value={costCodeForm.category}
                     onChange={(e) => setCostCodeForm(f => ({ ...f, category: e.target.value }))} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs text-muted-foreground mb-1 block">Description *</label>
-                  <input className={inputClass} placeholder="e.g. Concrete Works" value={costCodeForm.description}
+                  <label className="text-xs text-white/35 mb-1 block">Description *</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Concrete Works" value={costCodeForm.description}
                     onChange={(e) => setCostCodeForm(f => ({ ...f, description: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Budgeted Amount ($)</label>
-                  <input type="number" className={inputClass} placeholder="e.g. 500000" value={costCodeForm.budgeted_amount}
+                  <label className="text-xs text-white/35 mb-1 block">Budgeted Amount ($)</label>
+                  <input type="number" className={glassInputClass} style={glassInputStyle} placeholder="e.g. 500000" value={costCodeForm.budgeted_amount}
                     onChange={(e) => setCostCodeForm(f => ({ ...f, budgeted_amount: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Actual Amount ($)</label>
-                  <input type="number" className={inputClass} placeholder="e.g. 450000" value={costCodeForm.actual_amount}
+                  <label className="text-xs text-white/35 mb-1 block">Actual Amount ($)</label>
+                  <input type="number" className={glassInputClass} style={glassInputStyle} placeholder="e.g. 450000" value={costCodeForm.actual_amount}
                     onChange={(e) => setCostCodeForm(f => ({ ...f, actual_amount: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Unit</label>
-                  <input className={inputClass} placeholder="e.g. M3, Ton, LS" value={costCodeForm.unit}
+                  <label className="text-xs text-white/35 mb-1 block">Unit</label>
+                  <input className={glassInputClass} style={glassInputStyle} placeholder="e.g. M3, Ton, LS" value={costCodeForm.unit}
                     onChange={(e) => setCostCodeForm(f => ({ ...f, unit: e.target.value }))} />
                 </div>
               </div>
@@ -666,29 +679,26 @@ export default function ConstructionPage() {
 
             {/* AI Summary */}
             {aiSummary && (
-              <div className="mt-4 p-4 rounded-xl bg-blue-500/5 border border-blue-500/20">
+              <div className="mt-4 p-4 rounded-xl" style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}` }}>
                 <div className="flex items-center gap-2 mb-2">
-                  <Sparkles className="w-4 h-4 text-blue-400" />
-                  <p className="text-xs font-medium text-blue-400">AI Generated Summary</p>
+                  <Sparkles className="w-4 h-4 text-cyan-400" />
+                  <p className="text-xs font-medium text-cyan-400">AI Generated Summary</p>
                 </div>
-                <p className="text-xs text-muted-foreground">{aiSummary}</p>
+                <p className="text-xs text-white/40">{aiSummary}</p>
               </div>
             )}
 
             <div className="flex gap-3 mt-4">
-              <button onClick={closeForm}
-                className="px-4 py-2 rounded-xl bg-secondary text-muted-foreground text-sm hover:text-foreground">
+              <button onClick={closeForm} className={ghostBtn} style={glassButtonStyle}>
                 Cancel
               </button>
               {editItem ? (
-                <button onClick={handleUpdate} disabled={editLoading}
-                  className="px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium flex items-center gap-2">
+                <button onClick={handleUpdate} disabled={editLoading} className={primaryBtn} style={gradientButtonStyle}>
                   {editLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   Save Changes
                 </button>
               ) : (
-                <button onClick={handleAdd} disabled={loading}
-                  className="px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium flex items-center gap-2">
+                <button onClick={handleAdd} disabled={loading} className={primaryBtn} style={gradientButtonStyle}>
                   {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                   Save
                 </button>
@@ -702,85 +712,90 @@ export default function ConstructionPage() {
       <AnimatePresence>
         {extractedItems.length > 0 && (
           <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-            className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
+            className="glass-card p-5" style={{ borderColor: ACCENT.green.border, background: ACCENT.green.bg }}>
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="font-semibold text-foreground">
+                <h3 className="font-semibold text-white">
                   Extracted {tabs.find(t => t.id === activeTab)?.label}
                 </h3>
-                <p className="text-xs text-muted-foreground mt-0.5">
+                <p className="text-xs text-white/35 mt-0.5">
                   {extractedItems.length} item(s) found — select which to add
                 </p>
               </div>
-              <Button size="sm" className="gradient-blue text-white border-0"
-                disabled={addingExtracted === "all"} onClick={addAllExtractedItems}>
+              <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-white transition-all hover:scale-105 disabled:opacity-60"
+                style={gradientButtonStyle} disabled={addingExtracted === "all"} onClick={addAllExtractedItems}>
                 {addingExtracted === "all"
-                  ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                  : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Plus className="w-3.5 h-3.5" />}
                 Add All
-              </Button>
+              </button>
             </div>
             <div className="space-y-2">
-              {extractedItems.map((item: any, idx: number) => (
-                <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
-                  {activeTab === "punch" && <ClipboardList className="w-4 h-4 text-red-400 shrink-0" />}
-                  {activeTab === "rfi" && <MessageSquare className="w-4 h-4 text-blue-400 shrink-0" />}
-                  {activeTab === "submittals" && <FileCheck className="w-4 h-4 text-cyan-400 shrink-0" />}
-                  {activeTab === "meetings" && <Users className="w-4 h-4 text-orange-400 shrink-0" />}
-                  {activeTab === "costcodes" && <DollarSign className="w-4 h-4 text-yellow-400 shrink-0" />}
+              {extractedItems.map((item: any, idx: number) => {
+                const tabAccent = ACCENT[tabs.find(t => t.id === activeTab)?.accent ?? "cyan"];
+                return (
+                <div key={idx} className="flex items-center gap-3 p-3 rounded-xl" style={{ background: "rgba(255,255,255,0.03)" }}>
+                  {(() => {
+                    const Icon = tabs.find(t => t.id === activeTab)?.icon;
+                    return Icon ? <Icon className="w-4 h-4 shrink-0" style={{ color: tabAccent.text }} /> : null;
+                  })()}
                   <div className="flex-1 min-w-0">
                     {activeTab === "punch" && (
                       <>
-                        <p className="text-sm font-medium text-foreground truncate">{item.item}</p>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-sm font-medium text-white truncate">{item.item}</p>
+                        <p className="text-xs text-white/35">
                           {[item.location, item.assigned_to, item.priority, item.category].filter(Boolean).join(" · ")}
                         </p>
                       </>
                     )}
                     {activeTab === "rfi" && (
                       <>
-                        <p className="text-sm font-medium text-foreground truncate">{item.subject}</p>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-sm font-medium text-white truncate">{item.subject}</p>
+                        <p className="text-xs text-white/35">
                           {[item.submitted_by && `From: ${item.submitted_by}`, item.assigned_to && `To: ${item.assigned_to}`, item.priority].filter(Boolean).join(" · ")}
                         </p>
                       </>
                     )}
                     {activeTab === "submittals" && (
                       <>
-                        <p className="text-sm font-medium text-foreground truncate">{item.title}</p>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-sm font-medium text-white truncate">{item.title}</p>
+                        <p className="text-xs text-white/35">
                           {[item.type, item.submitted_by, item.submitted_date].filter(Boolean).join(" · ")}
                         </p>
                       </>
                     )}
                     {activeTab === "meetings" && (
                       <>
-                        <p className="text-sm font-medium text-foreground truncate">
+                        <p className="text-sm font-medium text-white truncate">
                           {item.meeting_type} — {item.meeting_date}
                         </p>
-                        <p className="text-xs text-muted-foreground truncate">
+                        <p className="text-xs text-white/35 truncate">
                           {[item.attendees, item.location].filter(Boolean).join(" · ")}
                         </p>
                       </>
                     )}
                     {activeTab === "costcodes" && (
                       <>
-                        <p className="text-sm font-medium text-foreground">
-                          <span className="font-mono text-yellow-400 mr-2">{item.code}</span>
+                        <p className="text-sm font-medium text-white">
+                          <span className="font-mono text-amber-400 mr-2">{item.code}</span>
                           {item.description}
                         </p>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-xs text-white/35">
                           {[item.category, item.budgeted_amount && `Budget: $${Number(item.budgeted_amount).toLocaleString()}`].filter(Boolean).join(" · ")}
                         </p>
                       </>
                     )}
                   </div>
-                  <Button size="sm" variant="outline" disabled={addingExtracted === String(idx)}
+                  <button
+                    className="p-2 rounded-lg text-white/70 hover:text-white transition-colors disabled:opacity-60"
+                    style={glassButtonStyle}
+                    disabled={addingExtracted === String(idx)}
                     onClick={() => addExtractedItem(item, idx)}>
                     {addingExtracted === String(idx) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                  </Button>
+                  </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </motion.div>
         )}
@@ -788,25 +803,26 @@ export default function ConstructionPage() {
 
       {/* Search */}
       <div className="relative w-64">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/35" />
         <input placeholder={`Search ${tabs.find(t => t.id === activeTab)?.label}...`}
           value={search} onChange={(e) => setSearch(e.target.value)}
-          className="pl-8 pr-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-blue-500 w-full" />
+          className="pl-8 pr-3 py-1.5 rounded-xl text-xs text-white placeholder:text-white/30 outline-none border focus:border-cyan-500/50 w-full"
+          style={glassInputStyle} />
       </div>
 
       {/* Content */}
       <motion.div key={activeTab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-        className="bg-card border border-border rounded-2xl p-6">
+        className="glass-card p-6">
         {loading ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+            <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
           </div>
         ) : (
           <>
             {/* Punch List */}
             {activeTab === "punch" && (
               <div className="space-y-2">
-                <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-muted-foreground font-medium border-b border-border mb-2">
+                <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-white/35 font-medium mb-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
                   <span className="col-span-3">Item</span>
                   <span className="col-span-2">Location</span>
                   <span className="col-span-2">Assigned</span>
@@ -817,13 +833,13 @@ export default function ConstructionPage() {
                 {punchItems.filter(i => !search || i.item?.toLowerCase().includes(search.toLowerCase())).map((item, i) => (
                   <motion.div key={item.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: i * 0.04 }}
-                    className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors group">
+                    className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-white/2 transition-colors group">
                     <div className="col-span-3">
-                      <p className="text-sm font-medium text-foreground">{item.item}</p>
-                      {item.description && <p className="text-xs text-muted-foreground truncate">{item.description}</p>}
+                      <p className="text-sm font-medium text-white">{item.item}</p>
+                      {item.description && <p className="text-xs text-white/35 truncate">{item.description}</p>}
                     </div>
-                    <p className="col-span-2 text-xs text-muted-foreground truncate">{item.location || "—"}</p>
-                    <p className="col-span-2 text-xs text-foreground truncate">{item.assigned_to || "—"}</p>
+                    <p className="col-span-2 text-xs text-white/35 truncate">{item.location || "—"}</p>
+                    <p className="col-span-2 text-xs text-white truncate">{item.assigned_to || "—"}</p>
                     <span className={`col-span-1 text-xs font-medium ${getPriorityColor(item.priority)}`}>
                       {item.priority}
                     </span>
@@ -838,12 +854,12 @@ export default function ConstructionPage() {
                         </button>
                       )}
                       <button onClick={() => openEdit(item, "punch")} title="Edit"
-                        className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                        className="p-1.5 rounded-lg hover:bg-white/5 text-white/40 hover:text-white transition-colors">
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
                       <button onClick={() => handleDelete(item.id, "punch")} title="Delete"
                         disabled={deletingId === item.id}
-                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors">
                         {deletingId === item.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                       </button>
                     </div>
@@ -851,8 +867,8 @@ export default function ConstructionPage() {
                 ))}
                 {punchItems.length === 0 && (
                   <div className="text-center py-8">
-                    <ClipboardList className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No punch list items</p>
+                    <ClipboardList className="w-10 h-10 text-white/30 mx-auto mb-2" />
+                    <p className="text-sm text-white/35">No punch list items</p>
                   </div>
                 )}
               </div>
@@ -861,7 +877,7 @@ export default function ConstructionPage() {
             {/* RFI List */}
             {activeTab === "rfi" && (
               <div className="space-y-2">
-                <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-muted-foreground font-medium border-b border-border mb-2">
+                <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-white/35 font-medium mb-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
                   <span className="col-span-1">No.</span>
                   <span className="col-span-3">Subject</span>
                   <span className="col-span-2">Submitted By</span>
@@ -873,19 +889,19 @@ export default function ConstructionPage() {
                 {rfis.filter(r => !search || r.subject?.toLowerCase().includes(search.toLowerCase())).map((rfi, i) => (
                   <motion.div key={rfi.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: i * 0.04 }}
-                    className="grid grid-cols-12 gap-2 items-start px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors group">
-                    <span className="col-span-1 text-xs text-muted-foreground">{rfi.rfi_number}</span>
+                    className="grid grid-cols-12 gap-2 items-start px-4 py-3 rounded-xl hover:bg-white/2 transition-colors group">
+                    <span className="col-span-1 text-xs text-white/35">{rfi.rfi_number}</span>
                     <div className="col-span-3">
-                      <p className="text-sm font-medium text-foreground">{rfi.subject}</p>
-                      {rfi.question && <p className="text-xs text-muted-foreground truncate mt-0.5">{rfi.question}</p>}
+                      <p className="text-sm font-medium text-white">{rfi.subject}</p>
+                      {rfi.question && <p className="text-xs text-white/35 truncate mt-0.5">{rfi.question}</p>}
                       {rfi.response && (
                         <div className="mt-1 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                           <p className="text-xs text-emerald-400">Response: {rfi.response}</p>
                         </div>
                       )}
                     </div>
-                    <p className="col-span-2 text-xs text-muted-foreground">{rfi.submitted_by || "—"}</p>
-                    <p className="col-span-2 text-xs text-foreground">{rfi.assigned_to || "—"}</p>
+                    <p className="col-span-2 text-xs text-white/35">{rfi.submitted_by || "—"}</p>
+                    <p className="col-span-2 text-xs text-white">{rfi.assigned_to || "—"}</p>
                     <span className={`col-span-1 text-xs font-medium ${getPriorityColor(rfi.priority)}`}>{rfi.priority}</span>
                     <span className={`col-span-1 text-xs px-2 py-1 rounded-full border w-fit ${getStatusColor(rfi.status)}`}>{rfi.status}</span>
                     <div className="col-span-2 flex items-center gap-1">
@@ -896,12 +912,12 @@ export default function ConstructionPage() {
                         </button>
                       )}
                       <button onClick={() => openEdit(rfi, "rfi")} title="Edit"
-                        className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                        className="p-1.5 rounded-lg hover:bg-white/5 text-white/40 hover:text-white transition-colors">
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
                       <button onClick={() => handleDelete(rfi.id, "rfi")} title="Delete"
                         disabled={deletingId === rfi.id}
-                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors">
                         {deletingId === rfi.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                       </button>
                     </div>
@@ -909,8 +925,8 @@ export default function ConstructionPage() {
                 ))}
                 {rfis.length === 0 && (
                   <div className="text-center py-8">
-                    <MessageSquare className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No RFIs</p>
+                    <MessageSquare className="w-10 h-10 text-white/30 mx-auto mb-2" />
+                    <p className="text-sm text-white/35">No RFIs</p>
                   </div>
                 )}
               </div>
@@ -919,7 +935,7 @@ export default function ConstructionPage() {
             {/* Submittals */}
             {activeTab === "submittals" && (
               <div className="space-y-2">
-                <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-muted-foreground font-medium border-b border-border mb-2">
+                <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-white/35 font-medium mb-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
                   <span className="col-span-1">No.</span>
                   <span className="col-span-3">Title</span>
                   <span className="col-span-2">Type</span>
@@ -931,26 +947,26 @@ export default function ConstructionPage() {
                 {submittals.filter(s => !search || s.title?.toLowerCase().includes(search.toLowerCase())).map((sub, i) => (
                   <motion.div key={sub.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: i * 0.04 }}
-                    className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors group">
-                    <span className="col-span-1 text-xs text-muted-foreground">{sub.submittal_number}</span>
+                    className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-white/2 transition-colors group">
+                    <span className="col-span-1 text-xs text-white/35">{sub.submittal_number}</span>
                     <div className="col-span-3">
-                      <p className="text-sm font-medium text-foreground">{sub.title}</p>
-                      {sub.description && <p className="text-xs text-muted-foreground truncate">{sub.description}</p>}
+                      <p className="text-sm font-medium text-white">{sub.title}</p>
+                      {sub.description && <p className="text-xs text-white/35 truncate">{sub.description}</p>}
                     </div>
-                    <span className="col-span-2 text-xs px-2 py-0.5 rounded-md bg-secondary text-muted-foreground truncate">{sub.type}</span>
-                    <p className="col-span-1 text-xs text-muted-foreground truncate">{sub.submitted_by || "—"}</p>
-                    <p className="col-span-1 text-xs text-foreground truncate">{sub.reviewed_by || "—"}</p>
+                    <span className="col-span-2 text-xs px-2 py-0.5 rounded-md truncate" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.5)" }}>{sub.type}</span>
+                    <p className="col-span-1 text-xs text-white/35 truncate">{sub.submitted_by || "—"}</p>
+                    <p className="col-span-1 text-xs text-white truncate">{sub.reviewed_by || "—"}</p>
                     <span className={`col-span-2 text-xs px-2 py-1 rounded-full border w-fit ${getStatusColor(sub.status)}`}>
                       {sub.status?.replace("_", " ")}
                     </span>
                     <div className="col-span-2 flex items-center gap-1">
                       <button onClick={() => openEdit(sub, "submittals")} title="Edit"
-                        className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                        className="p-1.5 rounded-lg hover:bg-white/5 text-white/40 hover:text-white transition-colors">
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
                       <button onClick={() => handleDelete(sub.id, "submittals")} title="Delete"
                         disabled={deletingId === sub.id}
-                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors">
                         {deletingId === sub.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                       </button>
                     </div>
@@ -958,8 +974,8 @@ export default function ConstructionPage() {
                 ))}
                 {submittals.length === 0 && (
                   <div className="text-center py-8">
-                    <FileCheck className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No submittals</p>
+                    <FileCheck className="w-10 h-10 text-white/30 mx-auto mb-2" />
+                    <p className="text-sm text-white/35">No submittals</p>
                   </div>
                 )}
               </div>
@@ -971,47 +987,47 @@ export default function ConstructionPage() {
                 {dailyReports.filter(r => !search || r.report_date?.includes(search)).map((report, i) => (
                   <motion.div key={report.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: i * 0.06 }}
-                    className="p-4 rounded-xl bg-secondary/40 border border-border hover:bg-secondary/60 transition-colors">
+                    className="p-4 rounded-xl transition-colors hover:bg-white/3" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-3">
-                        <span className="text-sm font-bold text-foreground">{report.report_date}</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
+                        <span className="text-sm font-bold text-white">{report.report_date}</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400">
                           {report.weather} · {report.temperature}°C
                         </span>
-                        <span className="text-xs text-muted-foreground">
+                        <span className="text-xs text-white/35">
                           👷 {report.workers_on_site} workers
                         </span>
                       </div>
                       <div className="flex items-center gap-1">
-                        <span className="text-xs text-muted-foreground mr-2">{report.created_by}</span>
+                        <span className="text-xs text-white/35 mr-2">{report.created_by}</span>
                         <button onClick={() => openEdit(report, "daily")} title="Edit"
-                          className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                          className="p-1.5 rounded-lg hover:bg-white/5 text-white/40 hover:text-white transition-colors">
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button onClick={() => handleDelete(report.id, "daily")} title="Delete"
                           disabled={deletingId === report.id}
-                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors">
                           {deletingId === report.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                         </button>
                       </div>
                     </div>
                     {report.work_completed && (
-                      <p className="text-xs text-foreground mb-1"><span className="text-muted-foreground">✅ Work: </span>{report.work_completed}</p>
+                      <p className="text-xs text-white mb-1"><span className="text-white/35">✅ Work: </span>{report.work_completed}</p>
                     )}
                     {report.issues && (
-                      <p className="text-xs text-orange-400 mb-1"><span className="text-muted-foreground">⚠️ Issues: </span>{report.issues}</p>
+                      <p className="text-xs text-amber-400 mb-1"><span className="text-white/35">⚠️ Issues: </span>{report.issues}</p>
                     )}
                     {report.ai_summary && (
-                      <div className="mt-2 p-2 rounded-lg bg-blue-500/5 border border-blue-500/10">
-                        <p className="text-xs text-blue-400">🤖 {report.ai_summary}</p>
+                      <div className="mt-2 p-2 rounded-lg" style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}` }}>
+                        <p className="text-xs text-cyan-400">🤖 {report.ai_summary}</p>
                       </div>
                     )}
                   </motion.div>
                 ))}
                 {dailyReports.length === 0 && (
                   <div className="text-center py-8">
-                    <FileText className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No daily reports</p>
+                    <FileText className="w-10 h-10 text-white/30 mx-auto mb-2" />
+                    <p className="text-sm text-white/35">No daily reports</p>
                   </div>
                 )}
               </div>
@@ -1023,45 +1039,45 @@ export default function ConstructionPage() {
                 {meetings.filter(m => !search || m.meeting_type?.toLowerCase().includes(search.toLowerCase())).map((meeting, i) => (
                   <motion.div key={meeting.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: i * 0.06 }}
-                    className="p-4 rounded-xl bg-secondary/40 border border-border">
+                    className="p-4 rounded-xl" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-foreground">{meeting.meeting_date}</span>
+                        <span className="text-sm font-bold text-white">{meeting.meeting_date}</span>
                         <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400">
                           {meeting.meeting_type}
                         </span>
                       </div>
                       <div className="flex items-center gap-1">
-                        <span className="text-xs text-muted-foreground mr-2">{meeting.location}</span>
+                        <span className="text-xs text-white/35 mr-2">{meeting.location}</span>
                         <button onClick={() => openEdit(meeting, "meetings")} title="Edit"
-                          className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                          className="p-1.5 rounded-lg hover:bg-white/5 text-white/40 hover:text-white transition-colors">
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button onClick={() => handleDelete(meeting.id, "meetings")} title="Delete"
                           disabled={deletingId === meeting.id}
-                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors">
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors">
                           {deletingId === meeting.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                         </button>
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground mb-1">👥 {meeting.attendees}</p>
-                    {meeting.agenda && <p className="text-xs text-foreground mb-1"><span className="text-muted-foreground">📋 Agenda: </span>{meeting.agenda}</p>}
+                    <p className="text-xs text-white/35 mb-1">👥 {meeting.attendees}</p>
+                    {meeting.agenda && <p className="text-xs text-white mb-1"><span className="text-white/35">📋 Agenda: </span>{meeting.agenda}</p>}
                     {meeting.action_items && (
                       <div className="mt-2 p-2 rounded-lg bg-orange-500/5 border border-orange-500/10">
                         <p className="text-xs text-orange-400">📌 Actions: {meeting.action_items}</p>
                       </div>
                     )}
                     {meeting.ai_summary && (
-                      <div className="mt-2 p-2 rounded-lg bg-blue-500/5 border border-blue-500/10">
-                        <p className="text-xs text-blue-400">🤖 {meeting.ai_summary}</p>
+                      <div className="mt-2 p-2 rounded-lg" style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}` }}>
+                        <p className="text-xs text-cyan-400">🤖 {meeting.ai_summary}</p>
                       </div>
                     )}
                   </motion.div>
                 ))}
                 {meetings.length === 0 && (
                   <div className="text-center py-8">
-                    <Users className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No meeting minutes</p>
+                    <Users className="w-10 h-10 text-white/30 mx-auto mb-2" />
+                    <p className="text-sm text-white/35">No meeting minutes</p>
                   </div>
                 )}
               </div>
@@ -1070,7 +1086,7 @@ export default function ConstructionPage() {
             {/* Cost Codes */}
             {activeTab === "costcodes" && (
               <div className="space-y-4">
-                <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-muted-foreground font-medium border-b border-border mb-2">
+                <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-white/35 font-medium mb-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
                   <span className="col-span-1">Code</span>
                   <span className="col-span-3">Description</span>
                   <span className="col-span-2">Category</span>
@@ -1084,22 +1100,22 @@ export default function ConstructionPage() {
                   return (
                     <motion.div key={code.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: i * 0.04 }}
-                      className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-secondary/50 transition-colors group">
-                      <span className="col-span-1 text-xs font-mono text-blue-400">{code.code}</span>
-                      <p className="col-span-3 text-sm font-medium text-foreground">{code.description}</p>
-                      <span className="col-span-2 text-xs px-2 py-0.5 rounded-md bg-secondary text-muted-foreground">{code.category || "—"}</span>
-                      <p className="col-span-2 text-xs text-foreground">${(code.budgeted_amount / 1000).toFixed(0)}K</p>
-                      <p className="col-span-2 text-xs text-foreground">${(code.actual_amount / 1000).toFixed(0)}K</p>
+                      className="grid grid-cols-12 gap-2 items-center px-4 py-3 rounded-xl hover:bg-white/2 transition-colors group">
+                      <span className="col-span-1 text-xs font-mono text-amber-400">{code.code}</span>
+                      <p className="col-span-3 text-sm font-medium text-white">{code.description}</p>
+                      <span className="col-span-2 text-xs px-2 py-0.5 rounded-md" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.5)" }}>{code.category || "—"}</span>
+                      <p className="col-span-2 text-xs text-white">${(code.budgeted_amount / 1000).toFixed(0)}K</p>
+                      <p className="col-span-2 text-xs text-white">${(code.actual_amount / 1000).toFixed(0)}K</p>
                       <p className={`col-span-1 text-xs font-medium ${variance >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                         {variance >= 0 ? "+" : ""}${(variance / 1000).toFixed(0)}K
                       </p>
                       <div className="col-span-1 flex items-center gap-1">
                         <button onClick={() => openEdit(code, "costcodes")} title="Edit"
-                          className="p-1 rounded text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors">
+                          className="p-1 rounded text-white/40 hover:text-cyan-400 hover:bg-cyan-500/10 transition-colors">
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button onClick={() => handleDelete(code.id, "costcodes")} title="Delete"
-                          className="p-1 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                          className="p-1 rounded text-white/40 hover:text-red-400 hover:bg-red-500/10 transition-colors">
                           {deletingId === code.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                         </button>
                       </div>
@@ -1108,23 +1124,23 @@ export default function ConstructionPage() {
                 })}
                 {costCodes.length === 0 && (
                   <div className="text-center py-8">
-                    <DollarSign className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No cost codes</p>
+                    <DollarSign className="w-10 h-10 text-white/30 mx-auto mb-2" />
+                    <p className="text-sm text-white/35">No cost codes</p>
                   </div>
                 )}
 
                 {/* Cost Codes Chart */}
                 {costCodesChart.length > 0 && (
                   <div className="mt-6">
-                    <h3 className="text-sm font-medium text-foreground mb-3">Budget vs Actual by Code</h3>
+                    <h3 className="text-sm font-medium text-white mb-3">Budget vs Actual by Code</h3>
                     <ResponsiveContainer width="100%" height={200}>
                       <BarChart data={costCodesChart} barGap={4}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                        <XAxis dataKey="name" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} unit="K" />
-                        <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
-                        <Bar dataKey="budget" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Budget ($K)" />
-                        <Bar dataKey="actual" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Actual ($K)" />
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                        <XAxis dataKey="name" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} unit="K" />
+                        <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+                        <Bar dataKey="budget" fill="#00D4FF" radius={[4, 4, 0, 0]} name="Budget ($K)" />
+                        <Bar dataKey="actual" fill="#F59E0B" radius={[4, 4, 0, 0]} name="Actual ($K)" />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>

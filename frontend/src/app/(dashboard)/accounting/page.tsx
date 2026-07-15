@@ -4,19 +4,22 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Calculator, Upload, Loader2, FileText, DollarSign,
-  Percent, Tag, AlertCircle, ChevronDown, ChevronUp,
+  Percent, AlertCircle, ChevronDown, ChevronUp,
   Hash, Calendar, CheckCircle2, Building2, X, BookOpen,
   ClipboardCheck, ChevronRight, LayoutDashboard, Database,
   Scale, TrendingUp, TrendingDown, Clock, RefreshCw,
   Copy, Trash2, AlertTriangle, Link2, Download,
   PieChart, Search, Sparkles, Type, FileSignature,
+  type LucideIcon,
 } from "lucide-react";
 import axios from "axios";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import DownloadModal from "@/components/shared/DownloadModal";
 import { drawMarkdownText } from "@/lib/pdfMarkdownText";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
+import { downloadEntries, ExportColumn, ExportFormat, ExportMode } from "@/lib/export/downloadEntries";
 
 const DOCS_TABS = [
   { href: "/documents",  label: "Documents" },
@@ -86,7 +89,6 @@ const CLASS_COLOR: Record<string, string> = {
 };
 
 function fmt(val: number, currency = "") {
-  const prefix = currency && !["USD","AUD","GBP","EUR","CAD"].includes(currency) ? "" : "";
   const sym: Record<string, string> = { USD:"$", AUD:"A$", GBP:"£", EUR:"€", CAD:"C$" };
   const s = sym[currency] ?? (currency ? currency + " " : "");
   if (val >= 1_000_000) return `${s}${(val / 1_000_000).toFixed(2)}M`;
@@ -166,7 +168,7 @@ function DropZone({ onFile }: { onFile: (f: File) => void }) {
 // ── Collapsible section ────────────────────────────────────────────────────────
 
 function Section({ title, icon: Icon, count, children, defaultOpen = true }: {
-  title: string; icon: React.ElementType; count?: number; children: React.ReactNode; defaultOpen?: boolean
+  title: string; icon: LucideIcon; count?: number; children: React.ReactNode; defaultOpen?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -346,7 +348,7 @@ function ErrorBanner({ text }: { text: string }) {
   );
 }
 
-function EmptyState({ text, icon: Icon = FileText }: { text: string; icon?: React.ElementType }) {
+function EmptyState({ text, icon: Icon = FileText }: { text: string; icon?: LucideIcon }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
       <Icon className="w-8 h-8 text-white/15" />
@@ -356,7 +358,7 @@ function EmptyState({ text, icon: Icon = FileText }: { text: string; icon?: Reac
 }
 
 function KpiTile({ label, value, icon: Icon, color }: {
-  label: string; value: string; icon: React.ElementType; color: string;
+  label: string; value: string; icon: LucideIcon; color: string;
 }) {
   return (
     <div className="rounded-xl px-4 py-3.5 flex flex-col gap-1.5"
@@ -415,6 +417,10 @@ function AccountingDashboardTab({ projectId }: { projectId: string }) {
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  // Fetch-on-mount + reusable "Refresh" button handler — a legitimate data-fetching
+  // effect (per the rule's own docs: syncing with an external system), not derived
+  // state that could be computed during render.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
   if (loading) return <CenterLoader label="Loading financial dashboard…" />;
@@ -548,6 +554,7 @@ function AccountingRecordsTab({ projectId }: { projectId: string }) {
   const [detail, setDetail]           = useState<Record<string, unknown> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [deletingId, setDeletingId]   = useState<string | null>(null);
+  const [showDownload, setShowDownload] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -588,8 +595,37 @@ function AccountingRecordsTab({ projectId }: { projectId: string }) {
     finally { setDeletingId(null); }
   };
 
+  const recordColumns: ExportColumn[] = [
+    { key: "filename", label: "Filename" },
+    { key: "doc_class", label: "Type" },
+    { key: "doc_subtype", label: "Subtype" },
+    { key: "currency", label: "Currency" },
+    { key: "period", label: "Period" },
+    { key: "confidence", label: "Confidence" },
+    { key: "created_at", label: "Date" },
+  ];
+
+  const handleRecordsExport = async (format: ExportFormat, mode: ExportMode) => {
+    const byClass: Record<string, number> = {};
+    for (const r of records) byClass[r.doc_class] = (byClass[r.doc_class] || 0) + 1;
+    await downloadEntries({
+      format,
+      mode,
+      title: "Accounting Records Report",
+      subtitle: `${records.length} record${records.length === 1 ? "" : "s"}`,
+      kpis: [
+        { label: "Total Records", value: `${records.length}` },
+        ...Object.entries(byClass).map(([k, v]) => ({ label: CLASS_LABELS[k] ?? k, value: `${v}` })),
+      ],
+      columns: recordColumns,
+      rows: records.map((r) => ({ ...r, confidence: `${Math.round((r.confidence || 0) * 100)}%` })),
+      filenameBase: `CivilAI_Accounting_Records_${new Date().toISOString().split("T")[0]}`,
+    });
+  };
+
   return (
     <div className="space-y-4">
+      <DownloadModal open={showDownload} onClose={() => setShowDownload(false)} title="Download Accounting Records" onExport={handleRecordsExport} />
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <select
           value={classFilter}
@@ -600,9 +636,14 @@ function AccountingRecordsTab({ projectId }: { projectId: string }) {
           <option value="">All document types</option>
           {Object.entries(CLASS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <button onClick={load} className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/70 transition-colors">
-          <RefreshCw className="w-3.5 h-3.5" /> Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={() => setShowDownload(true)} className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/70 transition-colors">
+            <Download className="w-3.5 h-3.5" /> Download
+          </button>
+          <button onClick={load} className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/70 transition-colors">
+            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -704,6 +745,10 @@ function AccountingReconcileTab({ projectId }: { projectId: string }) {
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  // Fetch-on-mount + reusable "Refresh" button handler — a legitimate data-fetching
+  // effect (per the rule's own docs: syncing with an external system), not derived
+  // state that could be computed during render.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
   if (!projectId) return <EmptyState text="Select a project to run reconciliation" icon={Scale} />;
@@ -716,7 +761,7 @@ function AccountingReconcileTab({ projectId }: { projectId: string }) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <p className="text-white/35 text-[12px]">Cross-checks invoices against budget and cost entries</p>
+        <p className="text-white/35 text-[12px]">Cross-checks invoices against contracts and budget</p>
         <button onClick={load} className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/70 transition-colors">
           <RefreshCw className="w-3.5 h-3.5" /> Re-run
         </button>
@@ -752,7 +797,7 @@ function AccountingReconcileTab({ projectId }: { projectId: string }) {
       )}
 
       {unmatched_invoices.length > 0 && (
-        <Section title="Unmatched Invoices" icon={AlertTriangle} count={unmatched_invoices.length} defaultOpen>
+        <Section title="Invoices With No Contract on File" icon={AlertTriangle} count={unmatched_invoices.length} defaultOpen>
           <div className="space-y-2">
             {unmatched_invoices.map((inv, i) => (
               <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg text-[12px]"
@@ -810,9 +855,11 @@ function AccountingReconcileTab({ projectId }: { projectId: string }) {
 
 // ── Summary tab ───────────────────────────────────────────────────────────────
 
+type AccountingModuleData = Record<string, number>;
+
 interface ProjectSummaryData {
   project_id: string;
-  modules: Record<string, any>;
+  modules: Record<string, AccountingModuleData>;
   financial_health: {
     original_budget: number; total_spent: number; total_invoiced: number;
     budget_remaining: number; budget_utilization: number | null;
@@ -833,6 +880,10 @@ function AccountingSummaryTab({ projectId }: { projectId: string }) {
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  // Fetch-on-mount + reusable "Refresh" button handler — a legitimate data-fetching
+  // effect (per the rule's own docs: syncing with an external system), not derived
+  // state that could be computed during render.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
   if (!projectId) return <EmptyState text="Select a project to see its cross-module financial summary" icon={PieChart} />;
@@ -844,7 +895,7 @@ function AccountingSummaryTab({ projectId }: { projectId: string }) {
   const utilPct = fh.budget_utilization ?? 0;
   const utilColor = utilPct > 100 ? "#EF4444" : utilPct > 85 ? "#F59E0B" : "#10B981";
 
-  const moduleCards: { key: string; label: string; icon: React.ElementType }[] = [
+  const moduleCards: { key: string; label: string; icon: LucideIcon }[] = [
     { key: "invoices", label: "Invoices", icon: DollarSign },
     { key: "budget", label: "Budget Items", icon: Building2 },
     { key: "contracts", label: "Contracts", icon: FileSignature },
@@ -917,12 +968,16 @@ function AccountingSummaryTab({ projectId }: { projectId: string }) {
 
 // ── AI Reports tab (cost analysis / payment summary / contract terms) ────────
 
+interface CostSnapshot { total_budget: number; total_spent: number; total_invoiced: number; budget_remaining: number }
+interface PaymentKpis  { total_invoiced: number; total_received: number; total_pending: number; total_overdue: number }
+interface ContractTerm { id: string; title: string; contractor: string; value: number; status: string }
+
 function AccountingReportsTab({ projectId }: { projectId: string }) {
-  const [costAnalysis, setCostAnalysis]   = useState<{ analysis: string; snapshot: any } | null>(null);
+  const [costAnalysis, setCostAnalysis]   = useState<{ analysis: string; snapshot: CostSnapshot | null } | null>(null);
   const [costLoading, setCostLoading]     = useState(false);
-  const [paymentSummary, setPaymentSummary] = useState<{ analysis: string; kpis: any } | null>(null);
+  const [paymentSummary, setPaymentSummary] = useState<{ analysis: string; kpis: PaymentKpis | null } | null>(null);
   const [paymentLoading, setPaymentLoading] = useState(false);
-  const [contractTerms, setContractTerms] = useState<{ total_value: number; active_count: number; contracts: any[] } | null>(null);
+  const [contractTerms, setContractTerms] = useState<{ total_value: number; active_count: number; contracts: ContractTerm[] } | null>(null);
   const [contractsLoading, setContractsLoading] = useState(false);
 
   const loadCost = useCallback(() => {
@@ -952,6 +1007,9 @@ function AccountingReportsTab({ projectId }: { projectId: string }) {
       .finally(() => setContractsLoading(false));
   }, [projectId]);
 
+  // Fetch-on-mount — a legitimate data-fetching effect (per the rule's own docs:
+  // syncing with an external system), not derived state computable during render.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadContracts(); }, [loadContracts]);
 
   if (!projectId) return <EmptyState text="Select a project to generate AI financial reports" icon={Sparkles} />;
@@ -1015,7 +1073,7 @@ function AccountingReportsTab({ projectId }: { projectId: string }) {
               <span className="text-white/40">Total value: <span className="text-white/80 font-mono">{fmt(contractTerms.total_value)}</span></span>
               <span className="text-white/40">Active: <span className="text-white/80 font-mono">{contractTerms.active_count}</span></span>
             </div>
-            {contractTerms.contracts.map((c: any) => (
+            {contractTerms.contracts.map((c) => (
               <div key={c.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl text-[12px]"
                 style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
                 <div>
@@ -1253,6 +1311,15 @@ function buildExtractionPDF(result: ExtractionResult, sourceFilename: string): j
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
+interface BudgetCheckResult {
+  message?: string;
+  variance?: number | null;
+  variance_vs_original?: number;
+  variance_vs_revised?: number;
+  utilization_pct?: number | null;
+  risk_level?: "low" | "medium" | "high";
+}
+
 export default function AccountingPage() {
   const { triggerRefresh } = useDataRefreshStore();
   const [activeTab, setActiveTab] = useState<SubTab>("extract");
@@ -1267,7 +1334,7 @@ export default function AccountingPage() {
   const [extractMode, setExtractMode] = useState<"file" | "text">("file");
   const [pastedText, setPastedText]   = useState("");
 
-  const [budgetCheck, setBudgetCheck]     = useState<any>(null);
+  const [budgetCheck, setBudgetCheck]     = useState<BudgetCheckResult | null>(null);
   const [budgetChecking, setBudgetChecking] = useState(false);
   const [budgetFigureIdx, setBudgetFigureIdx] = useState(0);
 
@@ -1608,7 +1675,7 @@ export default function AccountingPage() {
                       <option key={i} value={i}>{kf.label} ({fmt(kf.value, kf.currency)})</option>
                     ))}
                   </select>
-                  <span className="text-[12px] text-white/60">against this project's budget</span>
+                  <span className="text-[12px] text-white/60">against this project&apos;s budget</span>
                   <button onClick={checkAgainstBudget} disabled={budgetChecking}
                     className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium disabled:opacity-40"
                     style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", color: "#00D4FF" }}>
@@ -1621,11 +1688,11 @@ export default function AccountingPage() {
                     <p className="text-[12px] text-white/40">{budgetCheck.message}</p>
                   ) : (
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                      <KpiTile label="vs Original" value={fmt(budgetCheck.variance_vs_original)} icon={TrendingDown} color="#00D4FF" />
-                      <KpiTile label="vs Revised" value={fmt(budgetCheck.variance_vs_revised)} icon={TrendingDown} color="#A78BFA" />
-                      <KpiTile label="Utilization" value={budgetCheck.utilization_pct !== null ? `${budgetCheck.utilization_pct}%` : "—"} icon={Percent}
+                      <KpiTile label="vs Original" value={fmt(budgetCheck.variance_vs_original ?? 0)} icon={TrendingDown} color="#00D4FF" />
+                      <KpiTile label="vs Revised" value={fmt(budgetCheck.variance_vs_revised ?? 0)} icon={TrendingDown} color="#A78BFA" />
+                      <KpiTile label="Utilization" value={budgetCheck.utilization_pct != null ? `${budgetCheck.utilization_pct}%` : "—"} icon={Percent}
                         color={budgetCheck.risk_level === "high" ? "#EF4444" : budgetCheck.risk_level === "medium" ? "#F59E0B" : "#10B981"} />
-                      <KpiTile label="Risk" value={budgetCheck.risk_level} icon={AlertTriangle}
+                      <KpiTile label="Risk" value={budgetCheck.risk_level ?? "—"} icon={AlertTriangle}
                         color={budgetCheck.risk_level === "high" ? "#EF4444" : budgetCheck.risk_level === "medium" ? "#F59E0B" : "#10B981"} />
                     </div>
                   )
@@ -1790,13 +1857,13 @@ export default function AccountingPage() {
                           {t.term}
                         </span>
                         {t.alias_found !== t.term && (
-                          <span className="text-[10px] text-white/25 pt-1.5">found as "{t.alias_found}"</span>
+                          <span className="text-[10px] text-white/25 pt-1.5">found as &quot;{t.alias_found}&quot;</span>
                         )}
                       </div>
                       <p className="text-white/50 text-[12px] mt-2 leading-relaxed">{t.definition}</p>
                       {t.context && (
                         <p className="text-white/25 text-[11px] mt-1.5 font-mono leading-relaxed">
-                          "…{t.context}…"
+                          &quot;…{t.context}…&quot;
                         </p>
                       )}
                     </div>

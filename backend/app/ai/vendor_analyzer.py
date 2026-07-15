@@ -72,6 +72,51 @@ def compare_vendors(vendors: list) -> str:
     return analyze_document(str(vendors), prompt)
 
 
+class ExtractedVendor(BaseModel):
+    name: str
+    vendor_type: str = ""
+    contact_name: str = ""
+    email: str = ""
+    phone: str = ""
+    years_experience: int = Field(ge=0, default=0)
+    completed_projects: int = Field(ge=0, default=0)
+    on_time_delivery_pct: float = Field(ge=0, le=100, default=0)
+    quality_score: float = Field(ge=0, le=100, default=0)
+    safety_incidents: int = Field(ge=0, default=0)
+    financial_rating: str = "Good"
+    certifications: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class VendorList(BaseModel):
+    vendors: list[ExtractedVendor] = Field(default_factory=list)
+
+
+def extract_vendors(text: str) -> list[dict]:
+    try:
+        result: VendorList = instructor_client.chat.completions.create(
+            model=_FAST_MODEL,
+            response_model=VendorList,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Extract every vendor/subcontractor/supplier mentioned in this construction "
+                    "document (e.g. a vendor register, prequalification form, or subcontractor list). "
+                    "For each one extract: company name, vendor type/trade, contact name, email, phone, "
+                    "years of experience, completed projects, on-time delivery %, quality score, safety "
+                    "incidents, financial rating, and certifications. Only include real named vendors, "
+                    "not generic categories.\n\n"
+                    f"{text[:5000]}"
+                ),
+            }],
+            max_retries=2,
+        )
+        return [v.model_dump() for v in result.vendors]
+    except Exception as exc:
+        logger.warning("Vendor extraction failed: %s", exc)
+        return []
+
+
 def generate_vendor_report(vendor: dict) -> str:
     prompt = f"""
     Generate a detailed vendor performance report:

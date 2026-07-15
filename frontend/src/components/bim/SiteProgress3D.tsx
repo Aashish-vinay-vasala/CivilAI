@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { motion } from "framer-motion";
 import axios from "axios";
 import { Loader2 } from "lucide-react";
+import { ACCENT, glassButtonStyle, glassInputStyle } from "@/lib/theme";
 
 interface Task {
   id: string;
@@ -17,7 +18,11 @@ interface Task {
   planned_end: string;
 }
 
-export default function SiteProgress3D() {
+interface SiteProgress3DProps {
+  projectId?: string;
+}
+
+export default function SiteProgress3D({ projectId: propProjectId }: SiteProgress3DProps = {}) {
   const mountRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number>(0);
   const meshesRef = useRef<THREE.Mesh[]>([]);
@@ -36,8 +41,9 @@ export default function SiteProgress3D() {
   const [selectedPhase, setSelectedPhase] = useState<any>(null);
   const [isRotating, setIsRotating] = useState(true);
   const [showBefore, setShowBefore] = useState(false);
-  const [projectId, setProjectId] = useState<string>("");
+  const [internalProjectId, setInternalProjectId] = useState<string>("");
   const [projects, setProjects] = useState<any[]>([]);
+  const projectId = propProjectId || internalProjectId;
 
   // Fallback data if no DB data
   const fallbackTasks: Task[] = [
@@ -50,8 +56,8 @@ export default function SiteProgress3D() {
   ];
 
   useEffect(() => {
-    fetchProjects();
-  }, []);
+    if (!propProjectId) fetchProjects();
+  }, [propProjectId]);
 
   useEffect(() => {
     if (projectId) fetchTasks();
@@ -62,7 +68,7 @@ export default function SiteProgress3D() {
       const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       setProjects(res.data.projects || []);
       if (res.data.projects?.length > 0) {
-        setProjectId(res.data.projects[0].id);
+        setInternalProjectId(res.data.projects[0].id);
       }
     } catch {
       setLoading(false);
@@ -334,8 +340,8 @@ export default function SiteProgress3D() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
-        <p className="ml-3 text-muted-foreground">Loading project data...</p>
+        <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
+        <p className="ml-3 text-white/35">Loading project data...</p>
       </div>
     );
   }
@@ -345,11 +351,12 @@ export default function SiteProgress3D() {
       {/* Project Selector + Controls */}
       <div className="flex flex-wrap gap-2 items-center justify-between">
         <div className="flex gap-2 items-center">
-          {projects.length > 0 && (
+          {!propProjectId && projects.length > 0 && (
             <select
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none"
+              value={internalProjectId}
+              onChange={(e) => setInternalProjectId(e.target.value)}
+              className="px-3 py-1.5 rounded-xl text-xs text-white outline-none border"
+              style={glassInputStyle}
             >
               {projects.map(p => (
                 <option key={p.id} value={p.id}>{p.name}</option>
@@ -358,11 +365,8 @@ export default function SiteProgress3D() {
           )}
           <button
             onClick={() => setShowBefore(!showBefore)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
-              showBefore
-                ? "bg-orange-500/10 text-orange-400 border-orange-500/20"
-                : "bg-secondary text-muted-foreground border-border"
-            }`}
+            className="px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors"
+            style={showBefore ? { background: ACCENT.amber.bg, color: "#F59E0B", borderColor: ACCENT.amber.border } : glassButtonStyle}
           >
             {showBefore ? "📅 Before View" : "📅 Current View"}
           </button>
@@ -371,11 +375,8 @@ export default function SiteProgress3D() {
               stateRef.current.isRotating = !stateRef.current.isRotating;
               setIsRotating(stateRef.current.isRotating);
             }}
-            className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${
-              isRotating
-                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                : "bg-secondary text-muted-foreground border-border"
-            }`}
+            className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+            style={isRotating ? { background: ACCENT.green.bg, color: "#10B981", borderColor: ACCENT.green.border } : glassButtonStyle}
           >
             {isRotating ? "⏸ Pause" : "▶ Rotate"}
           </button>
@@ -386,45 +387,45 @@ export default function SiteProgress3D() {
               Live Supabase Data
             </span>
           )}
-          <span className="text-xs px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 font-medium">
+          <span className="text-xs px-3 py-1.5 rounded-xl font-medium" style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}`, color: "#00D4FF" }}>
             Overall: {overallProgress}%
           </span>
         </div>
       </div>
 
       {/* 3D Viewer */}
-      <div className="relative w-full rounded-2xl overflow-hidden border border-border" style={{ height: "500px" }}>
+      <div className="relative w-full rounded-2xl overflow-hidden" style={{ height: "500px", border: "1px solid rgba(255,255,255,0.08)" }}>
         <div ref={mountRef} className="w-full h-full" />
 
-        <div className="absolute top-4 left-4 bg-black/60 backdrop-blur rounded-xl px-3 py-2 border border-border">
-          <p className="text-xs text-muted-foreground">🖱️ Drag · Scroll · Click phase</p>
+        <div className="absolute top-4 left-4 backdrop-blur rounded-xl px-3 py-2" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs text-white/40">🖱️ Drag · Scroll · Click phase</p>
         </div>
 
-        <div className="absolute top-4 right-4 bg-black/70 backdrop-blur rounded-xl p-3 border border-border">
-          <p className="text-xs font-medium text-foreground mb-2">Progress Legend</p>
+        <div className="absolute top-4 right-4 backdrop-blur rounded-xl p-3" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs font-medium text-white mb-2">Progress Legend</p>
           {[
-            { color: "#10b981", label: "Complete (≥90%)" },
-            { color: "#3b82f6", label: "On Track (50-90%)" },
-            { color: "#f59e0b", label: "Behind (20-50%)" },
-            { color: "#ef4444", label: "Critical (<20%)" },
+            { color: "#10B981", label: "Complete (≥90%)" },
+            { color: "#00D4FF", label: "On Track (50-90%)" },
+            { color: "#F59E0B", label: "Behind (20-50%)" },
+            { color: "#EF4444", label: "Critical (<20%)" },
             { color: "#334155", label: "Not Started" },
           ].map(l => (
             <div key={l.label} className="flex items-center gap-2 mb-1">
               <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: l.color }} />
-              <span className="text-xs text-muted-foreground">{l.label}</span>
+              <span className="text-xs text-white/35">{l.label}</span>
             </div>
           ))}
         </div>
 
         {selectedPhase && (
-          <div className="absolute bottom-4 left-4 bg-black/80 backdrop-blur rounded-xl p-3 border border-blue-500/30">
-            <p className="text-xs font-medium text-blue-400 mb-2">📊 {selectedPhase.task}</p>
+          <div className="absolute bottom-4 left-4 backdrop-blur rounded-xl p-3" style={{ background: "rgba(4,11,25,0.9)", border: "1px solid rgba(0,212,255,0.2)" }}>
+            <p className="text-xs font-medium text-cyan-400 mb-2">📊 {selectedPhase.task}</p>
             {Object.entries(selectedPhase)
               .filter(([k]) => k !== "task")
               .map(([key, val]) => (
                 <div key={key} className="flex justify-between gap-4 mb-1">
-                  <span className="text-xs text-muted-foreground capitalize">{key}:</span>
-                  <span className="text-xs text-foreground">{String(val)}</span>
+                  <span className="text-xs text-white/35 capitalize">{key}:</span>
+                  <span className="text-xs text-white">{String(val)}</span>
                 </div>
               ))}
           </div>
@@ -439,13 +440,13 @@ export default function SiteProgress3D() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.08 }}
-            className="bg-card border border-border rounded-xl p-3"
+            className="glass-card p-3"
           >
             <div className="flex justify-between mb-2">
-              <span className="text-xs font-medium text-foreground truncate">{task.task_name}</span>
-              <span className="text-xs text-muted-foreground ml-2">{task.actual_progress}%</span>
+              <span className="text-xs font-medium text-white truncate">{task.task_name}</span>
+              <span className="text-xs text-white/35 ml-2">{task.actual_progress}%</span>
             </div>
-            <div className="bg-secondary rounded-full h-1.5 mb-1">
+            <div className="rounded-full h-1.5 mb-1" style={{ background: "rgba(255,255,255,0.06)" }}>
               <motion.div
                 initial={{ width: 0 }}
                 animate={{ width: `${task.actual_progress}%` }}
@@ -453,10 +454,10 @@ export default function SiteProgress3D() {
                 className="h-1.5 rounded-full"
                 style={{
                   backgroundColor:
-                    task.actual_progress >= 90 ? "#10b981" :
-                    task.actual_progress >= 50 ? "#3b82f6" :
-                    task.actual_progress >= 20 ? "#f59e0b" :
-                    task.actual_progress > 0 ? "#ef4444" : "#334155"
+                    task.actual_progress >= 90 ? "#10B981" :
+                    task.actual_progress >= 50 ? "#00D4FF" :
+                    task.actual_progress >= 20 ? "#F59E0B" :
+                    task.actual_progress > 0 ? "#EF4444" : "#334155"
                 }}
               />
             </div>
@@ -464,9 +465,9 @@ export default function SiteProgress3D() {
               <span className={`text-xs px-1.5 py-0.5 rounded-md ${
                 task.status === "done" ? "bg-emerald-500/10 text-emerald-400" :
                 task.status === "delayed" ? "bg-red-500/10 text-red-400" :
-                task.status === "atrisk" ? "bg-orange-500/10 text-orange-400" :
-                "bg-secondary text-muted-foreground"
-              }`}>
+                task.status === "atrisk" ? "bg-amber-500/10 text-amber-400" :
+                "text-white/35"
+              }`} style={task.status !== "done" && task.status !== "delayed" && task.status !== "atrisk" ? { background: "rgba(255,255,255,0.05)" } : undefined}>
                 {task.status}
               </span>
               {task.delay_days > 0 && (

@@ -91,7 +91,7 @@ class NewInvoice(BaseModel):
     invoice_number: str
     contractor: str
     amount: float
-    due_date: str
+    due_date: Optional[str] = None
     status: str = "pending"
     description: Optional[str] = None
     project_id: Optional[str] = None
@@ -119,18 +119,26 @@ def get_invoices(project_id: Optional[str] = Query(None), _user=Depends(protect_
     try:
         q = supabase.table("invoices").select("*").order("due_date", desc=True)
         if project_id:
-            q = q.eq("project_id", project_id)
+            # Include unassigned invoices (project_id IS NULL) alongside this
+            # project's own rows — otherwise they'd never surface in a
+            # project-scoped view, and the user could never assign/reassign them.
+            q = q.or_(f"project_id.eq.{project_id},project_id.is.null")
         res = q.execute()
         rows = res.data or []
 
-        total_contract = sum(float(r.get("amount", 0)) for r in rows)
-        total_received = sum(float(r.get("amount", 0)) for r in rows if r.get("status") == "received")
-        total_pending  = sum(float(r.get("amount", 0)) for r in rows if r.get("status") == "pending")
-        total_overdue  = sum(float(r.get("amount", 0)) for r in rows if r.get("status") == "overdue")
+        # KPI totals must stay scoped to this project only — unassigned rows are
+        # shown in the list below (so they can be assigned) but don't belong to
+        # this project's numbers yet.
+        kpi_rows = [r for r in rows if r.get("project_id") == project_id] if project_id else rows
+
+        total_contract = sum(float(r.get("amount", 0)) for r in kpi_rows)
+        total_received = sum(float(r.get("amount", 0)) for r in kpi_rows if r.get("status") == "received")
+        total_pending  = sum(float(r.get("amount", 0)) for r in kpi_rows if r.get("status") == "pending")
+        total_overdue  = sum(float(r.get("amount", 0)) for r in kpi_rows if r.get("status") == "overdue")
 
         now = datetime.now()
         month_data: dict = defaultdict(lambda: {"received": 0.0, "pending": 0.0, "overdue": 0.0})
-        for row in rows:
+        for row in kpi_rows:
             due = row.get("due_date")
             if due:
                 try:

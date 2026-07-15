@@ -132,6 +132,10 @@ export function useSupabaseSync(userId: string | null, displayName: string) {
     watch("workforce", "workers");
     watch("safety_incidents", "safety");
     watch("projects", "projects");
+    watch("vendors", "vendors");
+    watch("documents", "documents");
+    watch("contracts", "contracts");
+    watch("permits", "compliance");
 
     return () => { channels.forEach((ch) => { try { supabase.removeChannel(ch); } catch {} }); };
   }, [userId]);

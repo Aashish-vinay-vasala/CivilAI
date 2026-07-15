@@ -3,6 +3,8 @@ import logging
 from collections import Counter
 from pathlib import Path
 
+import pandas as pd
+
 logger = logging.getLogger("civilai.trained_classifiers")
 
 _MODEL_DIR = Path(__file__).resolve().parent.parent / "ml_models"
@@ -44,16 +46,18 @@ class TrainedClassifier:
         self._load()
         return self._load_error is None
 
-    def _encode(self, encoder, value: str) -> int:
+    def _encode(self, encoder, value: str) -> tuple[int, str | None]:
         try:
-            return int(encoder.transform([value])[0])
+            return int(encoder.transform([value])[0]), None
         except ValueError:
             fallback = Counter(encoder.classes_).most_common(1)[0][0] if len(encoder.classes_) else value
-            logger.warning(
-                "Unseen category %r for %s — using most-frequent training category %r",
-                value, self._report_key, fallback,
+            warning = (
+                f"{value!r} was not seen during training — substituted the most-frequent "
+                f"training category {fallback!r}; treat this prediction's confidence accordingly."
             )
-            return int(encoder.transform([fallback])[0])
+            logger.warning("Unseen category %r for %s — using most-frequent training category %r",
+                            value, self._report_key, fallback)
+            return int(encoder.transform([fallback])[0]), warning
 
     def predict(self, categorical_values: list[str], numeric_values: list[float], feature_names: list[str]) -> dict:
         """Raises if the model isn't loaded — callers should check is_available() first."""
@@ -61,8 +65,14 @@ class TrainedClassifier:
         if self._load_error is not None:
             raise RuntimeError(f"{self._report_key} model unavailable: {self._load_error}")
 
-        encoded = [self._encode(enc, val) for enc, val in zip(self._encoders, categorical_values)]
-        row = [encoded + list(numeric_values)]
+        encoded_pairs = [self._encode(enc, val) for enc, val in zip(self._encoders, categorical_values)]
+        encoded = [value for value, _ in encoded_pairs]
+        warnings = [warning for _, warning in encoded_pairs if warning is not None]
+
+        # Predict on a DataFrame with the exact column names/order used at training time
+        # (models/train_all.py) — passing a bare array works but triggers an sklearn
+        # UserWarning and drops the guardrail that catches a feature-order mismatch.
+        row = pd.DataFrame([encoded + list(numeric_values)], columns=feature_names)
 
         proba = float(self._model.predict_proba(row)[0][1])
         probability = round(proba * 100, 1)
@@ -75,4 +85,5 @@ class TrainedClassifier:
                            f"(accuracy {self._metadata.get('accuracy', '—')}, "
                            f"{self._metadata.get('model_type', 'model')})",
             "feature_importances": importances,
+            "warnings": warnings,
         }

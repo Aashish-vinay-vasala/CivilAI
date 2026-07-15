@@ -2,7 +2,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import html2canvas from "html2canvas";
 
-const addHeader = (doc: jsPDF, title: string, subtitle?: string) => {
+export const addHeader = (doc: jsPDF, title: string, subtitle?: string) => {
   // Background header
   doc.setFillColor(15, 23, 42);
   doc.rect(0, 0, 210, 40, "F");
@@ -40,7 +40,7 @@ const addHeader = (doc: jsPDF, title: string, subtitle?: string) => {
   })}`, 140, 26);
 };
 
-const addFooter = (doc: jsPDF) => {
+export const addFooter = (doc: jsPDF) => {
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
@@ -554,6 +554,7 @@ export const exportAIReportPDF = (
     kpi:         "KPI Report",
     safety:      "Safety Report",
     dashboard:   "Dashboard Summary Report",
+    vendor:      "Vendor Performance Report",
   };
   const title = titleMap[reportType] || "AI Report";
 
@@ -565,6 +566,119 @@ export const exportAIReportPDF = (
   addFooter(doc);
   const date = new Date().toISOString().split("T")[0];
   doc.save(`CivilAI_${title.replace(/\s+/g, "_")}_${projectName.replace(/\s+/g, "_")}_${date}.pdf`);
+};
+
+export const exportBudgetReport = (
+  divisions: { code: string; name: string; items: any[] }[],
+  projectName: string,
+) => {
+  const doc = new jsPDF();
+  addHeader(doc, "Financial Budget Report", projectName);
+
+  const allItems = divisions.flatMap(d => d.items);
+  const sum = (k: string) => allItems.reduce((s, i) => s + (i[k] || 0), 0);
+  const fmt = (v: number) => `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+  autoTable(doc, {
+    startY: 48,
+    body: [
+      ["Original Budget", fmt(sum("originalBudget")), "Revised Budget", fmt(sum("revisedBudget"))],
+      ["Committed Costs", fmt(sum("committedCosts")), "Direct Costs", fmt(sum("directCosts"))],
+    ],
+    theme: "grid",
+    styles: { fontSize: 9, cellPadding: 3.5 },
+    columnStyles: {
+      0: { fontStyle: "bold", fillColor: [241, 245, 249], textColor: [51, 65, 85], cellWidth: 45 },
+      2: { fontStyle: "bold", fillColor: [241, 245, 249], textColor: [51, 65, 85], cellWidth: 45 },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  let y = (doc as any).lastAutoTable.finalY + 10;
+
+  for (const div of divisions) {
+    if (div.items.length === 0) continue;
+    if (y > 250) { doc.addPage(); y = 20; }
+
+    doc.setFillColor(30, 41, 59);
+    doc.rect(14, y, 182, 8, "F");
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(255, 255, 255);
+    doc.text(`Division ${div.code} — ${div.name}`, 16, y + 5.5);
+    y += 4;
+
+    autoTable(doc, {
+      startY: y + 8,
+      head: [["Code", "Description", "Original", "Revised", "Committed", "Direct"]],
+      body: div.items.map(i => [
+        i.code || "—",
+        (i.description || "—").substring(0, 40),
+        fmt(i.originalBudget || 0),
+        fmt(i.revisedBudget || 0),
+        fmt(i.committedCosts || 0),
+        fmt(i.directCosts || 0),
+      ]),
+      theme: "striped",
+      headStyles: { fillColor: [59, 130, 246], textColor: 255, fontSize: 9 },
+      styles: { fontSize: 8, cellPadding: 2.5 },
+      margin: { left: 14, right: 14 },
+    });
+    y = (doc as any).lastAutoTable.finalY + 10;
+  }
+
+  addFooter(doc);
+  const date = new Date().toISOString().split("T")[0];
+  doc.save(`CivilAI_Budget_${projectName.replace(/\s+/g, "_")}_${date}.pdf`);
+};
+
+export const exportVendorsReport = (vendors: any[]) => {
+  const doc = new jsPDF();
+  addHeader(doc, "Vendor Register Report", `${vendors.length} vendor${vendors.length === 1 ? "" : "s"}`);
+
+  const preferred = vendors.filter(v => v.status === "Preferred").length;
+  const underReview = vendors.filter(v => v.status === "Review").length;
+  const avgScore = vendors.length > 0
+    ? Math.round(vendors.reduce((s, v) => s + (v.score || 0), 0) / vendors.length)
+    : 0;
+
+  autoTable(doc, {
+    startY: 48,
+    body: [
+      ["Total Vendors", vendors.length.toString(), "Preferred", preferred.toString()],
+      ["Under Review", underReview.toString(), "Avg Score", `${avgScore}/100`],
+    ],
+    theme: "grid",
+    styles: { fontSize: 10, cellPadding: 4, halign: "center" },
+    columnStyles: {
+      0: { fontStyle: "bold", fillColor: [241, 245, 249] },
+      2: { fontStyle: "bold", fillColor: [241, 245, 249] },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  autoTable(doc, {
+    startY: (doc as any).lastAutoTable.finalY + 10,
+    head: [["#", "Name", "Type", "Status", "Score", "Delivery", "Quality", "Safety", "Financial"]],
+    body: vendors.map((v, i) => [
+      i + 1,
+      v.name || "—",
+      v.vendor_type || "—",
+      v.status || "—",
+      `${v.score ?? 0}`,
+      `${v.delivery_score ?? 0}%`,
+      `${v.quality_score ?? 0}%`,
+      `${v.safety_score ?? 0}%`,
+      v.financial_rating || "—",
+    ]),
+    theme: "striped",
+    headStyles: { fillColor: [0, 212, 255], textColor: 255, fontSize: 9 },
+    styles: { fontSize: 8, cellPadding: 2.5 },
+    margin: { left: 14, right: 14 },
+  });
+
+  addFooter(doc);
+  doc.save(`CivilAI_Vendor_Register_${new Date().toISOString().split("T")[0]}.pdf`);
 };
 
 export const exportMLOpsReport = (runs: any[], predStats: any) => {

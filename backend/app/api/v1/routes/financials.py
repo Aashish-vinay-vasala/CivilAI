@@ -300,69 +300,6 @@ def _save_budget_items(
     return {"imported_rows": len(parsed_rows), "import_id": import_id, "project_budget": synced_budget}
 
 
-# ── Live cost allocation ───────────────────────────────────────────────────────
-# There is no column linking a specific invoice or cost entry to a specific CSI
-# line item, so exact per-item attribution isn't possible. Instead, each project's
-# live direct/committed totals (the same figures the KPI cards and /live-actuals
-# use) are distributed across that project's line items in proportion to their
-# share of original_budget. This keeps the Grand Total row equal to the live KPI
-# totals instead of drifting from whatever was typed in at import/creation time.
-
-def _compute_live_totals(project_ids: list[str]) -> dict[str, dict]:
-    totals = {pid: {"direct_costs": 0.0, "committed_costs": 0.0} for pid in project_ids}
-    if not project_ids:
-        return totals
-    try:
-        cost_rows = supabase.table("cost_entries").select("project_id,amount").in_("project_id", project_ids).execute().data or []
-        for r in cost_rows:
-            pid = r.get("project_id")
-            if pid in totals:
-                totals[pid]["direct_costs"] += float(r.get("amount") or 0)
-    except Exception:
-        pass
-    try:
-        inv_rows = supabase.table("invoices").select("project_id,amount,status").in_("project_id", project_ids).execute().data or []
-        for r in inv_rows:
-            pid = r.get("project_id")
-            if pid in totals and r.get("status") in ("pending", "overdue"):
-                totals[pid]["committed_costs"] += float(r.get("amount") or 0)
-    except Exception:
-        pass
-    return totals
-
-
-def _apply_live_costs(items: list[dict]) -> None:
-    """Overwrite each item's committed_costs/direct_costs in place with a live,
-    proportionally-allocated value. Items without a project_id (rare — only
-    possible for imports done with no project selected) are left untouched."""
-    by_project: dict[str, list[dict]] = {}
-    for it in items:
-        pid = it.get("project_id")
-        if pid:
-            by_project.setdefault(pid, []).append(it)
-    if not by_project:
-        return
-
-    live = _compute_live_totals(list(by_project.keys()))
-    for pid, group in by_project.items():
-        proj_totals = live.get(pid, {"direct_costs": 0.0, "committed_costs": 0.0})
-        weight_total = sum(float(it.get("original_budget") or 0) for it in group)
-        for field in ("direct_costs", "committed_costs"):
-            target = proj_totals[field]
-            allocated = 0.0
-            # Round every item except the last, then give the last item whatever's
-            # left — rounding each share independently can make the parts sum to a
-            # cent or two off the live total, which would make the Grand Total row
-            # disagree with the KPI card by a penny.
-            for it in group[:-1]:
-                weight = float(it.get("original_budget") or 0)
-                share = (weight / weight_total) if weight_total > 0 else (1 / len(group))
-                it[field] = round(target * share, 2)
-                allocated += it[field]
-            if group:
-                group[-1][field] = round(target - allocated, 2)
-
-
 # ── GET endpoints ──────────────────────────────────────────────────────────────
 
 @router.get("/live-actuals")
@@ -462,14 +399,15 @@ def get_live_actuals(project_id: Optional[str] = None):
 
 @router.get("/budget-items")
 def get_budget_items(project_id: Optional[str] = None):
+    """Returns budget line items exactly as stored — this is the single source of
+    truth the UI table and the CSV/Excel/PDF exports all read from, so what's in
+    the DB is what's shown and what's downloaded."""
     try:
         query = supabase.table("financial_budget_items").select("*")
         if project_id and project_id != "all":
             query = query.eq("project_id", project_id)
         res = query.order("div_code").order("code").execute()
-        items = res.data or []
-        _apply_live_costs(items)
-        return {"items": items}
+        return {"items": res.data or []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -700,7 +638,6 @@ def export_budget(project_id: Optional[str] = None):
             query = query.eq("project_id", project_id)
         res = query.order("div_code").order("code").execute()
         items = res.data or []
-        _apply_live_costs(items)
     except Exception:
         items = []
 

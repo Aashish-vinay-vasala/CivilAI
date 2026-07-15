@@ -50,13 +50,60 @@ interface Anomaly {
   projectName?: string;
 }
 
+const ACCENT: Record<string, { bg: string; border: string; text: string; shadow: string }> = {
+  cyan:   { bg: "rgba(0,212,255,0.07)",   border: "rgba(0,212,255,0.18)",   text: "#00D4FF", shadow: "rgba(0,212,255,0.15)" },
+  amber:  { bg: "rgba(245,158,11,0.07)",  border: "rgba(245,158,11,0.18)",  text: "#F59E0B", shadow: "rgba(245,158,11,0.15)" },
+  red:    { bg: "rgba(239,68,68,0.07)",   border: "rgba(239,68,68,0.18)",   text: "#EF4444", shadow: "rgba(239,68,68,0.15)" },
+  green:  { bg: "rgba(16,185,129,0.07)",  border: "rgba(16,185,129,0.18)",  text: "#10B981", shadow: "rgba(16,185,129,0.15)" },
+  blue:   { bg: "rgba(59,130,246,0.07)",  border: "rgba(59,130,246,0.18)",  text: "#3B82F6", shadow: "rgba(59,130,246,0.15)" },
+  orange: { bg: "rgba(249,115,22,0.07)",  border: "rgba(249,115,22,0.18)",  text: "#F97316", shadow: "rgba(249,115,22,0.15)" },
+  purple: { bg: "rgba(139,92,246,0.07)",  border: "rgba(139,92,246,0.18)",  text: "#8B5CF6", shadow: "rgba(139,92,246,0.15)" },
+  teal:   { bg: "rgba(20,184,166,0.07)",  border: "rgba(20,184,166,0.18)",  text: "#14B8A6", shadow: "rgba(20,184,166,0.15)" },
+};
+
+const RGB: Record<string, string> = {
+  "#EF4444": "239,68,68", "#F59E0B": "245,158,11", "#10B981": "16,185,129",
+  "#00D4FF": "0,212,255", "#3B82F6": "59,130,246", "#F97316": "249,115,22",
+};
+const pillStyle = (hex: string) => ({
+  background: `rgba(${RGB[hex]},0.1)`,
+  border: `1px solid rgba(${RGB[hex]},0.2)`,
+  color: hex,
+});
+
+const inputClass = [
+  "w-full px-3 py-2 rounded-xl text-sm text-white placeholder:text-white/30",
+  "outline-none transition-all",
+  "border focus:border-cyan-500/50 focus:shadow-[0_0_0_2px_rgba(0,212,255,0.08)]",
+].join(" ");
+const inputStyle = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" };
+
+const primaryBtn =
+  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
+const primaryBtnStyle = {
+  background: "linear-gradient(135deg, rgba(0,212,255,0.25), rgba(0,100,160,0.2))",
+  border: "1px solid rgba(0,212,255,0.3)",
+};
+const ghostBtn =
+  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm text-white/50 hover:text-white/80 transition-colors";
+const ghostBtnStyle = { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" };
+
+const tooltipStyle = {
+  backgroundColor: "rgba(4,11,25,0.95)",
+  border: "1px solid rgba(0,212,255,0.15)",
+  borderRadius: "12px",
+  color: "#e2e8f0",
+  fontSize: "12px",
+  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+};
+
 const CATEGORY_MODULE: Record<string, { href: string; label: string; icon: any; color: string }> = {
-  Financial: { href: "/cost",       label: "Cost Module",  icon: DollarSign, color: "text-blue-400 bg-blue-500/10 border-blue-500/20" },
-  Schedule:  { href: "/scheduling", label: "Schedule",     icon: Calendar,   color: "text-yellow-400 bg-yellow-500/10 border-yellow-500/20" },
-  Equipment: { href: "/equipment",  label: "Equipment",    icon: Wrench,     color: "text-orange-400 bg-orange-500/10 border-orange-500/20" },
-  Safety:    { href: "/safety",     label: "Safety",       icon: Shield,     color: "text-red-400 bg-red-500/10 border-red-500/20" },
-  Workforce: { href: "/workforce",  label: "Workforce",    icon: Users,      color: "text-cyan-400 bg-cyan-500/10 border-cyan-500/20" },
-  General:   { href: "/dashboard",  label: "Dashboard",    icon: CheckCircle,color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" },
+  Financial: { href: "/cost",       label: "Cost Module",  icon: DollarSign, color: "text-[#3B82F6] bg-[rgba(59,130,246,0.1)] border-[rgba(59,130,246,0.2)]" },
+  Schedule:  { href: "/scheduling", label: "Schedule",     icon: Calendar,   color: "text-[#F59E0B] bg-[rgba(245,158,11,0.1)] border-[rgba(245,158,11,0.2)]" },
+  Equipment: { href: "/equipment",  label: "Equipment",    icon: Wrench,     color: "text-[#F97316] bg-[rgba(249,115,22,0.1)] border-[rgba(249,115,22,0.2)]" },
+  Safety:    { href: "/safety",     label: "Safety",       icon: Shield,     color: "text-[#EF4444] bg-[rgba(239,68,68,0.1)] border-[rgba(239,68,68,0.2)]" },
+  Workforce: { href: "/workforce",  label: "Workforce",    icon: Users,      color: "text-[#00D4FF] bg-[rgba(0,212,255,0.1)] border-[rgba(0,212,255,0.2)]" },
+  General:   { href: "/dashboard",  label: "Dashboard",    icon: CheckCircle,color: "text-[#10B981] bg-[rgba(16,185,129,0.1)] border-[rgba(16,185,129,0.2)]" },
 };
 
 const detectAnomalies = (
@@ -462,21 +509,19 @@ export default function AnomalyPage() {
   /* ─── styling helpers ─── */
 
   const severityColor: Record<string, string> = {
-    critical: "text-red-400 border-red-500/30 bg-red-500/5",
-    high:     "text-orange-400 border-orange-500/30 bg-orange-500/5",
-    medium:   "text-yellow-400 border-yellow-500/30 bg-yellow-500/5",
-    low:      "text-emerald-400 border-emerald-500/30 bg-emerald-500/5",
+    critical: "text-[#EF4444] border-[rgba(239,68,68,0.3)] bg-[rgba(239,68,68,0.05)]",
+    high:     "text-[#F97316] border-[rgba(249,115,22,0.3)] bg-[rgba(249,115,22,0.05)]",
+    medium:   "text-[#F59E0B] border-[rgba(245,158,11,0.3)] bg-[rgba(245,158,11,0.05)]",
+    low:      "text-[#10B981] border-[rgba(16,185,129,0.3)] bg-[rgba(16,185,129,0.05)]",
   };
   const severityBadge: Record<string, string> = {
-    critical: "bg-red-500/20 text-red-300",
-    high:     "bg-orange-500/20 text-orange-300",
-    medium:   "bg-yellow-500/20 text-yellow-300",
-    low:      "bg-emerald-500/20 text-emerald-300",
+    critical: "bg-[rgba(239,68,68,0.2)] text-[#FCA5A5]",
+    high:     "bg-[rgba(249,115,22,0.2)] text-[#FDBA74]",
+    medium:   "bg-[rgba(245,158,11,0.2)] text-[#FCD34D]",
+    low:      "bg-[rgba(16,185,129,0.2)] text-[#6EE7B7]",
   };
   const severityIcon: Record<string, string>  = { critical: "🚨", high: "⚠️", medium: "⚡", low: "✅" };
   const categoryIcon: Record<string, string>  = { Financial: "💰", Schedule: "📅", Equipment: "🔧", Safety: "🦺", General: "ℹ️" };
-
-  const inputClass = "w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500";
 
   const realAnomalies  = anomalies.filter(a => a.type !== "info");
   const criticalCount  = realAnomalies.filter(a => a.severity === "critical").length;
@@ -497,11 +542,11 @@ export default function AnomalyPage() {
   const projectName = isPortfolio ? `All Projects (${projects.length})` : selectedProject?.name || "Project";
 
   const tabBar = (
-    <div className="flex gap-0 border-b border-border">
+    <div className="flex gap-0 border-b border-white/10">
       {ANOMALY_SUB_TABS.map((t) => (
         <button key={t.id} onClick={() => setSubTab(t.id)}
           className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
-            subTab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-muted-foreground hover:text-foreground"
+            subTab === t.id ? "border-cyan-400 text-[#00D4FF]" : "border-transparent text-white/40 hover:text-white/80"
           }`}>{t.label}</button>
       ))}
     </div>
@@ -524,34 +569,36 @@ export default function AnomalyPage() {
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-4xl font-bold text-foreground">Anomaly Detection</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-4xl font-bold text-white tracking-tight">Anomaly Detection</h1>
+          <p className="text-white/40 text-sm mt-1">
             Real-time cross-module anomaly detection — cost, schedule, equipment, safety
-            {isPortfolio && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400">Portfolio — {projects.length} projects</span>}
+            {isPortfolio && <span className="ml-2 text-xs px-2 py-0.5 rounded-full" style={pillStyle("#00D4FF")}>Portfolio — {projects.length} projects</span>}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
           {projects.length > 0 && (
             <select value={projectId} onChange={(e) => setProjectId(e.target.value)}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none">
+              className="px-3 py-2 rounded-xl text-sm text-white outline-none cursor-pointer transition-all border focus:border-cyan-500/50"
+              style={inputStyle}>
               <option value="all">🌐 All Projects (Portfolio)</option>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           )}
           <button onClick={() => projectId === "all" ? runPortfolioDetection() : runDetection()} disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium">
+            className={primaryBtn} style={primaryBtnStyle}>
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             {loading ? "Scanning…" : "Run Detection"}
           </button>
           {anomalies.length > 0 && (
             <button onClick={() => exportToPDF(anomalies, projectName, isPortfolio)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-secondary border border-border text-sm text-foreground hover:bg-secondary/80">
+              className={ghostBtn} style={ghostBtnStyle}>
               <Download className="w-4 h-4" /> PDF
             </button>
           )}
           {anomalies.length > 0 && !summaryOpen && (
             <button onClick={() => setSummaryOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-sm hover:bg-cyan-500/20 transition-colors">
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm transition-colors"
+              style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}`, color: ACCENT.cyan.text }}>
               <Sparkles className="w-4 h-4" /> AI Summary
             </button>
           )}
@@ -561,9 +608,9 @@ export default function AnomalyPage() {
       {/* Affected Modules */}
       {Object.keys(affectedModules).length > 0 && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-border rounded-2xl p-4">
-          <p className="text-xs font-medium text-muted-foreground mb-3 flex items-center gap-1.5">
-            <AlertTriangle className="w-3.5 h-3.5 text-orange-400" />
+          className="glass-card p-4">
+          <p className="text-xs font-medium text-white/40 mb-3 flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5" style={{ color: ACCENT.orange.text }} />
             Affected Modules — click to investigate
           </p>
           <div className="flex flex-wrap gap-2">
@@ -585,15 +632,16 @@ export default function AnomalyPage() {
 
       {/* Live Data Input (single-project only) */}
       {!isPortfolio && (
-        <div className="bg-card border border-border rounded-2xl p-5">
+        <div className="glass-card p-5">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-yellow-400" />
-              <h3 className="font-semibold text-foreground text-sm">Live Data Input</h3>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400">Updates Supabase → triggers re-detection</span>
+              <Zap className="w-4 h-4" style={{ color: ACCENT.amber.text }} />
+              <h3 className="font-semibold text-white text-sm">Live Data Input</h3>
+              <span className="text-xs px-2 py-0.5 rounded-full" style={pillStyle("#F59E0B")}>Updates Supabase → triggers re-detection</span>
             </div>
             <button onClick={() => setShowDataInput(!showDataInput)}
-              className="text-xs px-3 py-1.5 rounded-xl bg-secondary text-muted-foreground hover:text-foreground border border-border transition-colors">
+              className="text-xs px-3 py-1.5 rounded-xl text-white/50 hover:text-white/80 transition-colors"
+              style={ghostBtnStyle}>
               {showDataInput ? "Hide ▲" : "Enter Data ▼"}
             </button>
           </div>
@@ -604,57 +652,58 @@ export default function AnomalyPage() {
                 exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
                 <div className="pt-4 grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                   <div>
-                    <label className="text-xs text-muted-foreground mb-1.5 block">💰 Amount Spent ($)</label>
+                    <label className="text-xs text-white/40 mb-1.5 block">💰 Amount Spent ($)</label>
                     <input type="number" placeholder={`e.g. ${Math.round((selectedProject?.total_budget || 5000000) * 0.5)}`}
                       value={liveData.spent_to_date}
                       onChange={(e) => setLiveData(d => ({ ...d, spent_to_date: e.target.value }))}
-                      className={inputClass} />
-                    <p className="text-xs text-muted-foreground mt-0.5">Updates project → <Link href="/cost" className="text-blue-400 hover:underline">Cost</Link></p>
+                      className={inputClass} style={inputStyle} />
+                    <p className="text-xs text-white/40 mt-0.5">Updates project → <Link href="/cost" className="text-[#00D4FF] hover:underline">Cost</Link></p>
                   </div>
                   <div>
-                    <label className="text-xs text-muted-foreground mb-1.5 block">📊 Overall Progress (%)</label>
+                    <label className="text-xs text-white/40 mb-1.5 block">📊 Overall Progress (%)</label>
                     <input type="number" min="0" max="100" placeholder="e.g. 45"
                       value={liveData.progress_percentage}
                       onChange={(e) => setLiveData(d => ({ ...d, progress_percentage: e.target.value }))}
-                      className={inputClass} />
-                    <p className="text-xs text-muted-foreground mt-0.5">Updates project → <Link href="/scheduling" className="text-blue-400 hover:underline">Schedule</Link></p>
+                      className={inputClass} style={inputStyle} />
+                    <p className="text-xs text-white/40 mt-0.5">Updates project → <Link href="/scheduling" className="text-[#00D4FF] hover:underline">Schedule</Link></p>
                   </div>
                   <div>
-                    <label className="text-xs text-muted-foreground mb-1.5 block">🔧 Equipment Health (%)</label>
+                    <label className="text-xs text-white/40 mb-1.5 block">🔧 Equipment Health (%)</label>
                     <input type="number" min="0" max="100" placeholder="e.g. 35"
                       value={liveData.equipment_health}
                       onChange={(e) => setLiveData(d => ({ ...d, equipment_health: e.target.value }))}
-                      className={inputClass} />
-                    <p className="text-xs text-muted-foreground mt-0.5">Updates equipment → <Link href="/equipment" className="text-blue-400 hover:underline">Equipment</Link></p>
+                      className={inputClass} style={inputStyle} />
+                    <p className="text-xs text-white/40 mt-0.5">Updates equipment → <Link href="/equipment" className="text-[#00D4FF] hover:underline">Equipment</Link></p>
                   </div>
                   <div>
-                    <label className="text-xs text-muted-foreground mb-1.5 block">🦺 Report New Incident</label>
+                    <label className="text-xs text-white/40 mb-1.5 block">🦺 Report New Incident</label>
                     <select value={liveData.new_incident_severity}
                       onChange={(e) => setLiveData(d => ({ ...d, new_incident_severity: e.target.value }))}
-                      className={inputClass}>
+                      className={inputClass + " cursor-pointer"} style={inputStyle}>
                       <option value="none">None</option>
                       <option value="Minor">Minor Incident</option>
                       <option value="Moderate">Moderate Incident</option>
                       <option value="Severe">Severe Incident</option>
                     </select>
-                    <p className="text-xs text-muted-foreground mt-0.5">Adds to → <Link href="/safety" className="text-blue-400 hover:underline">Safety</Link></p>
+                    <p className="text-xs text-white/40 mt-0.5">Adds to → <Link href="/safety" className="text-[#00D4FF] hover:underline">Safety</Link></p>
                   </div>
                 </div>
 
                 <div className="mb-4">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">⚡ Quick Scenarios:</p>
+                  <p className="text-xs font-medium text-white/40 mb-2">⚡ Quick Scenarios:</p>
                   <div className="flex flex-wrap gap-2">
                     {[
-                      { label: "💸 Cost Overrun", desc: "Spend 30% above expected", action: () => setLiveData(d => ({ ...d, spent_to_date: String(Math.round((selectedProject?.total_budget || 5000000) * 0.8)), progress_percentage: "45" })), color: "hover:border-red-500/30 hover:bg-red-500/5" },
-                      { label: "🔧 Equipment Crisis", desc: "Health drops to critical", action: () => setLiveData(d => ({ ...d, equipment_health: "25" })), color: "hover:border-orange-500/30 hover:bg-orange-500/5" },
-                      { label: "🚨 Safety Alert", desc: "Report severe incident", action: () => setLiveData(d => ({ ...d, new_incident_severity: "Severe" })), color: "hover:border-red-500/30 hover:bg-red-500/5" },
-                      { label: "📅 Schedule Crisis", desc: "Progress lags spend", action: () => setLiveData(d => ({ ...d, spent_to_date: String(Math.round((selectedProject?.total_budget || 5000000) * 0.7)), progress_percentage: "30" })), color: "hover:border-yellow-500/30 hover:bg-yellow-500/5" },
-                      { label: "✅ All Healthy", desc: "Reset to good state", action: () => setLiveData({ spent_to_date: String(Math.round((selectedProject?.total_budget || 5000000) * 0.5)), progress_percentage: "55", equipment_health: "90", new_incident_severity: "none" }), color: "hover:border-emerald-500/30 hover:bg-emerald-500/5" },
+                      { label: "💸 Cost Overrun", desc: "Spend 30% above expected", action: () => setLiveData(d => ({ ...d, spent_to_date: String(Math.round((selectedProject?.total_budget || 5000000) * 0.8)), progress_percentage: "45" })), color: "hover:border-[rgba(239,68,68,0.3)] hover:bg-[rgba(239,68,68,0.05)]" },
+                      { label: "🔧 Equipment Crisis", desc: "Health drops to critical", action: () => setLiveData(d => ({ ...d, equipment_health: "25" })), color: "hover:border-[rgba(249,115,22,0.3)] hover:bg-[rgba(249,115,22,0.05)]" },
+                      { label: "🚨 Safety Alert", desc: "Report severe incident", action: () => setLiveData(d => ({ ...d, new_incident_severity: "Severe" })), color: "hover:border-[rgba(239,68,68,0.3)] hover:bg-[rgba(239,68,68,0.05)]" },
+                      { label: "📅 Schedule Crisis", desc: "Progress lags spend", action: () => setLiveData(d => ({ ...d, spent_to_date: String(Math.round((selectedProject?.total_budget || 5000000) * 0.7)), progress_percentage: "30" })), color: "hover:border-[rgba(245,158,11,0.3)] hover:bg-[rgba(245,158,11,0.05)]" },
+                      { label: "✅ All Healthy", desc: "Reset to good state", action: () => setLiveData({ spent_to_date: String(Math.round((selectedProject?.total_budget || 5000000) * 0.5)), progress_percentage: "55", equipment_health: "90", new_incident_severity: "none" }), color: "hover:border-[rgba(16,185,129,0.3)] hover:bg-[rgba(16,185,129,0.05)]" },
                     ].map((s, i) => (
                       <button key={i} onClick={s.action}
-                        className={`flex flex-col items-start px-3 py-2 rounded-xl bg-secondary border border-border ${s.color} transition-colors text-left`}>
-                        <span className="text-xs font-medium text-foreground">{s.label}</span>
-                        <span className="text-xs text-muted-foreground">{s.desc}</span>
+                        className={`flex flex-col items-start px-3 py-2 rounded-xl border ${s.color} transition-colors text-left`}
+                        style={{ background: "rgba(255,255,255,0.03)", borderColor: "rgba(255,255,255,0.08)" }}>
+                        <span className="text-xs font-medium text-white">{s.label}</span>
+                        <span className="text-xs text-white/40">{s.desc}</span>
                       </button>
                     ))}
                   </div>
@@ -662,9 +711,9 @@ export default function AnomalyPage() {
 
                 <div className="flex gap-3">
                   <button onClick={() => setShowDataInput(false)}
-                    className="px-4 py-2 rounded-xl bg-secondary text-muted-foreground text-sm hover:text-foreground">Cancel</button>
+                    className={ghostBtn} style={ghostBtnStyle}>Cancel</button>
                   <button onClick={handleSaveLiveData} disabled={savingData}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium">
+                    className={primaryBtn} style={primaryBtnStyle}>
                     {savingData ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                     {savingData ? "Saving & Detecting…" : "Save to DB & Run Detection"}
                   </button>
@@ -677,14 +726,14 @@ export default function AnomalyPage() {
 
       {loading ? (
         <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
-          <p className="text-muted-foreground text-sm">
+          <Loader2 className="w-8 h-8 animate-spin" style={{ color: ACCENT.cyan.text }} />
+          <p className="text-white/40 text-sm">
             {isPortfolio ? `Scanning ${projects.length} projects for anomalies…` : "Scanning Supabase data for anomalies…"}
           </p>
           {isPortfolio && (
             <div className="flex gap-2 flex-wrap justify-center">
               {projects.slice(0, 5).map(p => (
-                <span key={p.id} className="text-xs px-2 py-1 rounded-full bg-cyan-500/10 text-cyan-400 animate-pulse">{p.name}</span>
+                <span key={p.id} className="text-xs px-2 py-1 rounded-full animate-pulse" style={pillStyle("#00D4FF")}>{p.name}</span>
               ))}
             </div>
           )}
@@ -694,128 +743,135 @@ export default function AnomalyPage() {
           {/* KPI Summary */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { label: "Total Anomalies",  value: realAnomalies.length, icon: AlertTriangle, color: "border-blue-500/20 bg-blue-500/5",    iconColor: "text-blue-400" },
-              { label: "Critical",         value: criticalCount,        icon: AlertTriangle, color: "border-red-500/20 bg-red-500/5",       iconColor: "text-red-400" },
-              { label: "High Severity",    value: highCount,            icon: AlertTriangle, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400" },
-              { label: "Medium",           value: mediumCount,          icon: CheckCircle,   color: "border-yellow-500/20 bg-yellow-500/5", iconColor: "text-yellow-400" },
-            ].map((kpi, i) => (
-              <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.1 }} whileHover={{ y: -2 }}
-                className={`rounded-2xl border p-5 ${kpi.color}`}>
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm text-muted-foreground">{kpi.label}</p>
-                  <kpi.icon className={`w-4 h-4 ${kpi.iconColor}`} />
-                </div>
-                <p className="text-2xl font-bold text-foreground">{kpi.value}</p>
-              </motion.div>
-            ))}
+              { label: "Total Anomalies",  value: realAnomalies.length, icon: AlertTriangle, accent: "cyan" },
+              { label: "Critical",         value: criticalCount,        icon: AlertTriangle, accent: "red" },
+              { label: "High Severity",    value: highCount,            icon: AlertTriangle, accent: "orange" },
+              { label: "Medium",           value: mediumCount,          icon: CheckCircle,   accent: "amber" },
+            ].map((kpi, i) => {
+              const a = ACCENT[kpi.accent];
+              return (
+                <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.1 }} whileHover={{ y: -4, scale: 1.02 }}
+                  className="glass-card p-5 group relative overflow-hidden"
+                  style={{ borderColor: a.border }}>
+                  <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity"
+                    style={{ background: `radial-gradient(ellipse at top left, ${a.bg}, transparent 70%)` }} />
+                  <div className="relative flex items-center justify-between mb-2">
+                    <p className="text-sm text-white/40">{kpi.label}</p>
+                    <kpi.icon className="w-4 h-4" style={{ color: a.text }} />
+                  </div>
+                  <p className="relative text-2xl font-bold text-white">{kpi.value}</p>
+                </motion.div>
+              );
+            })}
           </div>
 
           {/* AI Verbose Summary */}
           {summaryOpen && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-            className="bg-card border border-cyan-500/20 rounded-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-border/50">
+            className="glass-card overflow-hidden" style={{ borderColor: ACCENT.cyan.border }}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/6">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
-                  <Sparkles className="w-4 h-4 text-cyan-400" />
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                  style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}` }}>
+                  <Sparkles className="w-4 h-4" style={{ color: ACCENT.cyan.text }} />
                 </div>
                 <div>
-                  <p className="font-semibold text-foreground text-sm">AI Anomaly Intelligence Summary</p>
-                  <p className="text-xs text-muted-foreground">Verbose technical explanation of all detected anomalies</p>
+                  <p className="font-semibold text-white text-sm">AI Anomaly Intelligence Summary</p>
+                  <p className="text-xs text-white/40">Verbose technical explanation of all detected anomalies</p>
                 </div>
                 {criticalCount > 0 && (
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full text-red-400 border-red-500/30 bg-red-500/5 border">
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full border" style={pillStyle("#EF4444")}>
                     {criticalCount} Critical
                   </span>
                 )}
               </div>
               <button onClick={() => setSummaryOpen(false)}
-                className="p-1.5 rounded-lg hover:bg-secondary/50 transition-colors">
-                <X className="w-4 h-4 text-muted-foreground" />
+                className="p-1.5 rounded-lg hover:bg-white/5 transition-colors">
+                <X className="w-4 h-4 text-white/40" />
               </button>
             </div>
             <div className="px-6 pb-6 space-y-5 text-sm leading-relaxed">
 
                     <div className="pt-5">
-                      <p className="font-bold text-base text-foreground mb-2">Anomaly Detection Summary</p>
-                      <p className="text-muted-foreground">
+                      <p className="font-bold text-base text-white mb-2">Anomaly Detection Summary</p>
+                      <p className="text-white/70">
                         CivilAI's anomaly detection engine scanned{" "}
-                        <strong className="text-foreground">{isPortfolio ? `${projects.length} projects` : selectedProject?.name}</strong>{" "}
-                        and identified <strong className="text-foreground">{realAnomalies.length} anomalies</strong> across
+                        <strong className="text-white">{isPortfolio ? `${projects.length} projects` : selectedProject?.name}</strong>{" "}
+                        and identified <strong className="text-white">{realAnomalies.length} anomalies</strong> across
                         four construction management domains. The detection engine performs{" "}
-                        <strong className="text-foreground">statistical deviation analysis</strong> — comparing actual project
+                        <strong className="text-white">statistical deviation analysis</strong> — comparing actual project
                         metrics against expected baselines derived from project progress, industry benchmarks, and
                         historical patterns.{" "}
                         {criticalCount > 0 && (
                           <><strong className="text-red-400">{criticalCount} critical anomalies</strong> require immediate attention.</>
                         )}
                         {" "}The most severe issues affect:{" "}
-                        <strong className="text-foreground">{Object.keys(affectedModules).join(", ") || "no modules"}</strong>.
+                        <strong className="text-white">{Object.keys(affectedModules).join(", ") || "no modules"}</strong>.
                       </p>
                     </div>
 
                     {realAnomalies.filter(a => a.severity === "critical" || a.severity === "high").map((anomaly, i) => (
                       <div key={i} className={`p-4 rounded-xl border ${severityColor[anomaly.severity]}`}>
-                        <p className="font-bold text-foreground mb-2 flex items-center gap-2">
+                        <p className="font-bold text-white mb-2 flex items-center gap-2">
                           <span>{severityIcon[anomaly.severity]}</span>
                           {anomaly.title}
                           <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${severityBadge[anomaly.severity]}`}>
                             {anomaly.severity}
                           </span>
                           {anomaly.projectName && (
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-secondary text-muted-foreground">{anomaly.projectName}</span>
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/40">{anomaly.projectName}</span>
                           )}
                         </p>
-                        <p className="text-muted-foreground mb-2">{anomaly.description}</p>
-                        <p className="text-muted-foreground">
+                        <p className="text-white/70 mb-2">{anomaly.description}</p>
+                        <p className="text-white/70">
                           {anomaly.type === "cost" && (
-                            <>The <strong className="text-foreground">cost variance anomaly</strong> indicates a{" "}
-                              <strong className="text-foreground">{Math.abs(anomaly.deviation)}% deviation</strong> between actual
+                            <>The <strong className="text-white">cost variance anomaly</strong> indicates a{" "}
+                              <strong className="text-white">{Math.abs(anomaly.deviation)}% deviation</strong> between actual
                               spend and expected spend at current project progress. This suggests{" "}
                               {anomaly.deviation > 0
                                 ? <>accelerated spending relative to progress — a leading indicator of{" "}
-                                  <strong className="text-foreground">budget overrun</strong>. Review procurement pipeline,
+                                  <strong className="text-white">budget overrun</strong>. Review procurement pipeline,
                                   approve only critical change orders, and enforce cost controls immediately.</>
                                 : <>lagging spend relative to progress — potentially indicating{" "}
-                                  <strong className="text-foreground">scope under-delivery</strong> or delayed billing.
+                                  <strong className="text-white">scope under-delivery</strong> or delayed billing.
                                   Verify activity completion records and invoice status.</>
                               }
                             </>
                           )}
                           {anomaly.type === "schedule" && (
-                            <>The <strong className="text-foreground">schedule anomaly</strong> indicates{" "}
-                              <strong className="text-foreground">{Math.abs(anomaly.deviation)}% deviation</strong> from expected
+                            <>The <strong className="text-white">schedule anomaly</strong> indicates{" "}
+                              <strong className="text-white">{Math.abs(anomaly.deviation)}% deviation</strong> from expected
                               task completion rates. Schedule anomalies compound through{" "}
-                              <strong className="text-foreground">critical path dependencies</strong> — a 30% task delay rate
+                              <strong className="text-white">critical path dependencies</strong> — a 30% task delay rate
                               can shift overall project completion by 3–8 weeks. Immediate intervention:{" "}
                               resource augmentation, activity compression, or scope re-sequencing on critical path activities.</>
                           )}
                           {anomaly.type === "equipment" && (
-                            <>The <strong className="text-foreground">equipment anomaly</strong> signals{" "}
+                            <>The <strong className="text-white">equipment anomaly</strong> signals{" "}
                               {anomaly.id.includes("equip-1")
-                                ? <>units below the <strong className="text-foreground">50% health threshold</strong>.
+                                ? <>units below the <strong className="text-white">50% health threshold</strong>.
                                   Equipment at this health level has a statistically elevated failure probability.
                                   Failure events on critical-path machinery create cascading schedule delays at a mean rate
-                                  of <strong className="text-foreground">3.2 days per event</strong>. Schedule immediate
+                                  of <strong className="text-white">3.2 days per event</strong>. Schedule immediate
                                   preventive maintenance and establish equipment backup/rental contingencies.</>
-                                : <>units exceeding <strong className="text-foreground">8,000 operating hours</strong> — the
+                                : <>units exceeding <strong className="text-white">8,000 operating hours</strong> — the
                                   industry threshold for major service intervals. Extended operation beyond this threshold
                                   significantly increases failure probability and can void warranty coverage.</>
                               }
                             </>
                           )}
                           {anomaly.type === "safety" && (
-                            <>The <strong className="text-foreground">safety anomaly</strong> indicates{" "}
+                            <>The <strong className="text-white">safety anomaly</strong> indicates{" "}
                               {anomaly.id.includes("safety-1")
                                 ? <>multiple severe incidents, which is a statistically significant safety failure pattern.
                                   This triggers mandatory{" "}
-                                  <strong className="text-foreground">regulatory notification obligations</strong> in most
+                                  <strong className="text-white">regulatory notification obligations</strong> in most
                                   jurisdictions. Required actions: immediate site work stoppage assessment,{" "}
-                                  <strong className="text-foreground">root cause analysis (RCA)</strong>, toolbox talks,
+                                  <strong className="text-white">root cause analysis (RCA)</strong>, toolbox talks,
                                   enhanced supervision, and corrective action plan within 24 hours.</>
                                 : <>high numbers of unresolved incidents indicating a systemic gap in the{" "}
-                                  <strong className="text-foreground">incident resolution process</strong>. Open incidents
+                                  <strong className="text-white">incident resolution process</strong>. Open incidents
                                   represent ongoing regulatory liability. Assign dedicated resolution owners and establish
                                   48-hour closure SLAs for all open safety records.</>
                               }
@@ -825,22 +881,22 @@ export default function AnomalyPage() {
                       </div>
                     ))}
 
-                    <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5">
-                      <p className="font-bold text-foreground mb-2 flex items-center gap-2">
-                        <BarChart2 className="w-4 h-4 text-blue-400" />
+                    <div className="p-4 rounded-xl border" style={{ background: ACCENT.blue.bg, borderColor: ACCENT.blue.border }}>
+                      <p className="font-bold text-white mb-2 flex items-center gap-2">
+                        <BarChart2 className="w-4 h-4" style={{ color: ACCENT.blue.text }} />
                         Detection Methodology
                       </p>
-                      <p className="text-muted-foreground">
+                      <p className="text-white/70">
                         Anomalies are detected by comparing actual project data against{" "}
-                        <strong className="text-foreground">expected baselines</strong>: Financial anomalies trigger when
+                        <strong className="text-white">expected baselines</strong>: Financial anomalies trigger when
                         actual spend deviates from expected spend (based on progress %) by more than{" "}
-                        <strong className="text-foreground">15%</strong>. Schedule anomalies flag when{" "}
-                        <strong className="text-foreground">&gt;30% of tasks</strong> are delayed by 2+ weeks.
-                        Equipment anomalies activate at <strong className="text-foreground">&lt;50% health score</strong>{" "}
-                        or <strong className="text-foreground">&gt;8,000 operating hours</strong>.
+                        <strong className="text-white">15%</strong>. Schedule anomalies flag when{" "}
+                        <strong className="text-white">&gt;30% of tasks</strong> are delayed by 2+ weeks.
+                        Equipment anomalies activate at <strong className="text-white">&lt;50% health score</strong>{" "}
+                        or <strong className="text-white">&gt;8,000 operating hours</strong>.
                         Safety anomalies trigger at{" "}
-                        <strong className="text-foreground">2+ severe/critical incidents</strong> or{" "}
-                        <strong className="text-foreground">&gt;3 unresolved open incidents</strong>.
+                        <strong className="text-white">2+ severe/critical incidents</strong> or{" "}
+                        <strong className="text-white">&gt;3 unresolved open incidents</strong>.
                         {" "}All thresholds are calibrated against construction industry benchmarks.
                         Anomaly history is persisted to Supabase for trend analysis.
                       </p>
@@ -851,12 +907,12 @@ export default function AnomalyPage() {
 
           {/* Anomaly List */}
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-            className="bg-card border border-border rounded-2xl p-6">
+            className="glass-card p-6">
             <div className="flex items-center gap-2 mb-4">
-              <AlertTriangle className="w-5 h-5 text-orange-400" />
-              <h3 className="font-semibold text-foreground">Detected Anomalies</h3>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live from Supabase</span>
-              {isPortfolio && <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 flex items-center gap-1"><Globe className="w-3 h-3" /> Portfolio</span>}
+              <AlertTriangle className="w-5 h-5" style={{ color: ACCENT.orange.text }} />
+              <h3 className="font-semibold text-white">Detected Anomalies</h3>
+              <span className="text-xs px-2 py-0.5 rounded-full" style={pillStyle("#10B981")}>Live from Supabase</span>
+              {isPortfolio && <span className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1" style={pillStyle("#00D4FF")}><Globe className="w-3 h-3" /> Portfolio</span>}
             </div>
             <div className="space-y-3">
               {anomalies.map((anomaly, i) => {
@@ -871,12 +927,12 @@ export default function AnomalyPage() {
                         <span className="text-xl shrink-0">{severityIcon[anomaly.severity]}</span>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <p className="text-sm font-semibold text-foreground">{anomaly.title}</p>
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-secondary text-muted-foreground shrink-0">
+                            <p className="text-sm font-semibold text-white">{anomaly.title}</p>
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/40 shrink-0">
                               {categoryIcon[anomaly.category]} {anomaly.category}
                             </span>
                             {anomaly.projectName && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 shrink-0">
+                              <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={pillStyle("#00D4FF")}>
                                 {anomaly.projectName}
                               </span>
                             )}
@@ -887,11 +943,11 @@ export default function AnomalyPage() {
                               </Link>
                             )}
                           </div>
-                          <p className="text-xs text-muted-foreground">{anomaly.description}</p>
+                          <p className="text-xs text-white/40">{anomaly.description}</p>
                           {anomaly.deviation !== 0 && anomaly.type !== "info" && (
                             <div className="flex items-center gap-3 mt-2">
-                              <span className="text-xs text-muted-foreground shrink-0">{Math.abs(anomaly.deviation)}% deviation</span>
-                              <div className="flex-1 bg-secondary/50 rounded-full h-1.5">
+                              <span className="text-xs text-white/40 shrink-0">{Math.abs(anomaly.deviation)}% deviation</span>
+                              <div className="flex-1 bg-white/5 rounded-full h-1.5">
                                 <motion.div
                                   initial={{ width: 0 }}
                                   animate={{ width: `${Math.min(Math.abs(anomaly.deviation), 100)}%` }}
@@ -914,27 +970,27 @@ export default function AnomalyPage() {
           {/* Charts */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
-              className="bg-card border border-border rounded-2xl p-6">
-              <h3 className="font-semibold text-foreground mb-1">Anomaly Trend</h3>
-              <p className="text-xs text-muted-foreground mb-4">Weekly count from anomaly_history table</p>
+              className="glass-card p-6">
+              <h3 className="font-semibold text-white mb-1">Anomaly Trend</h3>
+              <p className="text-xs text-white/40 mb-4">Weekly count from anomaly_history table</p>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={trendData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                  <XAxis dataKey="week" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
-                  <ReferenceLine y={3} stroke="#ef444440" strokeDasharray="3 3" />
-                  <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
-                  <Line type="monotone" dataKey="cost"      stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} name="Cost" />
-                  <Line type="monotone" dataKey="schedule"  stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} name="Schedule" />
-                  <Line type="monotone" dataKey="safety"    stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} name="Safety" />
-                  <Line type="monotone" dataKey="equipment" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} name="Equipment" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                  <XAxis dataKey="week" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <ReferenceLine y={3} stroke="rgba(239,68,68,0.25)" strokeDasharray="3 3" />
+                  <Tooltip contentStyle={tooltipStyle} />
+                  <Line type="monotone" dataKey="cost"      stroke="#3B82F6" strokeWidth={2} dot={{ r: 3 }} name="Cost" />
+                  <Line type="monotone" dataKey="schedule"  stroke="#F59E0B" strokeWidth={2} dot={{ r: 3 }} name="Schedule" />
+                  <Line type="monotone" dataKey="safety"    stroke="#EF4444" strokeWidth={2} dot={{ r: 3 }} name="Safety" />
+                  <Line type="monotone" dataKey="equipment" stroke="#8B5CF6" strokeWidth={2} dot={{ r: 3 }} name="Equipment" />
                 </LineChart>
               </ResponsiveContainer>
               <div className="flex flex-wrap gap-3 mt-2">
-                {[{ color: "bg-blue-400", label: "Cost", href: "/cost" }, { color: "bg-orange-400", label: "Schedule", href: "/scheduling" }, { color: "bg-red-400", label: "Safety", href: "/safety" }, { color: "bg-amber-400", label: "Equipment", href: "/equipment" }].map(l => (
+                {[{ color: "#3B82F6", label: "Cost", href: "/cost" }, { color: "#F97316", label: "Schedule", href: "/scheduling" }, { color: "#EF4444", label: "Safety", href: "/safety" }, { color: "#F59E0B", label: "Equipment", href: "/equipment" }].map(l => (
                   <Link key={l.label} href={l.href} className="flex items-center gap-1.5 hover:opacity-70 transition-opacity">
-                    <div className={`w-2 h-2 rounded-full ${l.color}`} />
-                    <span className="text-xs text-muted-foreground">{l.label}</span>
+                    <div className="w-2 h-2 rounded-full" style={{ background: l.color }} />
+                    <span className="text-xs text-white/40">{l.label}</span>
                   </Link>
                 ))}
               </div>
@@ -942,34 +998,34 @@ export default function AnomalyPage() {
 
             {!isPortfolio && (
               <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
-                className="bg-card border border-border rounded-2xl p-6">
-                <h3 className="font-semibold text-foreground mb-1">Schedule Anomaly Scatter</h3>
-                <p className="text-xs text-muted-foreground mb-4">
-                  Planned vs Actual progress — <span className="text-red-400">red</span> = &gt;20% deviation
+                className="glass-card p-6">
+                <h3 className="font-semibold text-white mb-1">Schedule Anomaly Scatter</h3>
+                <p className="text-xs text-white/40 mb-4">
+                  Planned vs Actual progress — <span className="text-[#EF4444]">red</span> = &gt;20% deviation
                 </p>
                 {scatterData.length === 0 ? (
                   <div className="flex items-center justify-center h-50">
-                    <p className="text-xs text-muted-foreground">No schedule tasks for this project</p>
+                    <p className="text-xs text-white/40">No schedule tasks for this project</p>
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height={200}>
                     <ScatterChart>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                      <XAxis dataKey="x" name="Planned" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} unit="%" domain={[0, 100]} label={{ value: "Planned %", position: "insideBottomRight", offset: 0, fill: "#6b7280", fontSize: 9 }} />
-                      <YAxis dataKey="y" name="Actual"  tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} unit="%" domain={[0, 100]} />
-                      <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} formatter={(v: any, name: string) => [`${v}%`, name]} />
-                      <ReferenceLine segment={[{ x: 0, y: 0 }, { x: 100, y: 100 }]} stroke="#ffffff15" strokeDasharray="4 4" />
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                      <XAxis dataKey="x" name="Planned" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} unit="%" domain={[0, 100]} label={{ value: "Planned %", position: "insideBottomRight", offset: 0, fill: "rgba(255,255,255,0.3)", fontSize: 9 }} />
+                      <YAxis dataKey="y" name="Actual"  tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} unit="%" domain={[0, 100]} />
+                      <Tooltip contentStyle={tooltipStyle} formatter={(v: any, name: string) => [`${v}%`, name]} />
+                      <ReferenceLine segment={[{ x: 0, y: 0 }, { x: 100, y: 100 }]} stroke="rgba(255,255,255,0.08)" strokeDasharray="4 4" />
                       <Scatter data={scatterData} name="Tasks">
                         {scatterData.map((entry, i) => (
-                          <Cell key={i} fill={entry.anomaly ? "#ef4444" : "#10b981"} fillOpacity={0.8} />
+                          <Cell key={i} fill={entry.anomaly ? "#EF4444" : "#10B981"} fillOpacity={0.8} />
                         ))}
                       </Scatter>
                     </ScatterChart>
                   </ResponsiveContainer>
                 )}
                 <div className="flex gap-4 mt-2">
-                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-400" /><span className="text-xs text-muted-foreground">On Track</span></div>
-                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-400" /><span className="text-xs text-muted-foreground">Anomaly (&gt;20% gap)</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full" style={{ background: "#10B981" }} /><span className="text-xs text-white/40">On Track</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full" style={{ background: "#EF4444" }} /><span className="text-xs text-white/40">Anomaly (&gt;20% gap)</span></div>
                 </div>
               </motion.div>
             )}
@@ -977,11 +1033,12 @@ export default function AnomalyPage() {
         </>
       ) : (
         <div className="text-center py-20">
-          <Zap className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-          <p className="text-lg font-medium text-foreground mb-2">Ready to Scan</p>
-          <p className="text-sm text-muted-foreground mb-6">Select a project or All Projects and run detection</p>
+          <Zap className="w-16 h-16 text-white/25 mx-auto mb-4" />
+          <p className="text-lg font-medium text-white mb-2">Ready to Scan</p>
+          <p className="text-sm text-white/40 mb-6">Select a project or All Projects and run detection</p>
           <button onClick={() => projectId === "all" ? runPortfolioDetection() : runDetection()}
-            className="px-6 py-3 rounded-xl gradient-blue text-white font-medium flex items-center gap-2 mx-auto">
+            className="flex items-center gap-2 px-6 py-3 rounded-xl text-white font-medium mx-auto transition-all hover:scale-105"
+            style={primaryBtnStyle}>
             <Zap className="w-4 h-4" /> Run Detection
           </button>
         </div>

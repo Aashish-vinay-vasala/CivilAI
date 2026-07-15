@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import {
-  AlertTriangle, Upload, Loader2, Plus, Pencil, Trash2, Check, X, RefreshCw,
+  AlertTriangle, Upload, Loader2, Plus, Pencil, Trash2, Check, X,
 } from "lucide-react";
 import axios from "axios";
 import { toast } from "sonner";
@@ -18,12 +18,7 @@ interface PriceEntry {
   price: number;
   unit: string;
   change_pct: number;
-  source: "manual" | "ai_extracted" | "structured_parse" | "live_sync";
-  // "quote" = a real $/unit price (manual entry or document extraction).
-  // "index" = a live market index point from FRED — a different scale entirely,
-  // never comparable to a quote for the same material. A material can have both
-  // rows at once; they're rendered as separate lines, never merged.
-  basis: "quote" | "index";
+  source: "manual" | "ai_extracted" | "structured_parse";
   fetched_at: string;
   notes?: string | null;
 }
@@ -37,26 +32,13 @@ interface ExtractedRow {
   approved: boolean;
 }
 
-// Materials sync every 24h by default (backend MATERIAL_PRICE_SYNC_INTERVAL_HOURS) —
-// used only to decide whether to still call a live_sync entry "Live" or "Stale".
-const SYNC_FRESHNESS_HOURS = 30;
-
 function riskFromChange(changePct: number) {
   return Math.min(Math.round(Math.abs(changePct) * 10), 100);
-}
-
-function timeAgo(iso: string) {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const hours = diffMs / 3_600_000;
-  if (hours < 1) return "just now";
-  if (hours < 24) return `${Math.round(hours)}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
 }
 
 export default function MaterialPricesPanel() {
   const [prices, setPrices] = useState<PriceEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ price: "", unit: "", notes: "" });
@@ -87,28 +69,6 @@ export default function MaterialPricesPanel() {
   }, []);
 
   useEffect(() => { fetchPrices(); }, [fetchPrices]);
-
-  const latestLiveSync = prices
-    .filter((p) => p.source === "live_sync")
-    .sort((a, b) => new Date(b.fetched_at).getTime() - new Date(a.fetched_at).getTime())[0];
-  const liveIsFresh = latestLiveSync
-    && (Date.now() - new Date(latestLiveSync.fetched_at).getTime()) / 3_600_000 < SYNC_FRESHNESS_HOURS;
-
-  const handleSyncNow = async () => {
-    setSyncing(true);
-    try {
-      const res = await axios.post(`${API}/api/v1/material-prices/sync`);
-      const { updated = [], skipped = [] } = res.data;
-      if (updated.length > 0) toast.success(`Synced ${updated.length} material${updated.length !== 1 ? "s" : ""} from live market data`);
-      if (skipped.length > 0) toast.error(`Could not sync: ${skipped.join(", ")} — check FRED_API_KEY is configured`);
-      fetchPrices();
-    } catch (err) {
-      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
-      toast.error(detail || "Sync failed");
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const startEdit = (p: PriceEntry) => {
     setEditingId(p.id);
@@ -240,18 +200,6 @@ export default function MaterialPricesPanel() {
         <div className="flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-400" />
           <h3 className="font-semibold text-white text-[14px]">Material Price Risk</h3>
-          {latestLiveSync ? (
-            <span className="text-[11px] px-2 py-0.5 rounded-full"
-              style={liveIsFresh
-                ? { background: ACCENT.green.bg, border: `1px solid ${ACCENT.green.border}`, color: ACCENT.green.text }
-                : { background: ACCENT.amber.bg, border: `1px solid ${ACCENT.amber.border}`, color: ACCENT.amber.text }}>
-              {liveIsFresh ? "Live Market Data" : "Live data (stale)"} · synced {timeAgo(latestLiveSync.fetched_at)}
-            </span>
-          ) : (
-            <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.5)" }}>
-              Manual / Estimated
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-1.5">
           <button onClick={() => setManualOpen(true)}
@@ -263,10 +211,6 @@ export default function MaterialPricesPanel() {
             className="w-8 h-8 flex items-center justify-center rounded-lg text-white/70 transition-colors" style={glassButtonStyle} title="Upload document">
             {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
           </button>
-          <button onClick={handleSyncNow} disabled={syncing}
-            className="w-8 h-8 flex items-center justify-center rounded-lg text-white/70 transition-colors" style={glassButtonStyle} title="Sync live market data now">
-            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
-          </button>
         </div>
       </div>
 
@@ -276,7 +220,7 @@ export default function MaterialPricesPanel() {
         </div>
       ) : prices.length === 0 ? (
         <div className="text-center py-8 text-white/30 text-[12px]">
-          No material prices yet — add one manually, upload a document, or sync live data.
+          No material prices yet — add one manually or upload a document.
         </div>
       ) : (
         <div className="space-y-3">
@@ -303,10 +247,6 @@ export default function MaterialPricesPanel() {
                   <div className="flex items-center gap-3">
                     <div className="w-24 shrink-0 min-w-0">
                       <p className="text-[13px] text-white/70 truncate" title={p.material}>{p.material}</p>
-                      <span className="text-[9px] uppercase tracking-wide"
-                        style={{ color: p.basis === "index" ? ACCENT.blue.text : "rgba(255,255,255,0.3)" }}>
-                        {p.basis === "index" ? "market index" : "quoted"}
-                      </span>
                     </div>
                     <div className="flex-1 h-2 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
                       <motion.div
@@ -315,9 +255,11 @@ export default function MaterialPricesPanel() {
                         style={{ background: risk > 80 ? ACCENT.red.text : risk > 60 ? ACCENT.amber.text : ACCENT.green.text }}
                       />
                     </div>
-                    <span className="text-[11px] text-white/35 w-8 text-right shrink-0">{risk}%</span>
+                    <span className="text-[11px] text-white/35 w-14 text-right shrink-0" title={`Risk score ${risk}/100`}>
+                      {p.change_pct > 0 ? "+" : ""}{p.change_pct.toFixed(1)}%
+                    </span>
                     <span className="text-[11px] font-medium text-white/70 w-24 text-right shrink-0">
-                      {p.basis === "index" ? `${Number(p.price).toFixed(1)} idx` : `$${Number(p.price).toFixed(2)}/${p.unit}`}
+                      ${Number(p.price).toFixed(2)}/{p.unit}
                     </span>
                     <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button onClick={() => startEdit(p)} className="p-1 rounded-lg hover:bg-cyan-500/20 text-cyan-400"><Pencil className="w-3.5 h-3.5" /></button>

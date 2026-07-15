@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import sys
-from contextlib import asynccontextmanager
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -18,47 +17,10 @@ setup_all()   # boot LangSmith tracing + OTel before the app object is created
 
 logger = logging.getLogger("civilai.main")
 
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    scheduler = None
-    if settings.MATERIAL_PRICE_SYNC_ENABLED and settings.FRED_API_KEY:
-        from apscheduler.schedulers.asyncio import AsyncIOScheduler
-        from app.services.material_price_sync import sync_all_material_prices
-
-        async def _run_sync():
-            try:
-                result = await sync_all_material_prices()
-                logger.info("Material price sync completed: %s", result)
-            except Exception:
-                logger.exception("Scheduled material price sync failed")
-
-        scheduler = AsyncIOScheduler()
-        scheduler.add_job(
-            _run_sync,
-            "interval",
-            hours=settings.MATERIAL_PRICE_SYNC_INTERVAL_HOURS,
-            id="material_price_sync",
-        )
-        scheduler.start()
-        logger.info(
-            "Material price sync scheduler started (every %sh)",
-            settings.MATERIAL_PRICE_SYNC_INTERVAL_HOURS,
-        )
-    elif settings.MATERIAL_PRICE_SYNC_ENABLED and not settings.FRED_API_KEY:
-        logger.warning("MATERIAL_PRICE_SYNC_ENABLED is true but FRED_API_KEY is unset — sync will not run")
-
-    yield
-
-    if scheduler:
-        scheduler.shutdown(wait=False)
-
-
 app = FastAPI(
     title="CivilAI API",
     description="AI-Powered Construction Management Platform",
     version="1.0.0",
-    lifespan=lifespan,
 )
 
 _origins = settings.get_origins()

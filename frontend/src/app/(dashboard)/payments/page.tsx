@@ -17,6 +17,8 @@ import {
   Trash2,
   ChevronDown,
   Upload,
+  Pencil,
+  Check,
 } from "lucide-react";
 import {
   BarChart,
@@ -75,6 +77,20 @@ function fmtMoney(v: number) {
   return `$${v.toFixed(0)}`;
 }
 
+// FastAPI 422s send `detail` as a list of {type, loc, msg, input} objects rather
+// than a string — passing that straight to toast.error() renders raw objects as
+// a React child and crashes the page, so always coerce to a plain string first.
+function errorDetail(err: unknown): string | undefined {
+  if (!axios.isAxiosError(err)) return undefined;
+  const detail = err.response?.data?.detail;
+  if (!detail) return undefined;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ");
+  }
+  return JSON.stringify(detail);
+}
+
 
 export default function PaymentsPage({ projectId: filterProjectId }: { projectId?: string } = {}) {
   const { triggerRefresh } = useDataRefreshStore();
@@ -115,6 +131,15 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
   const [extractedInvoices, setExtractedInvoices] = useState<any[]>([]);
   const [extractLoading, setExtractLoading]       = useState(false);
   const [addingExtracted, setAddingExtracted]     = useState<string | null>(null);
+  const [editingExtractedIdx, setEditingExtractedIdx] = useState<number | null>(null);
+  const [editExtractedForm, setEditExtractedForm] = useState({
+    invoice_number: "",
+    contractor: "",
+    amount: "",
+    due_date: "",
+    status: "pending" as InvoiceStatus,
+    description: "",
+  });
   const extractFileRef = useRef<HTMLInputElement>(null);
 
   const [cashflowForm, setCashflowForm] = useState({
@@ -125,15 +150,14 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
 
   useEffect(() => { fetchPayments(); }, [filterProjectId]);
 
-  // Only needed in the standalone page (embedded-as-tab callers already have a
-  // project chosen by their parent) — used for the Add Invoice project picker
-  // and for assigning a project to legacy invoices that were created without one.
+  // Used for the Add Invoice project picker and for assigning/reassigning a
+  // project on invoices — including legacy ones created without one, which can
+  // surface even inside a project-scoped view (see fetchPayments below).
   useEffect(() => {
-    if (filterProjectId) return;
     axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`)
       .then((res) => setAllProjects(res.data.projects || []))
       .catch(() => setAllProjects([]));
-  }, [filterProjectId]);
+  }, []);
 
   const fetchPayments = async () => {
     setDataLoading(true);
@@ -176,8 +200,8 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
       setAddForm({ invoice_number: "", contractor: "", amount: "", due_date: "", status: "pending", description: "", project_id: "" });
       fetchPayments();
       triggerRefresh("payments");
-    } catch {
-      toast.error("Failed to add invoice");
+    } catch (err) {
+      toast.error(errorDetail(err) || "Failed to add invoice");
     } finally {
       setAddLoading(false);
     }
@@ -349,13 +373,17 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
       toast.success(`Invoice ${inv.invoice_number} added`);
       fetchPayments();
       triggerRefresh("payments");
-    } catch { toast.error(`Failed to add invoice`); }
+    } catch (err) {
+      toast.error(errorDetail(err) || "Failed to add invoice");
+    }
     finally { setAddingExtracted(null); }
   };
 
   const addAllExtractedInvoices = async () => {
     setAddingExtracted("all");
     let added = 0;
+    let lastError: string | undefined;
+    const failed: any[] = [];
     for (const inv of extractedInvoices) {
       try {
         await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/payments/invoices`, {
@@ -363,13 +391,50 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
           ...(filterProjectId ? { project_id: filterProjectId } : {}),
         });
         added++;
-      } catch { /* skip */ }
+      } catch (err) {
+        lastError = errorDetail(err);
+        failed.push(inv);
+      }
     }
-    setExtractedInvoices([]);
-    toast.success(`Added ${added} invoice(s)`);
+    // Keep failed entries in the review list so nothing silently disappears.
+    setExtractedInvoices(failed);
+    if (added > 0) toast.success(`Added ${added} invoice(s)`);
+    if (failed.length > 0) toast.error(lastError || `Failed to add ${failed.length} invoice(s)`);
     fetchPayments();
     if (added > 0) triggerRefresh("payments");
     setAddingExtracted(null);
+  };
+
+  const startEditExtracted = (inv: any, idx: number) => {
+    setEditingExtractedIdx(idx);
+    setEditExtractedForm({
+      invoice_number: inv.invoice_number || "",
+      contractor: inv.contractor || "",
+      amount: String(inv.amount ?? ""),
+      due_date: inv.due_date || "",
+      status: (inv.status || "pending") as InvoiceStatus,
+      description: inv.description || "",
+    });
+  };
+
+  const cancelEditExtracted = () => setEditingExtractedIdx(null);
+
+  const saveEditExtracted = (idx: number) => {
+    setExtractedInvoices(prev => prev.map((inv, i) => i === idx ? {
+      ...inv,
+      invoice_number: editExtractedForm.invoice_number,
+      contractor: editExtractedForm.contractor,
+      amount: parseFloat(editExtractedForm.amount) || 0,
+      due_date: editExtractedForm.due_date,
+      status: editExtractedForm.status,
+      description: editExtractedForm.description,
+    } : inv));
+    setEditingExtractedIdx(null);
+  };
+
+  const removeExtractedInvoice = (idx: number) => {
+    if (editingExtractedIdx === idx) setEditingExtractedIdx(null);
+    setExtractedInvoices(prev => prev.filter((_, i) => i !== idx));
   };
 
   const getStatusIcon = (status: string) => {
@@ -720,28 +785,102 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
                   </button>
                 </div>
                 <div className="space-y-2">
-                  {extractedInvoices.map((inv: any, idx: number) => (
-                    <div key={idx} className="flex items-center gap-3 p-3 rounded-xl" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.05)" }}>
-                      {getStatusIcon(inv.status || "pending")}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-white truncate">
-                          {inv.contractor} <span className="text-white/40 font-normal">#{inv.invoice_number}</span>
-                        </p>
-                        <p className="text-[11px] text-white/35">
-                          {fmtMoney(inv.amount || 0)}
-                          {inv.due_date && ` · Due ${inv.due_date}`}
-                          {inv.status && ` · ${inv.status}`}
-                          {inv.description && ` · ${inv.description}`}
-                        </p>
+                  {extractedInvoices.map((inv: any, idx: number) =>
+                    editingExtractedIdx === idx ? (
+                      <div key={idx} className="p-3 rounded-xl space-y-2" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            placeholder="Contractor"
+                            value={editExtractedForm.contractor}
+                            onChange={(e) => setEditExtractedForm({ ...editExtractedForm, contractor: e.target.value })}
+                            className={inputClass}
+                          />
+                          <input
+                            placeholder="Invoice #"
+                            value={editExtractedForm.invoice_number}
+                            onChange={(e) => setEditExtractedForm({ ...editExtractedForm, invoice_number: e.target.value })}
+                            className={inputClass}
+                          />
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <input
+                            type="number"
+                            placeholder="Amount"
+                            value={editExtractedForm.amount}
+                            onChange={(e) => setEditExtractedForm({ ...editExtractedForm, amount: e.target.value })}
+                            className={inputClass}
+                          />
+                          <input
+                            type="date"
+                            value={editExtractedForm.due_date}
+                            onChange={(e) => setEditExtractedForm({ ...editExtractedForm, due_date: e.target.value })}
+                            className={inputClass}
+                          />
+                          <select
+                            value={editExtractedForm.status}
+                            onChange={(e) => setEditExtractedForm({ ...editExtractedForm, status: e.target.value as InvoiceStatus })}
+                            className={inputClass}
+                          >
+                            {INVOICE_STATUSES.map((s) => (
+                              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <input
+                          placeholder="Description (optional)"
+                          value={editExtractedForm.description}
+                          onChange={(e) => setEditExtractedForm({ ...editExtractedForm, description: e.target.value })}
+                          className={inputClass}
+                        />
+                        <div className="flex gap-2 justify-end pt-1">
+                          <button onClick={cancelEditExtracted}
+                            className="px-3 py-1.5 rounded-lg text-[12px] text-white/50 hover:text-white/80 transition-colors"
+                            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                            Cancel
+                          </button>
+                          <button onClick={() => saveEditExtracted(idx)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-all hover:scale-105"
+                            style={gradientButtonStyle}>
+                            <Check className="w-3.5 h-3.5" /> Save
+                          </button>
+                        </div>
                       </div>
-                      <button disabled={addingExtracted === String(idx)}
-                        onClick={() => addExtractedInvoice(inv, idx)}
-                        className="w-8 h-8 flex items-center justify-center rounded-lg text-white/70 transition-colors"
-                        style={glassButtonStyle}>
-                        {addingExtracted === String(idx) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                  ))}
+                    ) : (
+                      <div key={idx} className="flex items-center gap-3 p-3 rounded-xl" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                        {getStatusIcon(inv.status || "pending")}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-white truncate">
+                            {inv.contractor} <span className="text-white/40 font-normal">#{inv.invoice_number}</span>
+                          </p>
+                          <p className="text-[11px] text-white/35">
+                            {fmtMoney(inv.amount || 0)}
+                            {inv.due_date && ` · Due ${inv.due_date}`}
+                            {inv.status && ` · ${inv.status}`}
+                            {inv.description && ` · ${inv.description}`}
+                          </p>
+                        </div>
+                        <button onClick={() => startEditExtracted(inv, idx)}
+                          title="Edit"
+                          className="w-8 h-8 flex items-center justify-center rounded-lg text-white/70 transition-colors"
+                          style={glassButtonStyle}>
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => removeExtractedInvoice(idx)}
+                          title="Delete"
+                          className="w-8 h-8 flex items-center justify-center rounded-lg text-red-400/70 hover:text-red-400 transition-colors"
+                          style={glassButtonStyle}>
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button disabled={addingExtracted === String(idx)}
+                          onClick={() => addExtractedInvoice(inv, idx)}
+                          title="Add"
+                          className="w-8 h-8 flex items-center justify-center rounded-lg text-white/70 transition-colors"
+                          style={glassButtonStyle}>
+                          {addingExtracted === String(idx) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    )
+                  )}
                 </div>
               </motion.div>
             )}
@@ -816,24 +955,24 @@ export default function PaymentsPage({ projectId: filterProjectId }: { projectId
                           {payment.description && <> · {payment.description}</>}
                         </p>
                       </div>
-                      {!filterProjectId && !payment.project_id && (
-                        <div className="flex items-center gap-1.5" title="Not linked to a project — won't show up in Cost & Budget or Financial Budget">
+                      <div className="flex items-center gap-1.5" title={payment.project_id ? "Change the project this invoice is linked to" : "Not linked to a project — won't show up in Cost & Budget or Financial Budget"}>
+                        {!payment.project_id && (
                           <span className="text-[11px] px-2 py-1 rounded-full font-medium whitespace-nowrap bg-amber-500/10 text-amber-400 border border-amber-500/20">
                             Unassigned
                           </span>
-                          <select
-                            defaultValue=""
-                            disabled={assigningId === payment.id}
-                            onChange={(e) => { if (e.target.value) handleAssignProject(payment.id, e.target.value); }}
-                            className="text-[11px] bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-lg px-1.5 py-1 text-white outline-none"
-                          >
-                            <option value="" disabled>Assign…</option>
-                            {allProjects.map((p) => (
-                              <option key={p.id} value={p.id}>{p.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
+                        )}
+                        <select
+                          value={payment.project_id || ""}
+                          disabled={assigningId === payment.id}
+                          onChange={(e) => { if (e.target.value) handleAssignProject(payment.id, e.target.value); }}
+                          className="text-[11px] bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.07)] rounded-lg px-1.5 py-1 text-white outline-none max-w-[130px] truncate"
+                        >
+                          <option value="" disabled>Assign…</option>
+                          {allProjects.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      </div>
                       <p className="text-sm font-semibold text-white whitespace-nowrap">
                         {fmtMoney(payment.amount)}
                       </p>

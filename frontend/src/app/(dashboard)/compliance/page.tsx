@@ -19,6 +19,8 @@ import {
   Save,
   Building2,
   Globe,
+  Paperclip,
+  Download,
 } from "lucide-react";
 import {
   RadarChart,
@@ -33,13 +35,15 @@ import {
   YAxis,
   CartesianGrid,
 } from "recharts";
-import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import DownloadModal from "@/components/shared/DownloadModal";
 import { MarkdownText } from "@/lib/renderMarkdown";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
+import { ACCENT, AccentKey, glassInputClass, glassInputStyle, gradientButtonStyle, glassButtonStyle } from "@/lib/theme";
+import { downloadEntries, ExportColumn, ExportFormat, ExportMode } from "@/lib/export/downloadEntries";
 
 const DOCS_TABS = [
   { href: "/documents",  label: "Documents" },
@@ -71,6 +75,9 @@ interface Permit {
   project_id?: string;
   issued_by?: string;
   created_at?: string;
+  file_url?: string;
+  file_name?: string;
+  bucket?: string;
 }
 
 interface Stats {
@@ -98,6 +105,35 @@ const EMPTY_STATS: Stats = {
     { category: "Electrical", score: 0 },
   ],
   trend: [],
+};
+
+const tooltipStyle = {
+  backgroundColor: "rgba(4,11,25,0.95)",
+  border: "1px solid rgba(0,212,255,0.15)",
+  borderRadius: "12px",
+  color: "#e2e8f0",
+  fontSize: "12px",
+  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+};
+
+const primaryBtn =
+  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white whitespace-nowrap transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
+const ghostBtn =
+  "flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-white/70 hover:text-white whitespace-nowrap transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
+
+const fieldClass = glassInputClass;
+const fieldStyle = glassInputStyle;
+
+const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
+  Approved: { bg: "rgba(16,185,129,0.1)", text: "#10B981" },
+  Rejected: { bg: "rgba(239,68,68,0.1)", text: "#EF4444" },
+  Pending:  { bg: "rgba(249,115,22,0.1)", text: "#F97316" },
+};
+
+const RISK_BADGE: Record<string, { bg: string; text: string }> = {
+  high:   { bg: "rgba(239,68,68,0.1)", text: "#EF4444" },
+  medium: { bg: "rgba(249,115,22,0.1)", text: "#F97316" },
+  low:    { bg: "rgba(16,185,129,0.1)", text: "#10B981" },
 };
 
 export default function CompliancePage() {
@@ -144,6 +180,7 @@ export default function CompliancePage() {
     name: "", type: "Building Permit", status: "Pending",
     expiry_date: "", risk_level: "medium", issued_by: "",
   });
+  const [addFile, setAddFile] = useState<File | null>(null);
   const [addLoading, setAddLoading] = useState(false);
 
   // Delete
@@ -152,7 +189,11 @@ export default function CompliancePage() {
   // Inline edit
   const [editId, setEditId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Permit>>({});
+  const [editFile, setEditFile] = useState<File | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+
+  // Download
+  const [showDownload, setShowDownload] = useState(false);
 
   // Extracted permits from upload
   const [extractedPermits, setExtractedPermits] = useState<Permit[]>([]);
@@ -200,14 +241,28 @@ export default function CompliancePage() {
     }
   };
 
+  const uploadPermitFile = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/compliance/permits/upload`, formData);
+    return { file_url: res.data.file_url, file_name: res.data.file_name, bucket: res.data.bucket };
+  };
+
   const saveEdit = async (id: string) => {
     setSavingId(id);
     try {
-      await axios.put(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/compliance/permits/${id}`, editForm);
+      let payload: Partial<Permit> = { ...editForm };
+      if (editFile) {
+        const uploaded = await uploadPermitFile(editFile);
+        payload = { ...payload, ...uploaded };
+      }
+      await axios.put(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/compliance/permits/${id}`, payload);
       toast.success("Permit updated");
       setEditId(null);
       setEditForm({});
+      setEditFile(null);
       fetchAll();
+      triggerRefresh("compliance");
     } catch {
       toast.error("Failed to update permit");
     } finally {
@@ -298,10 +353,15 @@ export default function CompliancePage() {
       const payload: Permit = { ...addForm };
       if (!payload.expiry_date) delete payload.expiry_date;
       if (!payload.issued_by) delete payload.issued_by;
+      if (addFile) {
+        const uploaded = await uploadPermitFile(addFile);
+        Object.assign(payload, uploaded);
+      }
       await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/compliance/permits`, payload);
       toast.success("Permit saved!");
       setAddOpen(false);
       setAddForm({ name: "", type: "Building Permit", status: "Pending", expiry_date: "", risk_level: "medium", issued_by: "" });
+      setAddFile(null);
       fetchAll();
       triggerRefresh("compliance");
     } catch {
@@ -348,16 +408,46 @@ export default function CompliancePage() {
     }
   };
 
-  const kpis = [
-    { label: "Compliance Score", value: `${stats.compliance_score}%`, icon: CheckCircle, color: "border-emerald-500/20 bg-emerald-500/5", iconColor: "text-emerald-400" },
-    { label: "Active Permits", value: stats.active_permits.toString(), icon: ClipboardCheck, color: "border-blue-500/20 bg-blue-500/5", iconColor: "text-blue-400" },
-    { label: "Pending Permits", value: stats.pending_permits.toString(), icon: Clock, color: "border-orange-500/20 bg-orange-500/5", iconColor: "text-orange-400" },
-    { label: "Open Violations", value: stats.open_violations.toString(), icon: AlertTriangle, color: "border-red-500/20 bg-red-500/5", iconColor: "text-red-400" },
+  const kpis: { label: string; value: string; accent: AccentKey; icon: any }[] = [
+    { label: "Compliance Score", value: `${stats.compliance_score}%`, accent: "green", icon: CheckCircle },
+    { label: "Active Permits", value: stats.active_permits.toString(), accent: "blue", icon: ClipboardCheck },
+    { label: "Pending Permits", value: stats.pending_permits.toString(), accent: "orange", icon: Clock },
+    { label: "Open Violations", value: stats.open_violations.toString(), accent: "red", icon: AlertTriangle },
   ];
+
+  const permitColumns: ExportColumn[] = [
+    { key: "name", label: "Name" },
+    { key: "type", label: "Type" },
+    { key: "status", label: "Status" },
+    { key: "risk_level", label: "Risk" },
+    { key: "expiry_date", label: "Expiry Date" },
+    { key: "issued_by", label: "Issued By" },
+  ];
+
+  const handlePermitsExport = async (format: ExportFormat, mode: ExportMode) => {
+    await downloadEntries({
+      format,
+      mode,
+      title: "Permit Register Report",
+      subtitle: `${permits.length} permit${permits.length === 1 ? "" : "s"}`,
+      kpis: [
+        { label: "Compliance Score", value: `${stats.compliance_score}%` },
+        { label: "Active Permits", value: `${stats.active_permits}` },
+        { label: "Pending Permits", value: `${stats.pending_permits}` },
+        { label: "Open Violations", value: `${stats.open_violations}` },
+      ],
+      columns: permitColumns,
+      rows: permits,
+      filenameBase: `CivilAI_Permit_Register_${new Date().toISOString().split("T")[0]}`,
+    });
+    toast.success("Permit register downloaded");
+  };
 
   return (
     <div className="space-y-6">
       <ModuleTabs tabs={DOCS_TABS} />
+
+      <DownloadModal open={showDownload} onClose={() => setShowDownload(false)} title="Download Permit Register" onExport={handlePermitsExport} />
 
       {/* Header */}
       <motion.div
@@ -366,132 +456,162 @@ export default function CompliancePage() {
         className="flex items-center justify-between flex-wrap gap-3"
       >
         <div>
-          <h1 className="text-4xl font-bold text-foreground">Compliance</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            AI-powered compliance & permit management
+          <h1 className="text-4xl font-bold text-white tracking-tight">Compliance</h1>
+          <p className="text-white/35 text-[13px] mt-1">
+            AI-powered compliance &amp; permit management
             {stats.total_permits > 0 && (
-              <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
+              <span className="ml-2 text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(16,185,129,0.1)", color: "#10B981" }}>
                 {stats.total_permits} permits in database
               </span>
             )}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" size="sm" onClick={fetchAll} disabled={dataLoading}>
-            <RefreshCw className={`w-4 h-4 mr-2 ${dataLoading ? "animate-spin" : ""}`} />
+          <button className={ghostBtn} style={glassButtonStyle} onClick={fetchAll} disabled={dataLoading}>
+            <RefreshCw className={`w-4 h-4 ${dataLoading ? "animate-spin" : ""}`} />
             Refresh
-          </Button>
-          <Button variant="outline" onClick={() => setAddOpen(!addOpen)}>
-            <Plus className="w-4 h-4 mr-2 text-emerald-400" />
+          </button>
+          <button className={ghostBtn} style={glassButtonStyle} onClick={() => setAddOpen(!addOpen)}>
+            <Plus className="w-4 h-4 text-emerald-400" />
             Add Permit
-          </Button>
-          <Button variant="outline" onClick={() => setPermitOpen(!permitOpen)}>
-            <FileText className="w-4 h-4 mr-2 text-blue-400" />
+          </button>
+          <button className={ghostBtn} style={glassButtonStyle} onClick={() => setShowDownload(true)}>
+            <Download className="w-4 h-4 text-cyan-400" />
+            Download
+          </button>
+          <button className={ghostBtn} style={glassButtonStyle} onClick={() => setPermitOpen(!permitOpen)}>
+            <FileText className="w-4 h-4 text-blue-400" />
             Generate Application
-          </Button>
-          <Button variant="outline" onClick={() => setCodeCheckOpen(!codeCheckOpen)}>
-            <Building2 className="w-4 h-4 mr-2 text-cyan-400" />
+          </button>
+          <button className={ghostBtn} style={glassButtonStyle} onClick={() => setCodeCheckOpen(!codeCheckOpen)}>
+            <Building2 className="w-4 h-4 text-cyan-400" />
             Code Check
-          </Button>
-          <Button variant="outline" onClick={() => setRegCheckOpen(!regCheckOpen)}>
-            <Globe className="w-4 h-4 mr-2 text-amber-400" />
+          </button>
+          <button className={ghostBtn} style={glassButtonStyle} onClick={() => setRegCheckOpen(!regCheckOpen)}>
+            <Globe className="w-4 h-4 text-amber-400" />
             Regulatory Check
-          </Button>
+          </button>
           <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.xlsx,.docx" onChange={handleFileUpload} />
-          <Button className="gradient-blue text-white border-0" disabled={loading} onClick={() => fileInputRef.current?.click()}>
-            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+          <button className={primaryBtn} style={gradientButtonStyle} disabled={loading} onClick={() => fileInputRef.current?.click()}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
             Upload Report
-          </Button>
+          </button>
         </div>
       </motion.div>
 
       {/* KPIs */}
-      {dataLoading ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="rounded-2xl border border-border p-5 bg-card animate-pulse">
-              <div className="h-4 bg-secondary rounded w-2/3 mb-3" />
-              <div className="h-8 bg-secondary rounded w-1/3" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {dataLoading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="glass-card p-5 animate-pulse">
+              <div className="w-11 h-11 rounded-xl mb-4" style={{ background: "rgba(255,255,255,0.05)" }} />
+              <div className="h-7 w-2/3 rounded mb-2" style={{ background: "rgba(255,255,255,0.05)" }} />
+              <div className="h-3 w-1/3 rounded" style={{ background: "rgba(255,255,255,0.05)" }} />
             </div>
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {kpis.map((kpi, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.1 }}
-              whileHover={{ y: -2 }}
-              className={`rounded-2xl border p-5 ${kpi.color}`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-muted-foreground">{kpi.label}</p>
-                <kpi.icon className={`w-4 h-4 ${kpi.iconColor}`} />
-              </div>
-              <p className="text-2xl font-bold text-foreground">{kpi.value}</p>
-            </motion.div>
-          ))}
-        </div>
-      )}
+          ))
+        ) : (
+          kpis.map((kpi, i) => {
+            const a = ACCENT[kpi.accent];
+            return (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.08 }}
+                whileHover={{ y: -4, scale: 1.02 }}
+                className="glass-card p-5 group relative overflow-hidden"
+                style={{ borderColor: a.border }}
+              >
+                <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                  style={{ background: `radial-gradient(ellipse at top left, ${a.bg}, transparent 70%)` }} />
+                <div className="relative flex items-center justify-between mb-4">
+                  <div className="w-11 h-11 rounded-xl flex items-center justify-center"
+                    style={{ background: a.bg, border: `1px solid ${a.border}`, boxShadow: `0 0 16px ${a.shadow}` }}>
+                    <kpi.icon className="w-5 h-5" style={{ color: a.text }} />
+                  </div>
+                </div>
+                <p className="relative text-[28px] font-bold" style={{ color: a.text, textShadow: `0 0 20px ${a.shadow}` }}>{kpi.value}</p>
+                <p className="relative text-[13px] text-white/40 mt-1">{kpi.label}</p>
+              </motion.div>
+            );
+          })
+        )}
+      </div>
 
       {/* Add Permit Form */}
       {addOpen && (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-emerald-500/30 rounded-2xl p-6"
+          className="glass-card p-6"
+          style={{ borderColor: ACCENT.green.border }}
         >
-          <h3 className="font-semibold text-foreground mb-4">Add Permit to Register</h3>
+          <h3 className="font-semibold text-white text-[15px] mb-4">Add Permit to Register</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <input
               placeholder="Permit name *"
               value={addForm.name}
               onChange={(e) => setAddForm({ ...addForm, name: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className={fieldClass}
+              style={fieldStyle}
             />
             <select
               value={addForm.type}
               onChange={(e) => setAddForm({ ...addForm, type: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className={fieldClass}
+              style={fieldStyle}
             >
-              {PERMIT_TYPES.map((t) => <option key={t}>{t}</option>)}
+              {PERMIT_TYPES.map((t) => <option key={t} style={{ background: "#0A1628" }}>{t}</option>)}
             </select>
             <select
               value={addForm.status}
               onChange={(e) => setAddForm({ ...addForm, status: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className={fieldClass}
+              style={fieldStyle}
             >
-              {["Pending", "Approved", "Rejected"].map((s) => <option key={s}>{s}</option>)}
+              {["Pending", "Approved", "Rejected"].map((s) => <option key={s} style={{ background: "#0A1628" }}>{s}</option>)}
             </select>
             <select
               value={addForm.risk_level}
               onChange={(e) => setAddForm({ ...addForm, risk_level: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className={fieldClass}
+              style={fieldStyle}
             >
-              {RISK_LEVELS.map((r) => <option key={r}>{r}</option>)}
+              {RISK_LEVELS.map((r) => <option key={r} style={{ background: "#0A1628" }}>{r}</option>)}
             </select>
             <input
               type="date"
               placeholder="Expiry date"
               value={addForm.expiry_date || ""}
               onChange={(e) => setAddForm({ ...addForm, expiry_date: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className={fieldClass}
+              style={fieldStyle}
             />
             <input
               placeholder="Issued by"
               value={addForm.issued_by || ""}
               onChange={(e) => setAddForm({ ...addForm, issued_by: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className={fieldClass}
+              style={fieldStyle}
             />
           </div>
+          <div className="mb-4">
+            <label className="cursor-pointer inline-block">
+              <input type="file" className="hidden" accept=".pdf,.docx,.doc,.xlsx,.xls"
+                onChange={(e) => setAddFile(e.target.files?.[0] || null)} />
+              <span className={ghostBtn} style={glassButtonStyle}>
+                <Paperclip className="w-3.5 h-3.5" />
+                {addFile ? addFile.name : "Attach permit file (optional)"}
+              </span>
+            </label>
+          </div>
           <div className="flex gap-2">
-            <Button onClick={savePermit} disabled={addLoading} className="bg-emerald-600 hover:bg-emerald-700 text-white border-0">
-              {addLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+            <button onClick={savePermit} disabled={addLoading} className={primaryBtn}
+              style={{ background: "linear-gradient(135deg, rgba(16,185,129,0.25), rgba(6,120,80,0.2))", border: "1px solid rgba(16,185,129,0.3)" }}>
+              {addLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Save Permit
-            </Button>
-            <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
+            </button>
+            <button className={ghostBtn} style={glassButtonStyle} onClick={() => setAddOpen(false)}>Cancel</button>
           </div>
         </motion.div>
       )}
@@ -501,9 +621,10 @@ export default function CompliancePage() {
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-blue-500/30 rounded-2xl p-6"
+          className="glass-card p-6"
+          style={{ borderColor: ACCENT.blue.border }}
         >
-          <h3 className="font-semibold text-foreground mb-4">AI Permit Application Generator</h3>
+          <h3 className="font-semibold text-white text-[15px] mb-4">AI Permit Application Generator</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             {[
               { placeholder: "Project name", key: "project_name" },
@@ -518,17 +639,18 @@ export default function CompliancePage() {
                 placeholder={f.placeholder}
                 value={permitForm[f.key as keyof typeof permitForm] as string}
                 onChange={(e) => setPermitForm({ ...permitForm, [f.key]: e.target.value })}
-                className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={fieldClass}
+                style={fieldStyle}
               />
             ))}
           </div>
-          <Button onClick={generatePermit} disabled={permitLoading} className="gradient-blue text-white border-0">
-            {permitLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />}
+          <button onClick={generatePermit} disabled={permitLoading} className={primaryBtn} style={gradientButtonStyle}>
+            {permitLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
             Generate Application
-          </Button>
+          </button>
           {permitResult && (
-            <div className="mt-4 p-4 bg-secondary rounded-xl">
-              <MarkdownText text={permitResult} className="text-sm text-foreground leading-relaxed" />
+            <div className="mt-4 p-4 rounded-xl" style={{ background: "rgba(255,255,255,0.03)" }}>
+              <MarkdownText text={permitResult} className="text-sm text-white/70 leading-relaxed" />
             </div>
           )}
         </motion.div>
@@ -539,39 +661,41 @@ export default function CompliancePage() {
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-cyan-500/30 rounded-2xl p-6"
+          className="glass-card p-6"
+          style={{ borderColor: ACCENT.cyan.border }}
         >
-          <h3 className="font-semibold text-foreground mb-4">AI Building Code Compliance Check</h3>
+          <h3 className="font-semibold text-white text-[15px] mb-4">AI Building Code Compliance Check</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <input placeholder="Project name" value={codeCheckForm.project_name}
               onChange={(e) => setCodeCheckForm({ ...codeCheckForm, project_name: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              className={fieldClass} style={fieldStyle} />
             <input placeholder="Project type (e.g. Commercial)" value={codeCheckForm.project_type}
               onChange={(e) => setCodeCheckForm({ ...codeCheckForm, project_type: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              className={fieldClass} style={fieldStyle} />
             <input placeholder="Location" value={codeCheckForm.location}
               onChange={(e) => setCodeCheckForm({ ...codeCheckForm, location: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              className={fieldClass} style={fieldStyle} />
             <input type="number" placeholder="Building height (m)" value={codeCheckForm.building_height || ""}
               onChange={(e) => setCodeCheckForm({ ...codeCheckForm, building_height: parseFloat(e.target.value) || 0 })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              className={fieldClass} style={fieldStyle} />
             <input placeholder="Occupancy type (e.g. Office)" value={codeCheckForm.occupancy_type}
               onChange={(e) => setCodeCheckForm({ ...codeCheckForm, occupancy_type: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              className={fieldClass} style={fieldStyle} />
             <input placeholder="Construction type (e.g. Steel frame)" value={codeCheckForm.construction_type}
               onChange={(e) => setCodeCheckForm({ ...codeCheckForm, construction_type: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              className={fieldClass} style={fieldStyle} />
             <input placeholder="Special features (comma-separated)" value={codeCheckForm.special_features}
               onChange={(e) => setCodeCheckForm({ ...codeCheckForm, special_features: e.target.value })}
-              className="col-span-2 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              className={`col-span-2 ${fieldClass}`} style={fieldStyle} />
           </div>
-          <Button onClick={runCodeCheck} disabled={codeCheckLoading} className="bg-cyan-500 hover:bg-cyan-600 text-white border-0">
-            {codeCheckLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Building2 className="w-4 h-4 mr-2" />}
+          <button onClick={runCodeCheck} disabled={codeCheckLoading} className={primaryBtn}
+            style={{ background: "linear-gradient(135deg, rgba(0,212,255,0.25), rgba(0,100,160,0.2))", border: "1px solid rgba(0,212,255,0.3)" }}>
+            {codeCheckLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Building2 className="w-4 h-4" />}
             Check Compliance
-          </Button>
+          </button>
           {codeCheckResult && (
-            <div className="mt-4 p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
-              <MarkdownText text={codeCheckResult} className="text-sm text-foreground leading-relaxed" />
+            <div className="mt-4 p-4 rounded-xl" style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}` }}>
+              <MarkdownText text={codeCheckResult} className="text-sm text-white/70 leading-relaxed" />
             </div>
           )}
         </motion.div>
@@ -582,24 +706,26 @@ export default function CompliancePage() {
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-amber-500/30 rounded-2xl p-6"
+          className="glass-card p-6"
+          style={{ borderColor: ACCENT.amber.border }}
         >
-          <h3 className="font-semibold text-foreground mb-4">AI Regulatory Requirements Tracker</h3>
+          <h3 className="font-semibold text-white text-[15px] mb-4">AI Regulatory Requirements Tracker</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <input placeholder="Region (e.g. California, USA)" value={regCheckForm.region}
               onChange={(e) => setRegCheckForm({ ...regCheckForm, region: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500" />
+              className={fieldClass} style={fieldStyle} />
             <input placeholder="Project type (e.g. Residential)" value={regCheckForm.project_type}
               onChange={(e) => setRegCheckForm({ ...regCheckForm, project_type: e.target.value })}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500" />
+              className={fieldClass} style={fieldStyle} />
           </div>
-          <Button onClick={runRegulatoryCheck} disabled={regCheckLoading} className="bg-amber-500 hover:bg-amber-600 text-white border-0">
-            {regCheckLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Globe className="w-4 h-4 mr-2" />}
+          <button onClick={runRegulatoryCheck} disabled={regCheckLoading} className={primaryBtn}
+            style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.25), rgba(180,100,10,0.2))", border: "1px solid rgba(245,158,11,0.3)" }}>
+            {regCheckLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
             Get Regulatory Info
-          </Button>
+          </button>
           {regCheckResult && (
-            <div className="mt-4 p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl">
-              <MarkdownText text={regCheckResult} className="text-sm text-foreground leading-relaxed" />
+            <div className="mt-4 p-4 rounded-xl" style={{ background: ACCENT.amber.bg, border: `1px solid ${ACCENT.amber.border}` }}>
+              <MarkdownText text={regCheckResult} className="text-sm text-white/70 leading-relaxed" />
             </div>
           )}
         </motion.div>
@@ -611,22 +737,19 @@ export default function CompliancePage() {
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.3 }}
-          className="bg-card border border-border rounded-2xl p-6"
+          className="glass-card p-6"
         >
-          <h3 className="font-semibold text-foreground mb-1">Compliance Radar</h3>
-          <p className="text-xs text-muted-foreground mb-4">Score by permit category</p>
+          <h3 className="font-semibold text-white text-[14px] mb-1">Compliance Radar</h3>
+          <p className="text-xs text-white/35 mb-4">Score by permit category</p>
           {dataLoading ? (
-            <div className="h-52 bg-secondary/30 rounded-xl animate-pulse" />
+            <div className="h-52 rounded-xl animate-pulse" style={{ background: "rgba(255,255,255,0.03)" }} />
           ) : (
             <ResponsiveContainer width="100%" height={220}>
               <RadarChart data={stats.radar}>
-                <PolarGrid stroke="#ffffff08" />
-                <PolarAngleAxis dataKey="category" tick={{ fill: "#6b7280", fontSize: 11 }} />
-                <Radar dataKey="score" stroke="#10b981" fill="#10b981" fillOpacity={0.2} strokeWidth={2} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }}
-                  formatter={(v: number) => [`${v}%`, "Score"]}
-                />
+                <PolarGrid stroke="rgba(255,255,255,0.06)" />
+                <PolarAngleAxis dataKey="category" tick={{ fill: "rgba(255,255,255,0.35)", fontSize: 11 }} />
+                <Radar dataKey="score" stroke="#10B981" fill="#10B981" fillOpacity={0.2} strokeWidth={2} />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v}%`, "Score"]} />
               </RadarChart>
             </ResponsiveContainer>
           )}
@@ -636,14 +759,14 @@ export default function CompliancePage() {
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.4 }}
-          className="bg-card border border-border rounded-2xl p-6"
+          className="glass-card p-6"
         >
-          <h3 className="font-semibold text-foreground mb-1">Compliance Trend</h3>
-          <p className="text-xs text-muted-foreground mb-4">Monthly approval rate</p>
+          <h3 className="font-semibold text-white text-[14px] mb-1">Compliance Trend</h3>
+          <p className="text-xs text-white/35 mb-4">Monthly approval rate</p>
           {dataLoading ? (
-            <div className="h-52 bg-secondary/30 rounded-xl animate-pulse" />
+            <div className="h-52 rounded-xl animate-pulse" style={{ background: "rgba(255,255,255,0.03)" }} />
           ) : stats.trend.length === 0 ? (
-            <div className="h-52 flex items-center justify-center text-sm text-muted-foreground">
+            <div className="h-52 flex items-center justify-center text-sm text-white/30">
               No trend data yet — add permits to see monthly trends
             </div>
           ) : (
@@ -651,18 +774,15 @@ export default function CompliancePage() {
               <AreaChart data={stats.trend}>
                 <defs>
                   <linearGradient id="compliance" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" domain={[0, 100]} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }}
-                  formatter={(v: number) => [`${v}%`, "Approval Rate"]}
-                />
-                <Area type="monotone" dataKey="score" stroke="#10b981" fill="url(#compliance)" strokeWidth={2} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" domain={[0, 100]} />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v}%`, "Approval Rate"]} />
+                <Area type="monotone" dataKey="score" stroke="#10B981" fill="url(#compliance)" strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
           )}
@@ -674,26 +794,26 @@ export default function CompliancePage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.5 }}
-        className="bg-card border border-border rounded-2xl p-6"
+        className="glass-card p-6"
       >
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-foreground">Permit Register</h3>
+          <h3 className="font-semibold text-white text-[15px]">Permit Register</h3>
           {permits.length > 0 && (
-            <span className="text-xs text-muted-foreground">{permits.length} permits</span>
+            <span className="text-xs text-white/35">{permits.length} permits</span>
           )}
         </div>
 
         {dataLoading ? (
           <div className="space-y-2">
             {[0, 1, 2].map((i) => (
-              <div key={i} className="h-14 bg-secondary/40 rounded-xl animate-pulse" />
+              <div key={i} className="h-14 rounded-xl animate-pulse" style={{ background: "rgba(255,255,255,0.02)" }} />
             ))}
           </div>
         ) : permits.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
-            <ClipboardCheck className="w-10 h-10 text-muted-foreground mb-3" />
-            <p className="text-sm text-muted-foreground">No permits tracked yet</p>
-            <p className="text-xs text-muted-foreground mt-1">Click "Add Permit" to start tracking permits</p>
+            <ClipboardCheck className="w-10 h-10 text-white/15 mb-3" />
+            <p className="text-sm text-white/35">No permits tracked yet</p>
+            <p className="text-xs text-white/25 mt-1">Click "Add Permit" to start tracking permits</p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -703,62 +823,77 @@ export default function CompliancePage() {
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.05 }}
-                className="rounded-xl bg-secondary/40 hover:bg-secondary/70 transition-colors group"
+                className="rounded-xl transition-colors group hover:bg-white/[0.03]"
+                style={{ background: "rgba(255,255,255,0.015)" }}
               >
                 {editId === permit.id ? (
                   /* ── Inline edit row ── */
                   <div className="p-4 space-y-3">
                     <div className="grid grid-cols-2 gap-3">
                       <input
-                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className={fieldClass}
+                        style={fieldStyle}
                         value={editForm.name ?? permit.name}
                         onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))}
                         placeholder="Permit name"
                       />
                       <select
-                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className={fieldClass}
+                        style={fieldStyle}
                         value={editForm.type ?? permit.type}
                         onChange={e => setEditForm(p => ({ ...p, type: e.target.value }))}
                       >
-                        {PERMIT_TYPES.map(t => <option key={t}>{t}</option>)}
+                        {PERMIT_TYPES.map(t => <option key={t} style={{ background: "#0A1628" }}>{t}</option>)}
                       </select>
                       <select
-                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className={fieldClass}
+                        style={fieldStyle}
                         value={editForm.status ?? permit.status}
                         onChange={e => setEditForm(p => ({ ...p, status: e.target.value }))}
                       >
-                        {["Pending", "Approved", "Rejected"].map(s => <option key={s}>{s}</option>)}
+                        {["Pending", "Approved", "Rejected"].map(s => <option key={s} style={{ background: "#0A1628" }}>{s}</option>)}
                       </select>
                       <select
-                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className={fieldClass}
+                        style={fieldStyle}
                         value={editForm.risk_level ?? permit.risk_level}
                         onChange={e => setEditForm(p => ({ ...p, risk_level: e.target.value }))}
                       >
-                        {RISK_LEVELS.map(r => <option key={r}>{r}</option>)}
+                        {RISK_LEVELS.map(r => <option key={r} style={{ background: "#0A1628" }}>{r}</option>)}
                       </select>
                       <input
                         type="date"
-                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className={fieldClass}
+                        style={fieldStyle}
                         value={editForm.expiry_date ?? permit.expiry_date ?? ""}
                         onChange={e => setEditForm(p => ({ ...p, expiry_date: e.target.value }))}
                       />
                       <input
-                        className="px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className={fieldClass}
+                        style={fieldStyle}
                         value={editForm.issued_by ?? permit.issued_by ?? ""}
                         onChange={e => setEditForm(p => ({ ...p, issued_by: e.target.value }))}
                         placeholder="Issued by"
                       />
                     </div>
+                    <label className="cursor-pointer inline-block">
+                      <input type="file" className="hidden" accept=".pdf,.docx,.doc,.xlsx,.xls"
+                        onChange={(e) => setEditFile(e.target.files?.[0] || null)} />
+                      <span className={`${ghostBtn} h-7 px-3 text-xs`} style={glassButtonStyle}>
+                        <Paperclip className="w-3.5 h-3.5" />
+                        {editFile ? editFile.name : permit.file_name || "Attach file (optional)"}
+                      </span>
+                    </label>
                     <div className="flex gap-2">
-                      <Button size="sm" className="gradient-blue text-white border-0 h-7 px-3 text-xs"
+                      <button className={`${primaryBtn} h-7 px-3 text-xs`} style={gradientButtonStyle}
                         onClick={() => permit.id && saveEdit(permit.id)} disabled={savingId === permit.id}>
-                        {savingId === permit.id ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Save className="w-3 h-3 mr-1" />}
+                        {savingId === permit.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
                         Save
-                      </Button>
-                      <Button size="sm" variant="outline" className="h-7 px-3 text-xs"
-                        onClick={() => { setEditId(null); setEditForm({}); }}>
+                      </button>
+                      <button className={`${ghostBtn} h-7 px-3 text-xs`} style={glassButtonStyle}
+                        onClick={() => { setEditId(null); setEditForm({}); setEditFile(null); }}>
                         Cancel
-                      </Button>
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -766,41 +901,35 @@ export default function CompliancePage() {
                   <div className="flex items-center gap-4 p-4">
                     {getStatusIcon(permit.status)}
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-foreground font-medium truncate">{permit.name}</p>
-                      <p className="text-xs text-muted-foreground">{permit.type}{permit.issued_by ? ` · ${permit.issued_by}` : ""}</p>
+                      <p className="text-sm text-white font-medium truncate">{permit.name}</p>
+                      <p className="text-xs text-white/35">{permit.type}{permit.issued_by ? ` · ${permit.issued_by}` : ""}{permit.file_name ? " · 📎 Attached" : ""}</p>
                     </div>
-                    <span className="text-xs text-muted-foreground hidden sm:block">
+                    <span className="text-xs text-white/35 hidden sm:block">
                       {permit.expiry_date ? `Expiry: ${permit.expiry_date}` : "No expiry"}
                     </span>
                     <select
                       value={permit.status}
                       onChange={(e) => updateStatus(permit, e.target.value)}
-                      className={`text-xs px-2.5 py-1 rounded-full border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500 ${
-                        permit.status === "Approved" ? "bg-emerald-500/10 text-emerald-400"
-                        : permit.status === "Rejected" ? "bg-red-500/10 text-red-400"
-                        : "bg-orange-500/10 text-orange-400"
-                      }`}
+                      className="text-xs px-2.5 py-1 rounded-full border-0 cursor-pointer outline-none"
+                      style={{ background: STATUS_BADGE[permit.status]?.bg ?? "rgba(255,255,255,0.05)", color: STATUS_BADGE[permit.status]?.text ?? "rgba(255,255,255,0.6)" }}
                     >
-                      <option>Pending</option>
-                      <option>Approved</option>
-                      <option>Rejected</option>
+                      <option style={{ background: "#0A1628" }}>Pending</option>
+                      <option style={{ background: "#0A1628" }}>Approved</option>
+                      <option style={{ background: "#0A1628" }}>Rejected</option>
                     </select>
-                    <span className={`text-xs px-2 py-0.5 rounded-full hidden sm:block ${
-                      permit.risk_level === "high" ? "bg-red-500/10 text-red-400"
-                      : permit.risk_level === "medium" ? "bg-orange-500/10 text-orange-400"
-                      : "bg-emerald-500/10 text-emerald-400"
-                    }`}>
+                    <span className="text-xs px-2 py-0.5 rounded-full hidden sm:block"
+                      style={{ background: RISK_BADGE[permit.risk_level]?.bg ?? "rgba(255,255,255,0.05)", color: RISK_BADGE[permit.risk_level]?.text ?? "rgba(255,255,255,0.6)" }}>
                       {permit.risk_level}
                     </span>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button variant="ghost" size="icon" className="w-7 h-7 text-muted-foreground hover:text-blue-400"
-                        onClick={() => { setEditId(permit.id!); setEditForm({ name: permit.name, type: permit.type, status: permit.status, risk_level: permit.risk_level, expiry_date: permit.expiry_date ?? "", issued_by: permit.issued_by ?? "" }); }}>
+                      <button className="w-7 h-7 rounded-lg flex items-center justify-center text-white/40 hover:text-blue-400 hover:bg-white/5 transition-colors"
+                        onClick={() => { setEditId(permit.id!); setEditForm({ name: permit.name, type: permit.type, status: permit.status, risk_level: permit.risk_level, expiry_date: permit.expiry_date ?? "", issued_by: permit.issued_by ?? "" }); setEditFile(null); }}>
                         <Pencil className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="w-7 h-7 text-red-400 hover:text-red-300"
+                      </button>
+                      <button className="w-7 h-7 rounded-lg flex items-center justify-center text-red-400/70 hover:text-red-400 hover:bg-white/5 transition-colors"
                         onClick={() => permit.id && deletePermit(permit.id)} disabled={deletingId === permit.id}>
                         {deletingId === permit.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                      </Button>
+                      </button>
                     </div>
                   </div>
                 )}
@@ -813,34 +942,34 @@ export default function CompliancePage() {
       {/* Extracted permits from upload */}
       {extractedPermits.length > 0 && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-emerald-500/30 rounded-2xl p-6">
+          className="glass-card p-6" style={{ borderColor: ACCENT.green.border }}>
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="font-semibold text-foreground">Permits Found in Document</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">Review and add to your permit register</p>
+              <h3 className="font-semibold text-white text-[15px]">Permits Found in Document</h3>
+              <p className="text-xs text-white/35 mt-0.5">Review and add to your permit register</p>
             </div>
-            <button onClick={() => setExtractedPermits([])} className="text-muted-foreground hover:text-foreground">
+            <button onClick={() => setExtractedPermits([])} className="text-white/40 hover:text-white">
               <X className="w-4 h-4" />
             </button>
           </div>
           <div className="space-y-2">
             {extractedPermits.map((p, idx) => (
-              <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
+              <div key={idx} className="flex items-center gap-3 p-3 rounded-xl" style={{ background: "rgba(255,255,255,0.03)" }}>
                 {getStatusIcon(p.status)}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground truncate">{p.name}</p>
-                  <p className="text-xs text-muted-foreground">{p.type}{p.expiry_date ? ` · Expires ${p.expiry_date}` : ""}{p.issued_by ? ` · ${p.issued_by}` : ""}</p>
+                  <p className="text-sm font-medium text-white truncate">{p.name}</p>
+                  <p className="text-xs text-white/35">{p.type}{p.expiry_date ? ` · Expires ${p.expiry_date}` : ""}{p.issued_by ? ` · ${p.issued_by}` : ""}</p>
                 </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${
-                  p.status === "Approved" ? "bg-emerald-500/10 text-emerald-400"
-                  : p.status === "Rejected" ? "bg-red-500/10 text-red-400"
-                  : "bg-orange-500/10 text-orange-400"
-                }`}>{p.status}</span>
-                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white border-0 h-7 px-3 text-xs"
+                <span className="text-xs px-2 py-0.5 rounded-full"
+                  style={{ background: STATUS_BADGE[p.status]?.bg ?? "rgba(255,255,255,0.05)", color: STATUS_BADGE[p.status]?.text ?? "rgba(255,255,255,0.6)" }}>
+                  {p.status}
+                </span>
+                <button className="flex items-center gap-1 h-7 px-3 text-xs rounded-xl font-medium text-white transition-all hover:scale-105 disabled:opacity-50"
+                  style={{ background: "linear-gradient(135deg, rgba(16,185,129,0.25), rgba(6,120,80,0.2))", border: "1px solid rgba(16,185,129,0.3)" }}
                   onClick={() => addExtractedPermit(p, idx)} disabled={addingExtracted === String(idx)}>
-                  {addingExtracted === String(idx) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3 mr-1" />}
+                  {addingExtracted === String(idx) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
                   Add
-                </Button>
+                </button>
               </div>
             ))}
           </div>
@@ -852,13 +981,14 @@ export default function CompliancePage() {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-blue-500/30 rounded-2xl p-6"
+          className="glass-card p-6"
+          style={{ borderColor: ACCENT.blue.border }}
         >
           <div className="flex items-center gap-2 mb-3">
             <ClipboardCheck className="w-5 h-5 text-blue-400" />
-            <h3 className="font-semibold text-foreground">AI Compliance Analysis</h3>
+            <h3 className="font-semibold text-white text-[15px]">AI Compliance Analysis</h3>
           </div>
-          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
+          <MarkdownText text={analysis} className="text-sm text-white/60 leading-relaxed" />
         </motion.div>
       )}
 

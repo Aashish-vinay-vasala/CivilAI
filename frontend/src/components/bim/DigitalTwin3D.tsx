@@ -3,15 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { motion } from "framer-motion";
-
-type SceneType = "building" | "bridge" | "harbour";
-
-function detectSceneType(project: any): SceneType {
-  const text = ((project?.name ?? "") + " " + (project?.project_type ?? "")).toLowerCase();
-  if (/bridge|metro|viaduct|overpass|flyover|span/.test(text)) return "bridge";
-  if (/harbour|harbor|port|dock|marine|wharf|berth/.test(text)) return "harbour";
-  return "building";
-}
+import { ACCENT, glassButtonStyle } from "@/lib/theme";
+import { detectSceneType, buildBridgeScene, buildHarbourScene } from "@/lib/proceduralScenes";
 
 interface SensorData {
   floor: number;
@@ -108,7 +101,11 @@ export default function DigitalTwin3D({ project, projectEquipment, ifcMeshes, se
     targetY: 30,
     prevX: 0,
     prevY: 0,
+    pan: { x: 0, y: 0, z: 0 },
   });
+  // Snapshot of the scene-appropriate default camera framing (varies by scene type —
+  // bridge/harbour builders override radius/targetY) so Reset can restore it, not a fixed value.
+  const defaultStateRef = useRef({ angle: Math.PI / 6, radius: 60, targetY: 30 });
 
   const [colorMode, setColorMode] = useState<"temperature" | "occupancy" | "co2" | "progress" | "safety">("occupancy");
   const [sensorData, setSensorData] = useState<SensorData[]>(() => generateSensorData(sensorOverrides));
@@ -295,250 +292,6 @@ export default function DigitalTwin3D({ project, projectEquipment, ifcMeshes, se
     });
   };
 
-  const buildBridgeScene = (scene: THREE.Scene) => {
-    waterMeshesRef.current = [];
-    roomMeshesRef.current = [];
-
-    // Water
-    const water = new THREE.Mesh(
-      new THREE.PlaneGeometry(220, 80),
-      new THREE.MeshLambertMaterial({ color: 0x0d2d52, transparent: true, opacity: 0.88 })
-    );
-    water.rotation.x = -Math.PI / 2;
-    water.position.y = -2;
-    scene.add(water);
-    waterMeshesRef.current.push(water);
-
-    // Green terrain hills on each end
-    [-75, 75].forEach(x => {
-      const hill = new THREE.Mesh(
-        new THREE.BoxGeometry(50, 4, 90),
-        new THREE.MeshLambertMaterial({ color: 0x14532d })
-      );
-      hill.position.set(x, -1, 0);
-      scene.add(hill);
-    });
-
-    // 5 concrete piers
-    const pierMat = new THREE.MeshLambertMaterial({ color: 0x6b7280 });
-    [-40, -20, 0, 20, 40].forEach(x => {
-      const pier = new THREE.Mesh(new THREE.BoxGeometry(3.5, 14, 5), pierMat);
-      pier.position.set(x, 5.5, 0);
-      scene.add(pier);
-      const footing = new THREE.Mesh(new THREE.BoxGeometry(6, 2, 8), pierMat);
-      footing.position.set(x, -0.5, 0);
-      scene.add(footing);
-    });
-
-    // Bridge deck sections (sensor rooms)
-    const deckMat = new THREE.MeshLambertMaterial({ color: 0x374151, transparent: true, opacity: 0.85 });
-    [-45, -15, 15, 45].forEach((x, i) => {
-      const deck = new THREE.Mesh(new THREE.BoxGeometry(30, 1.5, 14), deckMat.clone());
-      deck.position.set(x, 12.5, 0);
-      deck.userData = { type: "room", floor: i, zone: "A", name: `Bridge Section ${i + 1}` };
-      scene.add(deck);
-      roomMeshesRef.current.push(deck);
-    });
-
-    // Guardrails
-    const railMat = new THREE.MeshLambertMaterial({ color: 0x9ca3af });
-    [-6.5, 6.5].forEach(z => {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(120, 0.8, 0.3), railMat);
-      rail.position.set(0, 13.5, z);
-      scene.add(rail);
-    });
-
-    // Under-deck I-beams
-    const beamMat = new THREE.MeshLambertMaterial({ color: 0x4b5563 });
-    [-6, -2, 2, 6].forEach(z => {
-      const beam = new THREE.Mesh(new THREE.BoxGeometry(120, 1.8, 0.4), beamMat);
-      beam.position.set(0, 11.2, z);
-      scene.add(beam);
-    });
-
-    // Approach ramps
-    [-68, 68].forEach((x, i) => {
-      const ramp = new THREE.Mesh(new THREE.BoxGeometry(22, 1.5, 14), beamMat.clone());
-      ramp.position.set(x, 9.5, 0);
-      ramp.rotation.z = i === 0 ? 0.25 : -0.25;
-      scene.add(ramp);
-    });
-
-    // Tower crane (yellow)
-    const craneMat = new THREE.MeshLambertMaterial({ color: 0xf59e0b });
-    const craneMast = new THREE.Mesh(new THREE.BoxGeometry(1, 22, 1), craneMat);
-    craneMast.position.set(15, 23, 7);
-    scene.add(craneMast);
-    const craneJib = new THREE.Mesh(new THREE.BoxGeometry(20, 0.6, 0.6), craneMat);
-    craneJib.position.set(15, 34, 7);
-    scene.add(craneJib);
-    const counterJib = new THREE.Mesh(new THREE.BoxGeometry(9, 0.6, 0.6), craneMat);
-    counterJib.position.set(6, 34, 7);
-    scene.add(counterJib);
-
-    // Scaffolding
-    const scaffoldMat = new THREE.MeshLambertMaterial({ color: 0xd97706, transparent: true, opacity: 0.75 });
-    [-12, -8, -4, 0, 4, 8, 12].forEach(x => {
-      const vert = new THREE.Mesh(new THREE.BoxGeometry(0.25, 12, 0.25), scaffoldMat);
-      vert.position.set(x, 6, -5);
-      scene.add(vert);
-      const horiz = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 12), scaffoldMat);
-      horiz.position.set(x, 6, 0);
-      scene.add(horiz);
-    });
-
-    // Ground plane
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(300, 300),
-      new THREE.MeshLambertMaterial({ color: 0x06101f })
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -3;
-    scene.add(ground);
-
-    stateRef.current.radius = 95;
-    stateRef.current.targetY = 25;
-    lookAtRef.current.set(0, 10, 0);
-  };
-
-  const buildHarbourScene = (scene: THREE.Scene) => {
-    waterMeshesRef.current = [];
-    roomMeshesRef.current = [];
-
-    // Water
-    const water = new THREE.Mesh(
-      new THREE.PlaneGeometry(200, 130),
-      new THREE.MeshLambertMaterial({ color: 0x0c2440, transparent: true, opacity: 0.9 })
-    );
-    water.rotation.x = -Math.PI / 2;
-    water.position.y = -1;
-    scene.add(water);
-    waterMeshesRef.current.push(water);
-
-    // Quay platform
-    const quayMat = new THREE.MeshLambertMaterial({ color: 0x374151 });
-    const quay = new THREE.Mesh(new THREE.BoxGeometry(90, 1.5, 28), quayMat);
-    quay.position.set(0, 0.25, 28);
-    scene.add(quay);
-
-    // Quay wall
-    const wallMat = new THREE.MeshLambertMaterial({ color: 0x4b5563 });
-    const quayWall = new THREE.Mesh(new THREE.BoxGeometry(90, 2.5, 1.5), wallMat);
-    quayWall.position.set(0, 1.5, 14.5);
-    scene.add(quayWall);
-
-    // Bollards
-    const bollardMat = new THREE.MeshLambertMaterial({ color: 0x9ca3af });
-    [-35, -25, -15, -5, 5, 15, 25, 35].forEach(x => {
-      const bollard = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1.5, 8), bollardMat);
-      bollard.position.set(x, 1.5, 15);
-      scene.add(bollard);
-    });
-
-    // 3 gantry cranes
-    const craneMat = new THREE.MeshLambertMaterial({ color: 0xf59e0b });
-    const trolleyMat = new THREE.MeshLambertMaterial({ color: 0xef4444 });
-    [-24, 0, 24].forEach(cx => {
-      // Two legs
-      [21, 35].forEach(z => {
-        const leg = new THREE.Mesh(new THREE.BoxGeometry(1.2, 20, 1.2), craneMat);
-        leg.position.set(cx, 10, z);
-        scene.add(leg);
-      });
-      // Bridge beam
-      const bridge = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2, 16), craneMat);
-      bridge.position.set(cx, 21, 28);
-      scene.add(bridge);
-      // Outreach jib
-      const jib = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1, 30), craneMat);
-      jib.position.set(cx, 23, 7);
-      scene.add(jib);
-      // Trolley
-      const trolley = new THREE.Mesh(new THREE.BoxGeometry(2, 1.5, 2), trolleyMat);
-      trolley.position.set(cx, 22.5, 5);
-      scene.add(trolley);
-    });
-
-    // Container stacks
-    const containerColors = [0xef4444, 0x3b82f6, 0x10b981, 0xf59e0b, 0x8b5cf6, 0x06b6d4, 0xf97316, 0x22d3ee];
-    for (let row = 0; row < 4; row++) {
-      for (let col = -5; col <= 5; col++) {
-        const stackHeight = (Math.abs(col) + row) % 3;
-        const color = containerColors[(col + 5 + row * 11) % 8];
-        const container = new THREE.Mesh(
-          new THREE.BoxGeometry(3, 2, 5.5),
-          new THREE.MeshLambertMaterial({ color })
-        );
-        container.position.set(col * 3.6, 1 + stackHeight * 2, 42 + row * 7);
-        scene.add(container);
-      }
-    }
-
-    // Warehouse (4 sensor zones)
-    const warehouseColors = [0x334155, 0x1e3a5f, 0x1e293b, 0x0f1e35];
-    for (let i = 0; i < 4; i++) {
-      const wh = new THREE.Mesh(
-        new THREE.BoxGeometry(17.5, 10, 22),
-        new THREE.MeshLambertMaterial({ color: warehouseColors[i] })
-      );
-      wh.position.set(-26 + i * 18.5, 5, 66);
-      wh.userData = { type: "room", floor: i, zone: "A", name: `Warehouse Zone ${i + 1}` };
-      scene.add(wh);
-      roomMeshesRef.current.push(wh);
-    }
-
-    // Warehouse roof
-    const roofMat = new THREE.MeshLambertMaterial({ color: 0x1e293b });
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(72, 0.4, 22), roofMat);
-    roof.position.set(0, 11, 66);
-    scene.add(roof);
-
-    // Ship hull
-    const shipMat = new THREE.MeshLambertMaterial({ color: 0x1f2937 });
-    const hull = new THREE.Mesh(new THREE.BoxGeometry(55, 5, 13), shipMat);
-    hull.position.set(-3, 1.5, -12);
-    scene.add(hull);
-
-    // Ship superstructure
-    const superMat = new THREE.MeshLambertMaterial({ color: 0x374151 });
-    const superstructure = new THREE.Mesh(new THREE.BoxGeometry(14, 8, 11), superMat);
-    superstructure.position.set(16, 7.5, -12);
-    scene.add(superstructure);
-
-    // Ship chimney
-    const chimneyMat = new THREE.MeshLambertMaterial({ color: 0x4b5563 });
-    const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.2, 5, 8), chimneyMat);
-    chimney.position.set(14, 13, -12);
-    scene.add(chimney);
-
-    // Ship deck lights
-    [-15, -2, 12].forEach(x => {
-      const light = new THREE.PointLight(0x3b82f6, 0.4, 20);
-      light.position.set(x, 5, -12);
-      scene.add(light);
-    });
-
-    // Dock lights
-    [-30, -10, 10, 30].forEach(x => {
-      const light = new THREE.PointLight(0xfcd34d, 0.6, 25);
-      light.position.set(x, 18, 28);
-      scene.add(light);
-    });
-
-    // Ground
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(300, 300),
-      new THREE.MeshLambertMaterial({ color: 0x060d1a })
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -1.5;
-    scene.add(ground);
-
-    stateRef.current.radius = 90;
-    stateRef.current.targetY = 32;
-    lookAtRef.current.set(0, 8, 20);
-  };
-
   const buildProceduralBuilding = (scene: THREE.Scene) => {
     const bW = 16, bD = 12, floorH = 3.5, storeys = 4;
     roomMeshesRef.current = [];
@@ -658,12 +411,29 @@ export default function DigitalTwin3D({ project, projectEquipment, ifcMeshes, se
     if (usingIFC) {
       buildFromIFCMeshes(scene, ifcMeshes!);
     } else if (sceneType === "bridge") {
-      buildBridgeScene(scene);
+      waterMeshesRef.current = [];
+      roomMeshesRef.current = [];
+      const framing = buildBridgeScene(
+        scene, () => {}, m => roomMeshesRef.current.push(m), m => waterMeshesRef.current.push(m)
+      );
+      stateRef.current.radius = framing.radius;
+      stateRef.current.targetY = framing.targetY;
+      lookAtRef.current.set(...framing.lookAt);
     } else if (sceneType === "harbour") {
-      buildHarbourScene(scene);
+      waterMeshesRef.current = [];
+      roomMeshesRef.current = [];
+      const framing = buildHarbourScene(
+        scene, () => {}, m => roomMeshesRef.current.push(m), m => waterMeshesRef.current.push(m)
+      );
+      stateRef.current.radius = framing.radius;
+      stateRef.current.targetY = framing.targetY;
+      lookAtRef.current.set(...framing.lookAt);
     } else {
       buildProceduralBuilding(scene);
     }
+    defaultStateRef.current = {
+      angle: stateRef.current.angle, radius: stateRef.current.radius, targetY: stateRef.current.targetY,
+    };
     addEquipmentMarkersToScene(scene, equipment);
 
     const raycaster = new THREE.Raycaster();
@@ -717,10 +487,14 @@ export default function DigitalTwin3D({ project, projectEquipment, ifcMeshes, se
       t += 0.01;
       const s = stateRef.current;
       if (s.isRotating && !s.isDragging) s.angle += 0.004;
-      camera.position.x = Math.sin(s.angle) * s.radius;
-      camera.position.z = Math.cos(s.angle) * s.radius;
-      camera.position.y = s.targetY;
-      camera.lookAt(lookAtRef.current);
+      camera.position.x = Math.sin(s.angle) * s.radius + s.pan.x;
+      camera.position.z = Math.cos(s.angle) * s.radius + s.pan.z;
+      camera.position.y = s.targetY + s.pan.y;
+      camera.lookAt(
+        lookAtRef.current.x + s.pan.x,
+        lookAtRef.current.y + s.pan.y,
+        lookAtRef.current.z + s.pan.z,
+      );
       equipmentMeshesRef.current.forEach((mesh, i) => {
         if ((mesh.geometry as any).type === "SphereGeometry") {
           const sc = 1 + Math.sin(t * 2 + i) * 0.15;
@@ -765,17 +539,27 @@ export default function DigitalTwin3D({ project, projectEquipment, ifcMeshes, se
     { id: "safety",      label: "Safety",      icon: "⚠️" },
   ];
 
+  const handlePan = (axis: "x" | "y" | "z", sign: 1 | -1) => {
+    const s = stateRef.current;
+    const step = Math.max(2, s.radius * 0.08);
+    s.pan[axis] += step * sign;
+  };
+
+  const handleResetView = () => {
+    const d = defaultStateRef.current;
+    Object.assign(stateRef.current, { angle: d.angle, radius: d.radius, targetY: d.targetY, pan: { x: 0, y: 0, z: 0 } });
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2 items-center justify-between">
-        <div className="flex gap-1 bg-secondary rounded-xl p-1 flex-wrap">
+        <div className="flex gap-1 rounded-xl p-1 flex-wrap" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
           {colorModes.map(mode => (
             <button
               key={mode.id}
               onClick={() => setColorMode(mode.id as any)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                colorMode === mode.id ? "bg-blue-500 text-white" : "text-muted-foreground hover:text-foreground"
-              }`}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              style={colorMode === mode.id ? { background: "rgba(0,212,255,0.15)", color: "#00D4FF" } : { color: "rgba(255,255,255,0.4)" }}
             >
               {mode.icon} {mode.label}
             </button>
@@ -794,90 +578,94 @@ export default function DigitalTwin3D({ project, projectEquipment, ifcMeshes, se
           )}
           <button
             onClick={() => { stateRef.current.isRotating = !stateRef.current.isRotating; setIsRotating(stateRef.current.isRotating); }}
-            className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${
-              isRotating ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-secondary text-muted-foreground border-border"
-            }`}
+            className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+            style={isRotating ? { background: ACCENT.cyan.bg, color: "#00D4FF", borderColor: ACCENT.cyan.border } : glassButtonStyle}
           >
             {isRotating ? "⏸ Pause" : "▶ Rotate"}
+          </button>
+          <button onClick={handleResetView}
+            className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+            style={glassButtonStyle}>
+            ↺ Reset
           </button>
         </div>
       </div>
 
-      <div className="relative w-full rounded-2xl overflow-hidden border border-blue-500/20" style={{ height: "580px" }}>
+      <div className="relative w-full rounded-2xl overflow-hidden" style={{ height: "580px", border: "1px solid rgba(0,212,255,0.15)" }}>
         <div ref={mountRef} className="w-full h-full" />
 
         <div className="absolute top-4 left-4 flex flex-col gap-2">
-          <div className="bg-black/60 backdrop-blur rounded-xl px-3 py-2 border border-blue-500/20 flex items-center gap-2">
+          <div className="backdrop-blur rounded-xl px-3 py-2 flex items-center gap-2" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.15)" }}>
             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-xs text-emerald-400 font-medium">
               {project?.name ?? "Live Digital Twin"}
             </span>
           </div>
           {project?.location && (
-            <div className="bg-black/60 backdrop-blur rounded-xl px-3 py-1.5 border border-border">
-              <p className="text-xs text-muted-foreground">📍 {project.location}</p>
+            <div className="backdrop-blur rounded-xl px-3 py-1.5" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+              <p className="text-xs text-white/40">📍 {project.location}</p>
             </div>
           )}
           {project?.client && (
-            <div className="bg-black/60 backdrop-blur rounded-xl px-3 py-1.5 border border-border">
-              <p className="text-xs text-muted-foreground">🏢 {project.client}</p>
+            <div className="backdrop-blur rounded-xl px-3 py-1.5" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+              <p className="text-xs text-white/40">🏢 {project.client}</p>
             </div>
           )}
           {!usingIFC && (
-            <div className="bg-black/60 backdrop-blur rounded-xl px-3 py-1.5 border border-border">
-              <p className="text-xs text-muted-foreground">
+            <div className="backdrop-blur rounded-xl px-3 py-1.5" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+              <p className="text-xs text-white/40">
                 {detectSceneType(project) === "bridge" ? "🌉 Metro Bridge" :
                  detectSceneType(project) === "harbour" ? "⚓ Harbour Construction" :
                  "🏗️ Building"}
               </p>
             </div>
           )}
-          <div className="bg-black/60 backdrop-blur rounded-xl px-3 py-2 border border-border">
-            <p className="text-xs text-muted-foreground">🖱️ Drag · Scroll · Click element</p>
+          <div className="backdrop-blur rounded-xl px-3 py-2" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+            <p className="text-xs text-white/40">🖱️ Drag · Scroll · Click element</p>
           </div>
         </div>
 
-        <div className="absolute top-4 right-4 bg-black/70 backdrop-blur rounded-xl p-3 border border-border">
-          <p className="text-xs font-medium text-foreground mb-2 capitalize">
+        <div className="absolute top-4 right-4 backdrop-blur rounded-xl p-3" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs font-medium text-white mb-2 capitalize">
             {colorMode === "occupancy" ? "👥 Occupancy" : colorMode === "temperature" ? "🌡️ Temperature" :
              colorMode === "co2" ? "💨 CO₂ Level" : colorMode === "progress" ? "🏗️ Progress" : "⚠️ Safety"}
           </p>
           {[
-            { color: "#10b981", label: colorMode === "temperature" ? "< 18°C" : colorMode === "co2" ? "< 600ppm" : "Low / Good" },
-            { color: "#3b82f6", label: colorMode === "temperature" ? "18-22°C" : colorMode === "co2" ? "600-800ppm" : "Moderate" },
-            { color: "#f59e0b", label: colorMode === "temperature" ? "22-26°C" : colorMode === "co2" ? "800-1000ppm" : "High" },
-            { color: "#ef4444", label: colorMode === "temperature" ? "> 26°C" : colorMode === "co2" ? "> 1000ppm" : "Critical" },
+            { color: "#10B981", label: colorMode === "temperature" ? "< 18°C" : colorMode === "co2" ? "< 600ppm" : "Low / Good" },
+            { color: "#00D4FF", label: colorMode === "temperature" ? "18-22°C" : colorMode === "co2" ? "600-800ppm" : "Moderate" },
+            { color: "#F59E0B", label: colorMode === "temperature" ? "22-26°C" : colorMode === "co2" ? "800-1000ppm" : "High" },
+            { color: "#EF4444", label: colorMode === "temperature" ? "> 26°C" : colorMode === "co2" ? "> 1000ppm" : "Critical" },
           ].map(l => (
             <div key={l.label} className="flex items-center gap-2 mb-1">
               <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: l.color }} />
-              <span className="text-xs text-muted-foreground">{l.label}</span>
+              <span className="text-xs text-white/35">{l.label}</span>
             </div>
           ))}
-          <div className="mt-2 pt-2 border-t border-border space-y-1">
-            {[["#10b981","Equipment OK"],["#f59e0b","Warning"],["#ef4444","Critical"]].map(([c,l]) => (
+          <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+            {[["#10B981","Equipment OK"],["#F59E0B","Warning"],["#EF4444","Critical"]].map(([c,l]) => (
               <div key={l} className="flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full" style={{ backgroundColor: c }} />
-                <span className="text-xs text-muted-foreground">{l}</span>
+                <span className="text-xs text-white/35">{l}</span>
               </div>
             ))}
           </div>
         </div>
 
         {selectedItem && (
-          <div className="absolute bottom-4 left-4 bg-black/80 backdrop-blur rounded-xl p-4 border border-blue-500/30 min-w-52">
+          <div className="absolute bottom-4 left-4 backdrop-blur rounded-xl p-4 min-w-52" style={{ background: "rgba(4,11,25,0.9)", border: "1px solid rgba(0,212,255,0.2)" }}>
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs font-medium text-blue-400">
+              <p className="text-xs font-medium text-cyan-400">
                 {selectedItem.type === "equipment" ? "🔧 Equipment" : "🏢 Element Info"}
               </p>
-              <button onClick={() => setSelectedItem(null)} className="text-muted-foreground hover:text-foreground text-sm">×</button>
+              <button onClick={() => setSelectedItem(null)} className="text-white/40 hover:text-white text-sm">×</button>
             </div>
             {Object.entries(selectedItem).filter(([k]) => !["type","ifc","elementType"].includes(k)).map(([key, val]) => (
               <div key={key} className="flex justify-between gap-4 mb-1">
-                <span className="text-xs text-muted-foreground capitalize">{key}:</span>
+                <span className="text-xs text-white/35 capitalize">{key}:</span>
                 <span className={`text-xs font-medium ${
                   key === "alert" && val ? "text-red-400" :
                   key === "status" && val === "critical" ? "text-red-400" :
-                  key === "status" && val === "warning" ? "text-orange-400" : "text-foreground"
+                  key === "status" && val === "warning" ? "text-amber-400" : "text-white"
                 }`}>
                   {key === "alert" ? (val ? "⚠️ Alert!" : "✅ Normal") : String(val)}
                 </span>
@@ -887,26 +675,41 @@ export default function DigitalTwin3D({ project, projectEquipment, ifcMeshes, se
         )}
 
         {alerts.length > 0 && (
-          <div className="absolute bottom-4 right-4 bg-black/80 backdrop-blur rounded-xl p-3 border border-red-500/30 max-w-48">
+          <div className="absolute bottom-4 right-4 backdrop-blur rounded-xl p-3 max-w-48" style={{ background: "rgba(4,11,25,0.9)", border: "1px solid rgba(239,68,68,0.3)" }}>
             <p className="text-xs font-medium text-red-400 mb-2">⚠️ Active Alerts</p>
             {alerts.slice(0, 3).map((alert, i) => (
-              <div key={i} className="text-xs text-muted-foreground mb-1">
+              <div key={i} className="text-xs text-white/35 mb-1">
                 Floor {alert.floor + 1} Zone {alert.zone}
               </div>
             ))}
           </div>
         )}
+
+        {/* Axis-pan control — move the camera/pivot along X/Y/Z */}
+        <div className={`absolute ${alerts.length > 0 ? "bottom-32" : "bottom-4"} right-4 z-20 backdrop-blur rounded-xl p-2 flex flex-col gap-1`}
+          style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.15)" }}>
+          <p className="text-[10px] text-white/35 text-center mb-0.5">Pan</p>
+          {(["x", "y", "z"] as const).map(axis => (
+            <div key={axis} className="flex items-center gap-1">
+              <span className="text-[10px] text-white/40 w-3">{axis.toUpperCase()}</span>
+              <button onClick={() => handlePan(axis, -1)}
+                className="w-6 h-6 rounded-md text-xs text-white/60 hover:text-white hover:bg-white/10 transition-colors">−</button>
+              <button onClick={() => handlePan(axis, 1)}
+                className="w-6 h-6 rounded-md text-xs text-white/60 hover:text-white hover:bg-white/10 transition-colors">+</button>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          { label: "Avg Temperature", value: `${(sensorData.reduce((s,d)=>s+d.temperature,0)/sensorData.length).toFixed(1)}°C`, color: "text-orange-400", bg: "bg-orange-500/5 border-orange-500/20" },
-          { label: "Avg Occupancy",   value: `${(sensorData.reduce((s,d)=>s+d.occupancy,0)/sensorData.length).toFixed(0)}%`,    color: "text-blue-400",   bg: "bg-blue-500/5 border-blue-500/20" },
-          { label: "Active Alerts",   value: alerts.length.toString(), color: alerts.length > 0 ? "text-red-400" : "text-emerald-400", bg: alerts.length > 0 ? "bg-red-500/5 border-red-500/20" : "bg-emerald-500/5 border-emerald-500/20" },
-          { label: "Equipment Status", value: `${equipment.filter(e=>e.status==="operational").length}/${equipment.length} OK`, color: "text-emerald-400", bg: "bg-emerald-500/5 border-emerald-500/20" },
+          { label: "Avg Temperature", value: `${(sensorData.reduce((s,d)=>s+d.temperature,0)/sensorData.length).toFixed(1)}°C`, color: "text-amber-400", accentBg: ACCENT.amber.bg, accentBorder: ACCENT.amber.border },
+          { label: "Avg Occupancy",   value: `${(sensorData.reduce((s,d)=>s+d.occupancy,0)/sensorData.length).toFixed(0)}%`,    color: "text-cyan-400",   accentBg: ACCENT.cyan.bg, accentBorder: ACCENT.cyan.border },
+          { label: "Active Alerts",   value: alerts.length.toString(), color: alerts.length > 0 ? "text-red-400" : "text-emerald-400", accentBg: alerts.length > 0 ? ACCENT.red.bg : ACCENT.green.bg, accentBorder: alerts.length > 0 ? ACCENT.red.border : ACCENT.green.border },
+          { label: "Equipment Status", value: `${equipment.filter(e=>e.status==="operational").length}/${equipment.length} OK`, color: "text-emerald-400", accentBg: ACCENT.green.bg, accentBorder: ACCENT.green.border },
         ].map((stat, i) => (
-          <motion.div key={i} className={`rounded-xl border p-3 ${stat.bg}`}>
-            <p className="text-xs text-muted-foreground">{stat.label}</p>
+          <motion.div key={i} className="rounded-xl p-3" style={{ background: stat.accentBg, border: `1px solid ${stat.accentBorder}` }}>
+            <p className="text-xs text-white/35">{stat.label}</p>
             <p className={`text-lg font-bold mt-1 ${stat.color}`}>{stat.value}</p>
             <div className="flex items-center gap-1 mt-1">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />

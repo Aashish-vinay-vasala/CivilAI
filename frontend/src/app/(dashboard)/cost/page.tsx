@@ -13,6 +13,9 @@ import {
   Sparkles,
   CheckCircle2,
   RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  AlertTriangle,
 } from "lucide-react";
 import {
   AreaChart,
@@ -32,6 +35,7 @@ import ModuleTabs from "@/components/shared/ModuleTabs";
 import GlassModal from "@/components/shared/GlassModal";
 import Sparkline from "@/components/shared/Sparkline";
 import MaterialPricesPanel from "@/components/shared/MaterialPricesPanel";
+import CostOverrunTrainingPanel from "@/components/shared/CostOverrunTrainingPanel";
 import TimeRangeSelector, { type TimeRange, rangeToParams } from "@/components/shared/TimeRangeSelector";
 import { MarkdownText } from "@/lib/renderMarkdown";
 import {
@@ -113,6 +117,7 @@ export default function CostPage() {
   const [mlData, setMlData] = useState<any>(null);
   const [mlLoading, setMlLoading] = useState(true);
   const [trainLoading, setTrainLoading] = useState(false);
+  const [showWhy, setShowWhy] = useState(false);
   const [costKpis, setCostKpis] = useState<CostKpis | null>(null);
   const [burnChartData, setBurnChartData] = useState<any[]>([]);
   const [burnLoading, setBurnLoading] = useState(true);
@@ -217,9 +222,11 @@ export default function CostPage() {
     setTrainLoading(true);
     try {
       const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/ml/cost-overrun/train`);
-      const { accuracy, real_project_rows, total_rows } = res.data;
+      const { version, total_rows, real_project_rows, metrics } = res.data;
+      const acc = metrics?.cv_accuracy_mean;
       toast.success(
-        `Model retrained on ${total_rows.toLocaleString()} rows (${real_project_rows} from your projects) — ${(accuracy * 100).toFixed(1)}% accuracy`
+        `Trained v${version} on ${total_rows.toLocaleString()} rows (${real_project_rows} from your projects)`
+        + (acc != null ? ` — ${(acc * 100).toFixed(1)}% CV accuracy` : "")
       );
       fetchMlPrediction(selectedProjectId);
     } catch (err) {
@@ -707,8 +714,20 @@ export default function CostPage() {
                     {mlData.probability}% probability of overrun
                   </p>
                   <p className="text-[13px] text-white/40 mt-0.5">
-                    Estimated overrun: {mlData.estimated_overrun_pct}% — {mlData.will_overrun ? "Action required" : "Under control"}
+                    {mlData.estimated_overrun_range ? (
+                      <>Estimated overrun: {mlData.estimated_overrun_range.p10}%–{mlData.estimated_overrun_range.p90}%
+                        {" "}(most likely {mlData.estimated_overrun_range.p50}%)</>
+                    ) : (
+                      <>Estimated overrun: {mlData.estimated_overrun_pct}%</>
+                    )}
+                    {" "}— {mlData.will_overrun ? "Action required" : "Under control"}
                   </p>
+                  {mlData.drift_warning && (
+                    <p className="text-[11px] text-amber-300 mt-1.5 flex items-center gap-1.5">
+                      <AlertTriangle className="w-3 h-3 shrink-0" />
+                      {mlData.drift_warning}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -727,6 +746,26 @@ export default function CostPage() {
                 </button>
               </div>
             </div>
+            {mlData.explanation && mlData.explanation.length > 0 && (
+              <div className="mt-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                <button onClick={() => setShowWhy((v) => !v)}
+                  className="flex items-center gap-1 text-[11px] text-white/40 hover:text-white/70 transition-colors">
+                  Why? {showWhy ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+                {showWhy && (
+                  <div className="mt-2 space-y-1.5">
+                    {mlData.explanation.map((f: any, i: number) => (
+                      <div key={i} className="flex items-center justify-between text-[12px]">
+                        <span className="text-white/60">{f.feature.replace(/_/g, " ")}</span>
+                        <span className={f.direction === "increases risk" ? "text-red-300" : "text-emerald-300"}>
+                          {f.direction} (value: {f.value})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {mlData.trained_on && (
               <p className="text-[10px] text-white/25 mt-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
                 {mlData.model_version} — trained on {mlData.trained_on}
@@ -735,6 +774,8 @@ export default function CostPage() {
           </motion.div>
         );
       })()}
+
+      <CostOverrunTrainingPanel onTrained={() => fetchMlPrediction(selectedProjectId)} />
 
       {/* Budget Burn Chart */}
       <motion.div

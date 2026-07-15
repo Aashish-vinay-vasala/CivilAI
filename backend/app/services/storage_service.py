@@ -80,6 +80,7 @@ def get_content_type(ext: str) -> str:
         "txt": "text/plain",
         "dwg": "application/acad",
         "dxf": "application/dxf",
+        "ifc": "application/octet-stream",
     }
     return types.get(ext, "application/pdf")
 

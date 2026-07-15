@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "dataset_sources": [
+    {
+      "type": "baseline",
+      "rows": 1000,
+      "file": "cost_overrun_baseline.csv"
+    }
+  ],
+  "total_rows": 1000,
+  "is_baseline_only": true,
+  "trained_at": "2026-07-10T08:51:33.241068+00:00"
+}

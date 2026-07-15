@@ -45,7 +45,6 @@ const PAGE_TITLES: Record<string, string> = {
   "/scenario":          "Scenario Planning",
   "/resource-leveling": "Resource Leveling",
   "/scheduled-reports": "Scheduled Reports",
-  "/team":              "Team",
   "/qr-tracker":        "QR Tracker",
   "/transcribe":        "Transcribe",
   "/writing":           "Writing AI",

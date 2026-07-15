@@ -2,10 +2,23 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
+import { ACCENT, glassInputStyle, glassButtonStyle, gradientButtonStyle } from "@/lib/theme";
+import { supabase } from "@/lib/supabase";
+import { detectSceneType, buildBridgeScene, buildHarbourScene } from "@/lib/proceduralScenes";
+
+// Plain fetch() isn't covered by the axios auth interceptor (axiosAuthInterceptor.ts),
+// so this upload needs its Supabase bearer token attached manually — otherwise every
+// parse request 401s with "Authentication required" instead of returning geometry.
+async function authHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 interface BIMViewer3DProps {
   bimData?: any;
   initialMeshes?: any[];
+  project?: { name: string; project_type?: string } | null;
 }
 
 type ViewMode = "perspective" | "top" | "front" | "side";
@@ -36,6 +49,7 @@ const TYPE_COLORS: { [key: string]: number } = {
   doors: 0xf59e0b,
   spaces: 0x14b8a6,
   beams: 0x64748b,
+  equipment: 0xf59e0b,
 };
 const STATUS_COLORS: Record<ElementStatus, number> = {
   pending: 0x374151,
@@ -44,7 +58,7 @@ const STATUS_COLORS: Record<ElementStatus, number> = {
 };
 const DEFAULT_SHOW_TYPES = {
   walls: true, windows: true, columns: true, floors: true,
-  roof: true, doors: true, spaces: false, beams: true,
+  roof: true, doors: true, spaces: false, beams: true, equipment: true,
 };
 
 // ── Sun-path helper — maps a 0-24h slider to a real light position/color ────
@@ -78,15 +92,19 @@ function describeMesh(mesh: THREE.Mesh) {
   };
 }
 
-export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps) {
+export default function BIMViewer3D({ bimData, initialMeshes, project }: BIMViewer3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number>(0);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const meshGroupsRef = useRef<{ [key: string]: THREE.Mesh[] }>({
-    walls: [], windows: [], columns: [], floors: [], roof: [], doors: [], spaces: [], beams: [],
+    walls: [], windows: [], columns: [], floors: [], roof: [], doors: [], spaces: [], beams: [], equipment: [],
   });
+  const waterMeshesRef = useRef<THREE.Mesh[]>([]);
+  // Overrides the default targetY*0.3 look-at height/offset for the bridge/harbour
+  // procedural scenes, whose points of interest aren't centered on the world origin.
+  const lookAtOverrideRef = useRef<[number, number, number] | null>(null);
   const originalPositionsRef = useRef<Map<THREE.Mesh, number>>(new Map());
 
   // State mirrors → refs so imperative functions stay stable
@@ -120,7 +138,11 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
     targetY: 30,
     prevX: 0,
     prevY: 0,
+    pan: { x: 0, y: 0, z: 0 },
   });
+  // Snapshot of the scene-appropriate default camera framing (varies for the
+  // bridge/harbour procedural scenes) so Reset restores it, not a fixed value.
+  const defaultStateRef = useRef({ angle: Math.PI / 4, radius: 55, targetY: 30 });
 
   // React state
   const [isRotating, setIsRotating] = useState(true);
@@ -166,6 +188,7 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const storeyCount = bimData?.storeys?.length || 4;
+  const sceneType = detectSceneType(project);
   const floorH = 3.5;
 
   // ── Apply display state (position + visibility) ──────────────────────────
@@ -285,12 +308,35 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
 
     originalPositionsRef.current.clear();
     measureLineRef.current = null;
+    waterMeshesRef.current = [];
+    lookAtOverrideRef.current = null;
 
     if (realMeshes.length > 0) {
       buildFromRealMeshes(scene, realMeshes);
+    } else if (sceneType === "bridge" || sceneType === "harbour") {
+      meshGroupsRef.current = {
+        walls: [], windows: [], columns: [], floors: [], roof: [], doors: [], spaces: [], beams: [], equipment: [],
+      };
+      const bucketKey: Record<string, string> = { wall: "walls", column: "columns", floor: "floors", beam: "beams", roof: "roof", equipment: "equipment" };
+      const onElement = (m: THREE.Mesh, meta: { type: string; floor: number; name: string }) => {
+        m.userData = { type: meta.type, floor: meta.floor, name: meta.name };
+        originalPositionsRef.current.set(m, m.position.y);
+        meshGroupsRef.current[bucketKey[meta.type]].push(m);
+      };
+      const onInteractive = () => {};
+      const onWater = (m: THREE.Mesh) => waterMeshesRef.current.push(m);
+      const framing = sceneType === "bridge"
+        ? buildBridgeScene(scene, onElement, onInteractive, onWater)
+        : buildHarbourScene(scene, onElement, onInteractive, onWater);
+      stateRef.current.radius = framing.radius;
+      stateRef.current.targetY = framing.targetY;
+      lookAtOverrideRef.current = framing.lookAt;
     } else {
       buildDefaultBuilding(scene, storeyCount, floorH);
     }
+    defaultStateRef.current = {
+      angle: stateRef.current.angle, radius: stateRef.current.radius, targetY: stateRef.current.targetY,
+    };
 
     applyDisplayState();
     applyColorMode();
@@ -444,10 +490,19 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
       frameRef.current = requestAnimationFrame(animate);
       const s = stateRef.current;
       if (s.isRotating && !s.isDragging) s.angle += 0.004;
-      camera.position.x = Math.sin(s.angle) * s.radius;
-      camera.position.z = Math.cos(s.angle) * s.radius;
-      camera.position.y = s.targetY;
-      camera.lookAt(0, s.targetY * 0.3, 0);
+      camera.position.x = Math.sin(s.angle) * s.radius + s.pan.x;
+      camera.position.z = Math.cos(s.angle) * s.radius + s.pan.z;
+      camera.position.y = s.targetY + s.pan.y;
+      const lo = lookAtOverrideRef.current;
+      if (lo) camera.lookAt(lo[0] + s.pan.x, lo[1] + s.pan.y, lo[2] + s.pan.z);
+      else camera.lookAt(s.pan.x, s.targetY * 0.3 + s.pan.y, s.pan.z);
+      const t = performance.now() * 0.001;
+      waterMeshesRef.current.forEach((mesh) => {
+        const mat = mesh.material as THREE.MeshLambertMaterial;
+        const wave = Math.sin(t * 0.6) * 0.04;
+        mat.color.setRGB(0.04 + wave * 0.3, 0.12 + wave * 0.5, 0.32 + wave);
+        mat.needsUpdate = true;
+      });
       renderer.render(scene, camera);
     };
     animate();
@@ -475,7 +530,7 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
       renderer.dispose();
     };
-  }, [bimData, realMeshes, storeyCount, applyDisplayState, applyColorMode]);
+  }, [bimData, realMeshes, storeyCount, sceneType, applyDisplayState, applyColorMode]);
 
   // ── Sync effects ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -626,7 +681,7 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
   // ── Geometry builders ─────────────────────────────────────────────────────
   const buildFromRealMeshes = (scene: THREE.Scene, meshes: any[]) => {
     meshGroupsRef.current = {
-      walls: [], windows: [], columns: [], floors: [], roof: [], doors: [], spaces: [], beams: [],
+      walls: [], windows: [], columns: [], floors: [], roof: [], doors: [], spaces: [], beams: [], equipment: [],
     };
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
     meshes.forEach(d => d.vertices?.forEach((v: number[]) => {
@@ -661,7 +716,8 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
           d.type.includes("Wall") ? "walls" : d.type.includes("Slab") ? "floors" :
           d.type.includes("Column") ? "columns" : d.type.includes("Window") ? "windows" :
           d.type.includes("Door") ? "doors" : d.type.includes("Roof") ? "roof" :
-          d.type.includes("Beam") ? "beams" : d.type.includes("Stair") ? "walls" : "walls";
+          d.type.includes("Beam") ? "beams" : d.type.includes("Space") ? "spaces" :
+          d.type.includes("Stair") ? "walls" : "walls";
         if (!meshGroupsRef.current[key]) meshGroupsRef.current[key] = [];
         meshGroupsRef.current[key].push(mesh);
       } catch {}
@@ -677,7 +733,7 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
   const buildDefaultBuilding = (scene: THREE.Scene, floors: number, fH: number) => {
     const bW = 14, bD = 10;
     meshGroupsRef.current = {
-      walls: [], windows: [], columns: [], floors: [], roof: [], doors: [], spaces: [], beams: [],
+      walls: [], windows: [], columns: [], floors: [], roof: [], doors: [], spaces: [], beams: [], equipment: [],
     };
     const addMesh = (mesh: THREE.Mesh, type: string) => {
       scene.add(mesh);
@@ -754,9 +810,13 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
     setLoadingIFC(true); setIfcFileName(file.name); setIfcError("");
     try {
       const fd = new FormData(); fd.append("file", file);
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/bim/parse-3d`, { method: "POST", body: fd });
+      const headers = await authHeaders();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/bim/parse-3d`, { method: "POST", body: fd, headers });
       const data = await res.json();
-      if (data.success && data.meshes?.length > 0) {
+      if (!res.ok) {
+        setHasRealGeometry(false);
+        setIfcError(data.detail || data.error || `Server error (${res.status})`);
+      } else if (data.success && data.meshes?.length > 0) {
         setRealMeshes(data.meshes); setHasRealGeometry(true); setIfcError("");
       } else {
         setHasRealGeometry(false);
@@ -770,9 +830,17 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
   };
 
   // ── Controls ──────────────────────────────────────────────────────────────
+  const handlePan = (axis: "x" | "y" | "z", sign: 1 | -1) => {
+    const s = stateRef.current;
+    const step = Math.max(2, s.radius * 0.08);
+    s.pan[axis] += step * sign;
+  };
+
   const handleReset = () => {
-    stateRef.current.angle = Math.PI / 4; stateRef.current.radius = 55;
-    stateRef.current.targetY = 30; stateRef.current.isRotating = true;
+    const d = defaultStateRef.current;
+    stateRef.current.angle = d.angle; stateRef.current.radius = d.radius;
+    stateRef.current.targetY = d.targetY; stateRef.current.isRotating = true;
+    stateRef.current.pan = { x: 0, y: 0, z: 0 };
     setIsRotating(true); setViewMode("perspective");
     setDisplayMode("normal"); setColorMode("byType");
     setShowTypes({ ...DEFAULT_SHOW_TYPES }); setIsolatedFloor(0); setSelectedElement(null);
@@ -950,16 +1018,17 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
     <div className="space-y-3">
       {/* ── View / Color / Display toolbar ─────────────────────────── */}
       <div className="flex flex-wrap gap-2 items-center">
-        <div className="flex gap-1 bg-secondary rounded-xl p-1">
+        <div className="flex gap-1 rounded-xl p-1" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
           {(["perspective", "top", "front", "side"] as ViewMode[]).map(v => (
             <button key={v} onClick={() => setView(v)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize ${viewMode === v ? "bg-blue-500 text-white" : "text-muted-foreground hover:text-foreground"}`}>
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize"
+              style={viewMode === v ? { background: "rgba(59,130,246,0.15)", color: "#3B82F6" } : { color: "rgba(255,255,255,0.4)" }}>
               {v === "perspective" ? "3D" : v.charAt(0).toUpperCase() + v.slice(1)}
             </button>
           ))}
         </div>
 
-        <div className="flex gap-1 bg-secondary rounded-xl p-1 flex-wrap">
+        <div className="flex gap-1 rounded-xl p-1 flex-wrap" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
           {([
             { id: "byType", label: "Type" }, { id: "byFloor", label: "Floor" },
             { id: "xray", label: "X-Ray" }, { id: "wireframe", label: "Wire" },
@@ -967,34 +1036,36 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
             { id: "byStatus", label: "Status" },
           ] as { id: ColorMode; label: string }[]).map(c => (
             <button key={c.id} onClick={() => setColorMode(c.id)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${colorMode === c.id ? "bg-cyan-500 text-white" : "text-muted-foreground hover:text-foreground"}`}>
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              style={colorMode === c.id ? { background: "rgba(0,212,255,0.15)", color: "#00D4FF" } : { color: "rgba(255,255,255,0.4)" }}>
               {c.label}
             </button>
           ))}
         </div>
 
-        <div className="flex gap-1 bg-secondary rounded-xl p-1">
+        <div className="flex gap-1 rounded-xl p-1" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
           {([
             { id: "normal", label: "Normal" }, { id: "exploded", label: "Exploded" }, { id: "isolated", label: "Isolate" },
           ] as { id: DisplayMode; label: string }[]).map(d => (
             <button key={d.id} onClick={() => setDisplayMode(d.id)}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${displayMode === d.id ? "bg-emerald-500 text-white" : "text-muted-foreground hover:text-foreground"}`}>
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              style={displayMode === d.id ? { background: "rgba(16,185,129,0.15)", color: "#10B981" } : { color: "rgba(255,255,255,0.4)" }}>
               {d.label}
             </button>
           ))}
         </div>
 
-        <div className="flex items-center gap-2 bg-secondary rounded-xl px-3 py-1.5">
-          <span className="text-xs text-muted-foreground shrink-0">Opacity</span>
+        <div className="flex items-center gap-2 rounded-xl px-3 py-1.5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+          <span className="text-xs text-white/35 shrink-0">Opacity</span>
           <input type="range" min={0.1} max={1} step={0.05} value={opacity}
             onChange={e => setOpacity(parseFloat(e.target.value))}
             className="w-20 accent-cyan-400" />
-          <span className="text-xs text-muted-foreground shrink-0 w-9 text-right">{Math.round(opacity * 100)}%</span>
+          <span className="text-xs text-white/35 shrink-0 w-9 text-right">{Math.round(opacity * 100)}%</span>
         </div>
 
         {displayMode === "isolated" && (
           <select value={isolatedFloor} onChange={e => setIsolatedFloor(parseInt(e.target.value))}
-            className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none">
+            className="px-3 py-1.5 rounded-xl text-xs text-white outline-none border" style={glassInputStyle}>
             {Array.from({ length: storeyCount }, (_, i) => (
               <option key={i} value={i}>Floor {i + 1}</option>
             ))}
@@ -1002,13 +1073,14 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
         )}
 
         <div className="flex gap-1 ml-auto">
-          <button onClick={handleReset} className="px-3 py-1.5 rounded-xl bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border">↺ Reset</button>
+          <button onClick={handleReset} className="px-3 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-colors" style={glassButtonStyle}>↺ Reset</button>
           <button onClick={handleToggleAuto}
-            className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${isRotating ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-secondary text-muted-foreground border-border"}`}>
+            className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+            style={isRotating ? { background: "rgba(0,212,255,0.1)", color: "#00D4FF", borderColor: "rgba(0,212,255,0.2)" } : { background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.4)", borderColor: "rgba(255,255,255,0.07)" }}>
             {isRotating ? "⏸" : "▶"} Auto
           </button>
           <button onClick={handleToggleFullscreen}
-            className="px-3 py-1.5 rounded-xl bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border">
+            className="px-3 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-colors" style={glassButtonStyle}>
             {isFullscreen ? "🗗 Exit" : "⛶ Fullscreen"}
           </button>
         </div>
@@ -1018,14 +1090,17 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
       <div className="relative">
         <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
           placeholder="🔍 Search element by name or ID…"
-          className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-blue-500/40" />
+          className="w-full px-3 py-2 rounded-xl text-xs text-white placeholder:text-white/30 outline-none border focus:border-cyan-500/50"
+          style={glassInputStyle} />
         {searchResults.length > 0 && (
-          <div className="absolute z-10 mt-1 w-full bg-secondary border border-border rounded-xl overflow-hidden shadow-lg">
+          <div className="absolute z-10 mt-1 w-full rounded-xl overflow-hidden shadow-lg"
+            style={{ background: "rgba(4,11,25,0.96)", border: "1px solid rgba(0,212,255,0.12)", backdropFilter: "blur(20px)" }}>
             {searchResults.map((m, i) => (
               <button key={i} onClick={() => handleFlyTo(m)}
-                className="w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-blue-500/10 transition-colors border-b border-border last:border-0">
-                <span className="text-foreground">{m.userData.name || "Unnamed"}</span>
-                <span className="text-muted-foreground capitalize">{m.userData.type} · F{(m.userData.floor ?? 0) + 1}</span>
+                className="w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-cyan-500/10 transition-colors last:border-0"
+                style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <span className="text-white">{m.userData.name || "Unnamed"}</span>
+                <span className="text-white/35 capitalize">{m.userData.type} · F{(m.userData.floor ?? 0) + 1}</span>
               </button>
             ))}
           </div>
@@ -1037,7 +1112,10 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
         {Object.entries(showTypes).map(([type, visible]) => (
           <button key={type}
             onClick={() => setShowTypes(prev => ({ ...prev, [type]: !prev[type as keyof typeof prev] }))}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border capitalize ${visible ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-secondary/50 text-muted-foreground border-border line-through"}`}>
+            className="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border capitalize"
+            style={visible
+              ? { background: "rgba(0,212,255,0.1)", color: "#00D4FF", borderColor: "rgba(0,212,255,0.2)" }
+              : { background: "rgba(255,255,255,0.02)", color: "rgba(255,255,255,0.35)", borderColor: "rgba(255,255,255,0.07)", textDecoration: "line-through" }}>
             {type}
           </button>
         ))}
@@ -1047,7 +1125,8 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
       <div className="flex flex-wrap gap-2 items-center">
         {/* Measure tool */}
         <button onClick={() => { setMeasureMode(m => !m); setMeasureDistance(null); setMeasureWaiting(false); measurePointsRef.current = []; }}
-          className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${measureMode ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : "bg-secondary text-muted-foreground border-border"}`}>
+          className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+          style={measureMode ? { background: ACCENT.amber.bg, color: "#F59E0B", borderColor: ACCENT.amber.border } : glassButtonStyle}>
           📏 {measureMode ? "Measuring..." : "Measure"}
         </button>
         {measureMode && measureWaiting && <span className="text-xs text-amber-400">Click 2nd point</span>}
@@ -1059,25 +1138,29 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
 
         {/* Section cut */}
         <button onClick={() => setSectionCut(s => !s)}
-          className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${sectionCut ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" : "bg-secondary text-muted-foreground border-border"}`}>
+          className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+          style={sectionCut ? { background: ACCENT.cyan.bg, color: "#00D4FF", borderColor: ACCENT.cyan.border } : glassButtonStyle}>
           ✂ Section Cut
         </button>
 
         {/* 4D BIM */}
         <button onClick={() => { setIs4D(d => !d); setTimeProgress(0); setIsPlaying4D(false); }}
-          className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${is4D ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : "bg-secondary text-muted-foreground border-border"}`}>
+          className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+          style={is4D ? { background: ACCENT.amber.bg, color: "#F59E0B", borderColor: ACCENT.amber.border } : glassButtonStyle}>
           🕐 4D BIM
         </button>
 
         {/* Sun study */}
         <button onClick={() => setSunStudy(s => !s)}
-          className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${sunStudy ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" : "bg-secondary text-muted-foreground border-border"}`}>
+          className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+          style={sunStudy ? { background: "rgba(234,179,8,0.1)", color: "#EAB308", borderColor: "rgba(234,179,8,0.2)" } : glassButtonStyle}>
           ☀ Sun Study
         </button>
 
         {/* Box select */}
         <button onClick={() => setBoxSelectMode(b => !b)}
-          className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${boxSelectMode ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-secondary text-muted-foreground border-border"}`}>
+          className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+          style={boxSelectMode ? { background: ACCENT.blue.bg, color: "#3B82F6", borderColor: ACCENT.blue.border } : glassButtonStyle}>
           ⬚ {boxSelectMode ? "Box Select: Drag to select" : "Box Select"}
         </button>
 
@@ -1103,14 +1186,14 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
 
       {/* ── Bulk selection actions ───────────────────────────────── */}
       {selectedIds.size > 0 && (
-        <div className="flex items-center gap-2 p-3 rounded-xl bg-blue-500/5 border border-blue-500/20 flex-wrap">
+        <div className="flex items-center gap-2 p-3 rounded-xl flex-wrap" style={{ background: ACCENT.blue.bg, border: `1px solid ${ACCENT.blue.border}` }}>
           <span className="text-xs text-blue-400 font-medium">{selectedIds.size} selected</span>
-          <button onClick={handleBulkHide} className="px-2.5 py-1 rounded-lg bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border">Hide</button>
-          <button onClick={handleBulkShow} className="px-2.5 py-1 rounded-lg bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border">Show</button>
-          <button onClick={() => handleBulkStatus("pending")} className="px-2.5 py-1 rounded-lg bg-secondary text-xs text-slate-400 border border-border">Not Started</button>
-          <button onClick={() => handleBulkStatus("inprogress")} className="px-2.5 py-1 rounded-lg bg-secondary text-xs text-amber-400 border border-border">In Progress</button>
-          <button onClick={() => handleBulkStatus("complete")} className="px-2.5 py-1 rounded-lg bg-secondary text-xs text-emerald-400 border border-border">Complete</button>
-          <button onClick={handleClearSelection} className="px-2.5 py-1 rounded-lg bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border ml-auto">Clear</button>
+          <button onClick={handleBulkHide} className="px-2.5 py-1 rounded-lg text-xs text-white/40 hover:text-white transition-colors" style={glassButtonStyle}>Hide</button>
+          <button onClick={handleBulkShow} className="px-2.5 py-1 rounded-lg text-xs text-white/40 hover:text-white transition-colors" style={glassButtonStyle}>Show</button>
+          <button onClick={() => handleBulkStatus("pending")} className="px-2.5 py-1 rounded-lg text-xs text-slate-400" style={glassButtonStyle}>Not Started</button>
+          <button onClick={() => handleBulkStatus("inprogress")} className="px-2.5 py-1 rounded-lg text-xs text-amber-400" style={glassButtonStyle}>In Progress</button>
+          <button onClick={() => handleBulkStatus("complete")} className="px-2.5 py-1 rounded-lg text-xs text-emerald-400" style={glassButtonStyle}>Complete</button>
+          <button onClick={handleClearSelection} className="px-2.5 py-1 rounded-lg text-xs text-white/40 hover:text-white transition-colors ml-auto" style={glassButtonStyle}>Clear</button>
         </div>
       )}
 
@@ -1137,13 +1220,13 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
             className="flex-1 accent-amber-400" />
           <span className="text-xs text-amber-300 shrink-0 w-10 text-right">{timeProgress}%</span>
           <button onClick={() => { setTimeProgress(0); setIsPlaying4D(false); }}
-            className="text-xs text-muted-foreground hover:text-foreground shrink-0">↺</button>
+            className="text-xs text-white/40 hover:text-white shrink-0">↺</button>
         </div>
       )}
 
       {/* ── Status legend (byStatus mode) ────────────────────────── */}
       {colorMode === "byStatus" && (
-        <div className="flex gap-3 p-2 rounded-xl bg-secondary/40 flex-wrap">
+        <div className="flex gap-3 p-2 rounded-xl flex-wrap" style={{ background: "rgba(255,255,255,0.03)" }}>
           {(["pending", "inprogress", "complete"] as ElementStatus[]).map(s => (
             <div key={s} className="flex items-center gap-1.5">
               <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: `#${STATUS_COLORS[s].toString(16).padStart(6, "0")}` }} />
@@ -1154,93 +1237,114 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
       )}
 
       {/* ── Saved viewpoints ──────────────────────────────────────── */}
-      <div className="flex items-center gap-2 flex-wrap p-2 rounded-xl bg-secondary/40">
+      <div className="flex items-center gap-2 flex-wrap p-2 rounded-xl" style={{ background: "rgba(255,255,255,0.03)" }}>
         <button onClick={handleSaveViewpoint}
-          className="px-3 py-1.5 rounded-xl bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border shrink-0">
+          className="px-3 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-colors shrink-0" style={glassButtonStyle}>
           📌 Save View
         </button>
         {viewpoints.map(vp => (
-          <div key={vp.id} className="flex items-center gap-1 pl-3 pr-1 py-1 rounded-xl bg-secondary border border-border">
-            <button onClick={() => handleRestoreViewpoint(vp)} className="text-xs text-blue-400 hover:text-blue-300">{vp.name}</button>
-            <button onClick={() => handleDeleteViewpoint(vp.id)} className="w-5 h-5 rounded text-muted-foreground hover:text-red-400 text-xs">×</button>
+          <div key={vp.id} className="flex items-center gap-1 pl-3 pr-1 py-1 rounded-xl" style={glassButtonStyle}>
+            <button onClick={() => handleRestoreViewpoint(vp)} className="text-xs text-cyan-400 hover:text-cyan-300">{vp.name}</button>
+            <button onClick={() => handleDeleteViewpoint(vp.id)} className="w-5 h-5 rounded text-white/40 hover:text-red-400 text-xs">×</button>
           </div>
         ))}
-        {viewpoints.length === 0 && <span className="text-xs text-muted-foreground">No saved viewpoints yet</span>}
+        {viewpoints.length === 0 && <span className="text-xs text-white/35">No saved viewpoints yet</span>}
       </div>
 
       {/* ── Export ────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={handleScreenshotPNG} className="px-3 py-1.5 rounded-xl bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border">📷 Screenshot PNG</button>
-        <button onClick={handleExportGLTF} className="px-3 py-1.5 rounded-xl bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border">⬇ Export glTF</button>
-        <button onClick={handleExportOBJ} className="px-3 py-1.5 rounded-xl bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border">⬇ Export OBJ</button>
+        <button onClick={handleScreenshotPNG} className="px-3 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-colors" style={glassButtonStyle}>📷 Screenshot PNG</button>
+        <button onClick={handleExportGLTF} className="px-3 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-colors" style={glassButtonStyle}>⬇ Export glTF</button>
+        <button onClick={handleExportOBJ} className="px-3 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-colors" style={glassButtonStyle}>⬇ Export OBJ</button>
       </div>
 
       {/* ── IFC upload ────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-2 p-3 rounded-xl bg-blue-500/5 border border-blue-500/20">
+      <div className="flex flex-col gap-2 p-3 rounded-xl" style={{ background: ACCENT.blue.bg, border: `1px solid ${ACCENT.blue.border}` }}>
         <div className="flex items-center gap-3">
           <label className="cursor-pointer">
             <input type="file" className="hidden" accept=".ifc"
               onChange={e => { const f = e.target.files?.[0]; if (f) handleIFCFor3D(f); }} />
             <button onClick={e => (e.currentTarget.previousElementSibling as HTMLElement)?.click()}
-              className="px-4 py-2 rounded-xl bg-blue-500 text-white text-xs font-medium hover:bg-blue-600 transition-colors">
+              className="px-4 py-2 rounded-xl text-white text-xs font-medium transition-all hover:scale-105"
+              style={gradientButtonStyle}>
               {loadingIFC ? "⏳ Processing..." : "📁 Load IFC → Real 3D"}
             </button>
           </label>
           {hasRealGeometry
             ? <span className="text-xs text-emerald-400">✅ {ifcFileName} — {realMeshes.length} meshes</span>
-            : <span className="text-xs text-muted-foreground">Upload an IFC file to render real building geometry</span>}
+            : <span className="text-xs text-white/35">Upload an IFC file to render real building geometry</span>}
         </div>
         {ifcError && <p className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-1.5 border border-red-500/20">⚠ {ifcError}</p>}
       </div>
 
       {/* ── 3D Viewport ───────────────────────────────────────────── */}
-      <div ref={viewportRef} className="relative w-full rounded-2xl overflow-hidden border border-border bg-[#0f172a]"
-        style={{ height: isFullscreen ? "100vh" : "600px" }}>
+      <div ref={viewportRef} className="relative w-full rounded-2xl overflow-hidden bg-[#0f172a]"
+        style={{ height: isFullscreen ? "100vh" : "600px", border: "1px solid rgba(255,255,255,0.08)" }}>
         <div ref={mountRef} className="w-full h-full" />
 
         {/* Exit-fullscreen control (only reachable control while the browser is fullscreen) */}
         {isFullscreen && (
           <button onClick={handleToggleFullscreen}
-            className="absolute bottom-4 right-4 z-20 px-3 py-1.5 rounded-xl bg-secondary/90 backdrop-blur text-xs text-foreground border border-border hover:bg-secondary">
+            className="absolute bottom-4 right-4 z-20 px-3 py-1.5 rounded-xl backdrop-blur text-xs text-white hover:bg-white/10 transition-colors"
+            style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.15)" }}>
             🗗 Exit Fullscreen
           </button>
         )}
 
+        {/* Axis-pan control — move the camera/pivot along X/Y/Z */}
+        <div className={`absolute ${isFullscreen ? "bottom-16" : "bottom-4"} right-4 z-20 backdrop-blur rounded-xl p-2 flex flex-col gap-1`}
+          style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.15)" }}>
+          <p className="text-[10px] text-white/35 text-center mb-0.5">Pan</p>
+          {(["x", "y", "z"] as const).map(axis => (
+            <div key={axis} className="flex items-center gap-1">
+              <span className="text-[10px] text-white/40 w-3">{axis.toUpperCase()}</span>
+              <button onClick={() => handlePan(axis, -1)}
+                className="w-6 h-6 rounded-md text-xs text-white/60 hover:text-white hover:bg-white/10 transition-colors">−</button>
+              <button onClick={() => handlePan(axis, 1)}
+                className="w-6 h-6 rounded-md text-xs text-white/60 hover:text-white hover:bg-white/10 transition-colors">+</button>
+            </div>
+          ))}
+        </div>
+
         {/* Box-select rectangle overlay */}
         {boxSelectMode && boxRect && (
-          <div className="absolute border-2 border-blue-400 bg-blue-400/10 pointer-events-none"
+          <div className="absolute border-2 border-cyan-400 bg-cyan-400/10 pointer-events-none"
             style={{ left: boxRect.x, top: boxRect.y, width: boxRect.w, height: boxRect.h }} />
         )}
 
         {/* HUD top-left */}
         <div className="absolute top-4 left-4 flex flex-col gap-2 pointer-events-none">
-          <div className="bg-secondary/80 backdrop-blur rounded-xl px-3 py-2 border border-border">
-            <p className="text-xs text-muted-foreground">
+          <div className="backdrop-blur rounded-xl px-3 py-2" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+            <p className="text-xs text-white/40">
               {measureMode ? "🖱️ Click surface to measure" :
                boxSelectMode ? "🖱️ Drag to box-select elements" : "🖱️ Drag · Scroll · Click element"}
             </p>
           </div>
-          <div className="bg-secondary/80 backdrop-blur rounded-xl px-3 py-1.5 border border-border flex gap-2 flex-wrap">
+          <div className="backdrop-blur rounded-xl px-3 py-1.5 flex gap-2 flex-wrap" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
             <span className="text-xs text-blue-400 font-medium">{viewMode}</span>
-            <span className="text-xs text-muted-foreground">·</span>
+            <span className="text-xs text-white/35">·</span>
             <span className="text-xs text-cyan-400 font-medium">{colorMode}</span>
-            <span className="text-xs text-muted-foreground">·</span>
+            <span className="text-xs text-white/35">·</span>
             <span className="text-xs text-emerald-400 font-medium">{displayMode}</span>
-            {is4D && <><span className="text-xs text-muted-foreground">·</span><span className="text-xs text-amber-400 font-medium">4D {timeProgress}%</span></>}
-            {sectionCut && <><span className="text-xs text-muted-foreground">·</span><span className="text-xs text-cyan-400 font-medium">cut@{sectionElevation.toFixed(0)}m</span></>}
-            {sunStudy && <><span className="text-xs text-muted-foreground">·</span><span className="text-xs text-yellow-400 font-medium">☀ {String(Math.floor(sunTime)).padStart(2, "0")}:{String(Math.round((sunTime % 1) * 60)).padStart(2, "0")}</span></>}
+            {is4D && <><span className="text-xs text-white/35">·</span><span className="text-xs text-amber-400 font-medium">4D {timeProgress}%</span></>}
+            {sectionCut && <><span className="text-xs text-white/35">·</span><span className="text-xs text-cyan-400 font-medium">cut@{sectionElevation.toFixed(0)}m</span></>}
+            {sunStudy && <><span className="text-xs text-white/35">·</span><span className="text-xs text-yellow-400 font-medium">☀ {String(Math.floor(sunTime)).padStart(2, "0")}:{String(Math.round((sunTime % 1) * 60)).padStart(2, "0")}</span></>}
           </div>
           {hasRealGeometry && (
-            <div className="bg-emerald-500/10 backdrop-blur rounded-xl px-3 py-1.5 border border-emerald-500/20">
+            <div className="backdrop-blur rounded-xl px-3 py-1.5" style={{ background: ACCENT.green.bg, border: `1px solid ${ACCENT.green.border}` }}>
               <span className="text-xs text-emerald-400 font-medium">✅ Real IFC Geometry</span>
             </div>
           )}
         </div>
 
         {/* Legend top-right */}
-        <div className="absolute top-4 right-4 bg-secondary/80 backdrop-blur rounded-xl p-3 border border-border pointer-events-none">
-          <p className="text-xs font-medium text-foreground mb-2">
-            {hasRealGeometry ? `📐 ${ifcFileName}` : "🏢 Default Model"}
+        <div className="absolute top-4 right-4 backdrop-blur rounded-xl p-3 pointer-events-none"
+          style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs font-medium text-white mb-2">
+            {hasRealGeometry ? `📐 ${ifcFileName}` :
+             sceneType === "bridge" ? "🌉 Metro Bridge (Demo)" :
+             sceneType === "harbour" ? "⚓ Harbour Construction (Demo)" :
+             "🏗️ Default Model"}
           </p>
           {colorMode === "byStatus" ? (
             (["pending", "inprogress", "complete"] as ElementStatus[]).map(s => (
@@ -1251,35 +1355,36 @@ export default function BIMViewer3D({ bimData, initialMeshes }: BIMViewer3DProps
             ))
           ) : (
             [
-              { color: "#334155", label: "Walls" }, { color: "#3b82f6", label: "Windows" },
+              { color: "#334155", label: "Walls" }, { color: "#3B82F6", label: "Windows" },
               { color: "#475569", label: "Columns" }, { color: "#64748b", label: "Beams" },
-              { color: "#1e293b", label: "Floors" }, { color: "#f59e0b", label: "Doors" },
+              { color: "#1e293b", label: "Floors" }, { color: "#F59E0B", label: "Doors" },
             ].map(l => (
               <div key={l.label} className="flex items-center gap-2 mb-1">
                 <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: l.color }} />
-                <span className="text-xs text-muted-foreground">{l.label}</span>
+                <span className="text-xs text-white/35">{l.label}</span>
               </div>
             ))
           )}
           {hasRealGeometry && (
-            <div className="mt-2 pt-2 border-t border-border">
+            <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
               <p className="text-xs text-emerald-400">{realMeshes.length} meshes</p>
-              <p className="text-xs text-muted-foreground">{storeyCount} storeys</p>
+              <p className="text-xs text-white/35">{storeyCount} storeys</p>
             </div>
           )}
         </div>
 
         {/* Selected element panel */}
         {selectedElement && colorMode !== "byStatus" && (
-          <div className="absolute bottom-4 left-4 bg-secondary/90 backdrop-blur rounded-xl p-3 border border-blue-500/30 min-w-48">
+          <div className="absolute bottom-4 left-4 backdrop-blur rounded-xl p-3 min-w-48"
+            style={{ background: "rgba(4,11,25,0.9)", border: "1px solid rgba(0,212,255,0.2)" }}>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-medium text-blue-400">Selected Element</p>
-              <button onClick={() => setSelectedElement(null)} className="text-muted-foreground hover:text-foreground text-sm">×</button>
+              <p className="text-xs font-medium text-cyan-400">Selected Element</p>
+              <button onClick={() => setSelectedElement(null)} className="text-white/40 hover:text-white text-sm">×</button>
             </div>
             {Object.entries(selectedElement).filter(([, v]) => v !== undefined).map(([k, v]) => (
               <div key={k} className="flex justify-between gap-4 mb-1">
-                <span className="text-xs text-muted-foreground capitalize">{k.replace(/_m$/, " (m)")}:</span>
-                <span className="text-xs text-foreground">{String(v)}</span>
+                <span className="text-xs text-white/35 capitalize">{k.replace(/_m$/, " (m)")}:</span>
+                <span className="text-xs text-white">{String(v)}</span>
               </div>
             ))}
           </div>

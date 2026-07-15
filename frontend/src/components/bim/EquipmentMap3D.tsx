@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { motion } from "framer-motion";
 import axios from "axios";
 import { Loader2 } from "lucide-react";
+import { ACCENT, glassButtonStyle, glassInputStyle } from "@/lib/theme";
 
 interface Equipment {
   id: string;
@@ -38,7 +39,11 @@ const maintenanceZones = [
   { x: -12, z: -8, radius: 3, label: "Repair Zone", color: 0xef4444 },
 ];
 
-export default function EquipmentMap3D() {
+interface EquipmentMap3DProps {
+  projectId?: string;
+}
+
+export default function EquipmentMap3D({ projectId: propProjectId }: EquipmentMap3DProps = {}) {
   const mountRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number>(0);
   const equipMeshesRef = useRef<THREE.Mesh[]>([]);
@@ -58,11 +63,12 @@ export default function EquipmentMap3D() {
   const [showZones, setShowZones] = useState(true);
   const [isRotating, setIsRotating] = useState(false);
   const [projects, setProjects] = useState<any[]>([]);
-  const [projectId, setProjectId] = useState("");
+  const [internalProjectId, setInternalProjectId] = useState("");
+  const projectId = propProjectId || internalProjectId;
 
   useEffect(() => {
-    fetchProjects();
-  }, []);
+    if (!propProjectId) fetchProjects();
+  }, [propProjectId]);
 
   useEffect(() => {
     if (projectId) fetchEquipment();
@@ -72,7 +78,7 @@ export default function EquipmentMap3D() {
     try {
       const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       setProjects(res.data.projects || []);
-      if (res.data.projects?.length > 0) setProjectId(res.data.projects[0].id);
+      if (res.data.projects?.length > 0) setInternalProjectId(res.data.projects[0].id);
     } catch {
       setLoading(false);
     }
@@ -338,8 +344,8 @@ export default function EquipmentMap3D() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
-        <p className="ml-3 text-muted-foreground">Loading equipment data...</p>
+        <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
+        <p className="ml-3 text-white/35">Loading equipment data...</p>
       </div>
     );
   }
@@ -348,11 +354,12 @@ export default function EquipmentMap3D() {
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2 items-center justify-between">
         <div className="flex gap-2 items-center">
-          {projects.length > 0 && (
+          {!propProjectId && projects.length > 0 && (
             <select
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none"
+              value={internalProjectId}
+              onChange={(e) => setInternalProjectId(e.target.value)}
+              className="px-3 py-1.5 rounded-xl text-xs text-white outline-none border"
+              style={glassInputStyle}
             >
               {projects.map(p => (
                 <option key={p.id} value={p.id}>{p.name}</option>
@@ -361,9 +368,8 @@ export default function EquipmentMap3D() {
           )}
           <button
             onClick={() => setShowZones(!showZones)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
-              showZones ? "bg-orange-500/10 text-orange-400 border-orange-500/20" : "bg-secondary text-muted-foreground border-border"
-            }`}
+            className="px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors"
+            style={showZones ? { background: ACCENT.amber.bg, color: "#F59E0B", borderColor: ACCENT.amber.border } : glassButtonStyle}
           >
             🔧 {showZones ? "Hide" : "Show"} Zones
           </button>
@@ -372,9 +378,8 @@ export default function EquipmentMap3D() {
               stateRef.current.isRotating = !stateRef.current.isRotating;
               setIsRotating(stateRef.current.isRotating);
             }}
-            className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${
-              isRotating ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-secondary text-muted-foreground border-border"
-            }`}
+            className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+            style={isRotating ? { background: ACCENT.green.bg, color: "#10B981", borderColor: ACCENT.green.border } : glassButtonStyle}
           >
             {isRotating ? "⏸ Pause" : "▶ Rotate"}
           </button>
@@ -391,7 +396,7 @@ export default function EquipmentMap3D() {
                 key={eq.id}
                 className={`w-2 h-2 rounded-full ${
                   eq.status === "operational" ? "bg-emerald-400" :
-                  eq.status === "needs_service" ? "bg-orange-400 animate-pulse" :
+                  eq.status === "needs_service" ? "bg-amber-400 animate-pulse" :
                   "bg-red-400 animate-pulse"
                 }`}
                 title={eq.name}
@@ -401,37 +406,37 @@ export default function EquipmentMap3D() {
         </div>
       </div>
 
-      <div className="relative w-full rounded-2xl overflow-hidden border border-border" style={{ height: "500px" }}>
+      <div className="relative w-full rounded-2xl overflow-hidden" style={{ height: "500px", border: "1px solid rgba(255,255,255,0.08)" }}>
         <div ref={mountRef} className="w-full h-full" />
 
-        <div className="absolute top-4 left-4 bg-black/60 backdrop-blur rounded-xl px-3 py-2 border border-border">
-          <p className="text-xs text-muted-foreground">🖱️ Drag · Scroll · Click equipment</p>
+        <div className="absolute top-4 left-4 backdrop-blur rounded-xl px-3 py-2" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs text-white/40">🖱️ Drag · Scroll · Click equipment</p>
         </div>
 
-        <div className="absolute top-4 right-4 bg-black/70 backdrop-blur rounded-xl p-3 border border-border">
-          <p className="text-xs font-medium text-foreground mb-2">Equipment Status</p>
+        <div className="absolute top-4 right-4 backdrop-blur rounded-xl p-3" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs font-medium text-white mb-2">Equipment Status</p>
           {[
-            { color: "#10b981", label: "Operational" },
-            { color: "#f59e0b", label: "Needs Service" },
-            { color: "#ef4444", label: "Critical" },
+            { color: "#10B981", label: "Operational" },
+            { color: "#F59E0B", label: "Needs Service" },
+            { color: "#EF4444", label: "Critical" },
           ].map(l => (
             <div key={l.label} className="flex items-center gap-2 mb-1">
               <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: l.color }} />
-              <span className="text-xs text-muted-foreground">{l.label}</span>
+              <span className="text-xs text-white/35">{l.label}</span>
             </div>
           ))}
         </div>
 
         {selectedEquip && (
-          <div className="absolute bottom-4 left-4 bg-black/80 backdrop-blur rounded-xl p-3 border border-blue-500/30">
-            <p className="text-xs font-medium text-blue-400 mb-2">🔧 {selectedEquip.name}</p>
+          <div className="absolute bottom-4 left-4 backdrop-blur rounded-xl p-3" style={{ background: "rgba(4,11,25,0.9)", border: "1px solid rgba(0,212,255,0.2)" }}>
+            <p className="text-xs font-medium text-cyan-400 mb-2">🔧 {selectedEquip.name}</p>
             {Object.entries(selectedEquip).filter(([k]) => k !== "type").map(([key, val]) => (
               <div key={key} className="flex justify-between gap-4 mb-1">
-                <span className="text-xs text-muted-foreground capitalize">{key}:</span>
+                <span className="text-xs text-white/35 capitalize">{key}:</span>
                 <span className={`text-xs font-medium ${
                   key === "status" && String(val) === "critical" ? "text-red-400" :
-                  key === "status" && String(val) === "needs_service" ? "text-orange-400" :
-                  key === "status" ? "text-emerald-400" : "text-foreground"
+                  key === "status" && String(val) === "needs_service" ? "text-amber-400" :
+                  key === "status" ? "text-emerald-400" : "text-white"
                 }`}>{String(val)}</span>
               </div>
             ))}
@@ -447,31 +452,32 @@ export default function EquipmentMap3D() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.08 }}
-            className={`bg-card border rounded-xl p-3 ${
-              eq.status === "critical" ? "border-red-500/30" :
-              eq.status === "needs_service" ? "border-orange-500/30" : "border-border"
-            }`}
+            className="glass-card p-3"
+            style={
+              eq.status === "critical" ? { borderColor: "rgba(239,68,68,0.3)" } :
+              eq.status === "needs_service" ? { borderColor: "rgba(245,158,11,0.3)" } : undefined
+            }
           >
             <div className="flex justify-between mb-2">
-              <span className="text-xs font-medium text-foreground truncate">{eq.name}</span>
+              <span className="text-xs font-medium text-white truncate">{eq.name}</span>
               <span className={`text-xs px-1.5 py-0.5 rounded-full ${
                 eq.status === "operational" ? "bg-emerald-500/10 text-emerald-400" :
-                eq.status === "needs_service" ? "bg-orange-500/10 text-orange-400" :
+                eq.status === "needs_service" ? "bg-amber-500/10 text-amber-400" :
                 "bg-red-500/10 text-red-400"
               }`}>{eq.status}</span>
             </div>
-            <div className="bg-secondary rounded-full h-1.5 mb-1">
+            <div className="rounded-full h-1.5 mb-1" style={{ background: "rgba(255,255,255,0.06)" }}>
               <div
                 className={`h-1.5 rounded-full ${
                   eq.health_score >= 80 ? "bg-emerald-500" :
-                  eq.health_score >= 60 ? "bg-orange-500" : "bg-red-500"
+                  eq.health_score >= 60 ? "bg-amber-500" : "bg-red-500"
                 }`}
                 style={{ width: `${eq.health_score}%` }}
               />
             </div>
             <div className="flex justify-between">
-              <span className="text-xs text-muted-foreground">Health: {eq.health_score}%</span>
-              <span className="text-xs text-muted-foreground">{eq.equipment_type}</span>
+              <span className="text-xs text-white/35">Health: {eq.health_score}%</span>
+              <span className="text-xs text-white/35">{eq.equipment_type}</span>
             </div>
           </motion.div>
         ))}

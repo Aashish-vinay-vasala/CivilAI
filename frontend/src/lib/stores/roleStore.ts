@@ -61,6 +61,16 @@ export const ROLE_COLORS: Record<UserRole, string> = {
   viewer: "bg-gray-500/10 text-gray-400 border-gray-500/20",
 };
 
+// Maps the backend's real RBAC role vocabulary (profiles.role, checked by
+// backend/app/core/guardrails.ROLE_PERMISSIONS) onto this frontend permission-tier
+// vocabulary so the two stay in sync.
+export const BACKEND_ROLE_TO_FRONTEND: Record<string, UserRole> = {
+  project_director: "pm",
+  admin: "admin",
+  engineer: "engineer",
+  contractor: "viewer",
+};
+
 interface RoleStore {
   role: UserRole;
   setRole: (role: UserRole) => void;

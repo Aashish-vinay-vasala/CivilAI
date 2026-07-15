@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { motion } from "framer-motion";
+import { ACCENT, glassInputStyle } from "@/lib/theme";
 
 const furnitureTypes = [
   { id: "desk", label: "Desk", w: 1.6, h: 0.75, d: 0.8, color: 0x14b8a6 },
@@ -297,7 +298,8 @@ export default function SpacePlanning3D() {
           <select
             value={selectedType}
             onChange={(e) => setSelectedType(e.target.value)}
-            className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none"
+            className="px-3 py-1.5 rounded-xl text-xs text-white outline-none border"
+            style={glassInputStyle}
           >
             {furnitureTypes.map(f => (
               <option key={f.id} value={f.id}>{f.label}</option>
@@ -305,7 +307,8 @@ export default function SpacePlanning3D() {
           </select>
           <button
             onClick={addFurniture}
-            className="px-3 py-1.5 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-medium hover:bg-blue-500/20 transition-colors"
+            className="px-3 py-1.5 rounded-xl text-xs font-medium transition-colors border"
+            style={{ background: ACCENT.cyan.bg, color: "#00D4FF", borderColor: ACCENT.cyan.border }}
           >
             + Add {furnitureTypes.find(f => f.id === selectedType)?.label}
           </button>
@@ -313,7 +316,8 @@ export default function SpacePlanning3D() {
             <>
               <button
                 onClick={rotateFurniture}
-                className="px-3 py-1.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 text-xs font-medium"
+                className="px-3 py-1.5 rounded-xl text-xs font-medium border"
+                style={{ background: ACCENT.blue.bg, color: "#3B82F6", borderColor: ACCENT.blue.border }}
               >
                 ↻ Rotate
               </button>
@@ -327,17 +331,18 @@ export default function SpacePlanning3D() {
           )}
           <button
             onClick={clearRoom}
-            className="px-3 py-1.5 rounded-xl bg-secondary text-muted-foreground border border-border text-xs"
+            className="px-3 py-1.5 rounded-xl text-white/40 hover:text-white transition-colors text-xs border"
+            style={{ background: "rgba(255,255,255,0.03)", borderColor: "rgba(255,255,255,0.07)" }}
           >
             Clear Room
           </button>
         </div>
         <div className="flex gap-3">
-          <span className="text-xs text-muted-foreground">
-            Room: <span className="text-foreground font-medium">{sqM}m² ({sqFt}ft²)</span>
+          <span className="text-xs text-white/35">
+            Room: <span className="text-white font-medium">{sqM}m² ({sqFt}ft²)</span>
           </span>
-          <span className="text-xs text-muted-foreground">
-            Used: <span className={`font-medium ${parseInt(usagePercent) > 70 ? "text-orange-400" : "text-emerald-400"}`}>
+          <span className="text-xs text-white/35">
+            Used: <span className={`font-medium ${parseInt(usagePercent) > 70 ? "text-amber-400" : "text-emerald-400"}`}>
               {usagePercent}%
             </span>
           </span>
@@ -345,42 +350,42 @@ export default function SpacePlanning3D() {
       </div>
 
       {/* 3D Viewer */}
-      <div className="relative w-full rounded-2xl overflow-hidden border border-border" style={{ height: "500px" }}>
+      <div className="relative w-full rounded-2xl overflow-hidden" style={{ height: "500px", border: "1px solid rgba(255,255,255,0.08)" }}>
         <div ref={mountRef} className="w-full h-full" />
 
-        <div className="absolute top-4 left-4 bg-black/60 backdrop-blur rounded-xl px-3 py-2 border border-border">
-          <p className="text-xs text-muted-foreground">🖱️ Drag · Scroll · Click item</p>
+        <div className="absolute top-4 left-4 backdrop-blur rounded-xl px-3 py-2" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs text-white/40">🖱️ Drag · Scroll · Click item</p>
         </div>
 
         {/* Furniture Colors */}
-        <div className="absolute top-4 right-4 bg-black/70 backdrop-blur rounded-xl p-3 border border-border">
-          <p className="text-xs font-medium text-foreground mb-2">Furniture</p>
+        <div className="absolute top-4 right-4 backdrop-blur rounded-xl p-3" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs font-medium text-white mb-2">Furniture</p>
           {furnitureTypes.map(f => (
             <div key={f.id} className="flex items-center gap-2 mb-1">
               <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: `#${f.color.toString(16).padStart(6, "0")}` }} />
-              <span className="text-xs text-muted-foreground">{f.label}</span>
+              <span className="text-xs text-white/35">{f.label}</span>
             </div>
           ))}
         </div>
 
         {selectedFurniture && (
-          <div className="absolute bottom-4 left-4 bg-black/80 backdrop-blur rounded-xl p-3 border border-blue-500/30">
-            <p className="text-xs font-medium text-blue-400 mb-2">🪑 {selectedFurniture.label}</p>
-            <p className="text-xs text-muted-foreground">Size: {selectedFurniture.dimensions}</p>
-            <p className="text-xs text-muted-foreground">Height: {selectedFurniture.height}</p>
+          <div className="absolute bottom-4 left-4 backdrop-blur rounded-xl p-3" style={{ background: "rgba(4,11,25,0.9)", border: "1px solid rgba(0,212,255,0.2)" }}>
+            <p className="text-xs font-medium text-cyan-400 mb-2">🪑 {selectedFurniture.label}</p>
+            <p className="text-xs text-white/35">Size: {selectedFurniture.dimensions}</p>
+            <p className="text-xs text-white/35">Height: {selectedFurniture.height}</p>
           </div>
         )}
 
         {/* Usage meter */}
-        <div className="absolute bottom-4 right-4 bg-black/70 backdrop-blur rounded-xl p-3 border border-border w-36">
-          <p className="text-xs text-muted-foreground mb-1">Space Usage</p>
-          <div className="bg-secondary rounded-full h-2 mb-1">
+        <div className="absolute bottom-4 right-4 backdrop-blur rounded-xl p-3 w-36" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs text-white/35 mb-1">Space Usage</p>
+          <div className="rounded-full h-2 mb-1" style={{ background: "rgba(255,255,255,0.06)" }}>
             <div
-              className={`h-2 rounded-full transition-all ${parseInt(usagePercent) > 70 ? "bg-orange-500" : "bg-emerald-500"}`}
+              className={`h-2 rounded-full transition-all ${parseInt(usagePercent) > 70 ? "bg-amber-500" : "bg-emerald-500"}`}
               style={{ width: `${Math.min(parseInt(usagePercent), 100)}%` }}
             />
           </div>
-          <p className={`text-sm font-bold ${parseInt(usagePercent) > 70 ? "text-orange-400" : "text-emerald-400"}`}>
+          <p className={`text-sm font-bold ${parseInt(usagePercent) > 70 ? "text-amber-400" : "text-emerald-400"}`}>
             {usagePercent}%
           </p>
         </div>

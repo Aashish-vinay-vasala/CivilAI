@@ -36,6 +36,7 @@ class WorkerUpdate(BaseModel):
     email: Optional[str] = None
     status: Optional[str] = None
     hours_worked: Optional[float] = None
+    project_id: Optional[str] = None
 
 
 class SkillTargetUpdate(BaseModel):

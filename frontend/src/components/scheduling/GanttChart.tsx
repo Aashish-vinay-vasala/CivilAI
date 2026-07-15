@@ -72,9 +72,9 @@ export default function GanttChart({ tasks, projectName }: GanttChartProps) {
   const getBarColor = (status: string, progress: number) => {
     if (status === "done" || status === "completed") return "bg-emerald-500";
     if (status === "delayed") return "bg-red-500";
-    if (status === "atrisk") return "bg-orange-500";
-    if (progress > 0) return "bg-blue-500";
-    return "bg-slate-500";
+    if (status === "atrisk") return "bg-amber-500";
+    if (progress > 0) return "bg-cyan-500";
+    return "bg-white/20";
   };
 
   const todayPos = getTodayPosition();
@@ -86,51 +86,55 @@ export default function GanttChart({ tasks, projectName }: GanttChartProps) {
     return acc;
   }, {});
 
+  const border = { borderBottom: "1px solid rgba(255,255,255,0.07)" };
+  const borderR = { borderRight: "1px solid rgba(255,255,255,0.07)" };
+
   return (
     <div className="space-y-2">
       {/* Legend */}
       <div className="flex flex-wrap gap-4 mb-2">
         {[
           { color: "bg-emerald-500", label: "Completed" },
-          { color: "bg-blue-500", label: "In Progress" },
-          { color: "bg-orange-500", label: "At Risk" },
+          { color: "bg-cyan-500", label: "In Progress" },
+          { color: "bg-amber-500", label: "At Risk" },
           { color: "bg-red-500", label: "Delayed" },
-          { color: "bg-slate-500", label: "Pending" },
+          { color: "bg-white/20", label: "Pending" },
         ].map(l => (
           <div key={l.label} className="flex items-center gap-1.5">
             <div className={`w-3 h-3 rounded-sm ${l.color}`} />
-            <span className="text-xs text-muted-foreground">{l.label}</span>
+            <span className="text-xs text-white/35">{l.label}</span>
           </div>
         ))}
         <div className="flex items-center gap-1.5">
-          <div className="w-0.5 h-3 bg-yellow-400" />
-          <span className="text-xs text-muted-foreground">Today</span>
+          <div className="w-0.5 h-3 bg-amber-400" />
+          <span className="text-xs text-white/35">Today</span>
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border">
+      <div className="glass-card overflow-x-auto">
         <div className="flex min-w-max">
           {/* Left panel - task names */}
-          <div className="w-56 flex-shrink-0 border-r border-border bg-card">
+          <div className="w-56 shrink-0" style={borderR}>
             {/* Header */}
-            <div className="h-10 px-4 flex items-center border-b border-border bg-secondary/50">
-              <span className="text-xs font-medium text-muted-foreground">Task / Phase</span>
+            <div className="h-10 px-4 flex items-center" style={{ ...border, ...borderR, background: "rgba(255,255,255,0.03)" }}>
+              <span className="text-xs font-medium text-white/35">Task / Phase</span>
             </div>
             {/* Tasks grouped by phase */}
             {Object.entries(groupedByPhase).map(([phase, phaseTasks]: any) => (
               <div key={phase}>
                 {/* Phase header */}
-                <div className="h-8 px-4 flex items-center bg-blue-500/5 border-b border-border">
-                  <span className="text-xs font-semibold text-blue-400">{phase}</span>
+                <div className="h-8 px-4 flex items-center" style={{ ...border, background: "rgba(0,212,255,0.05)" }}>
+                  <span className="text-xs font-semibold text-cyan-400">{phase}</span>
                 </div>
                 {/* Tasks */}
                 {phaseTasks.map((task: Task) => (
-                  <div key={task.id} className="h-10 px-4 flex items-center border-b border-border/50 hover:bg-secondary/30 transition-colors">
+                  <div key={task.id} className="h-10 px-4 flex items-center hover:bg-white/2 transition-colors"
+                    style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-foreground truncate">{task.task_name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{task.assignee}</p>
+                      <p className="text-xs font-medium text-white truncate">{task.task_name}</p>
+                      <p className="text-xs text-white/35 truncate">{task.assignee}</p>
                     </div>
-                    <span className="text-xs text-muted-foreground ml-2">{task.actual_progress}%</span>
+                    <span className="text-xs text-white/35 ml-2">{task.actual_progress}%</span>
                   </div>
                 ))}
               </div>
@@ -138,13 +142,13 @@ export default function GanttChart({ tasks, projectName }: GanttChartProps) {
           </div>
 
           {/* Right panel - Gantt bars */}
-          <div className="flex-1 relative bg-card">
+          <div className="flex-1 relative">
             {/* Month headers */}
-            <div className="h-10 flex border-b border-border bg-secondary/50 sticky top-0 z-10">
+            <div className="h-10 flex sticky top-0 z-10" style={{ ...border, background: "rgba(255,255,255,0.03)" }}>
               {months.map((month, i) => (
-                <div key={i} className="border-r border-border/50 flex items-center justify-center"
-                  style={{ width: colWidth, flexShrink: 0 }}>
-                  <span className="text-xs text-muted-foreground font-medium">
+                <div key={i} className="flex items-center justify-center"
+                  style={{ width: colWidth, flexShrink: 0, borderRight: "1px solid rgba(255,255,255,0.04)" }}>
+                  <span className="text-xs text-white/35 font-medium">
                     {month.toLocaleDateString("en", { month: "short", year: "2-digit" })}
                   </span>
                 </div>
@@ -155,15 +159,15 @@ export default function GanttChart({ tasks, projectName }: GanttChartProps) {
             <div className="relative" style={{ width: totalWidth }}>
               {/* Vertical grid lines */}
               {months.map((_, i) => (
-                <div key={i} className="absolute top-0 bottom-0 border-r border-border/30"
-                  style={{ left: i * colWidth }} />
+                <div key={i} className="absolute top-0 bottom-0"
+                  style={{ left: i * colWidth, borderRight: "1px solid rgba(255,255,255,0.03)" }} />
               ))}
 
               {/* Today line */}
               {todayPos !== null && (
-                <div className="absolute top-0 bottom-0 w-0.5 bg-yellow-400 z-10"
+                <div className="absolute top-0 bottom-0 w-0.5 bg-amber-400 z-10"
                   style={{ left: todayPos }}>
-                  <div className="absolute -top-0 -left-1 w-2 h-2 rounded-full bg-yellow-400" />
+                  <div className="absolute top-0 -left-1 w-2 h-2 rounded-full bg-amber-400" />
                 </div>
               )}
 
@@ -171,16 +175,17 @@ export default function GanttChart({ tasks, projectName }: GanttChartProps) {
               {Object.entries(groupedByPhase).map(([phase, phaseTasks]: any) => (
                 <div key={phase}>
                   {/* Phase spacer */}
-                  <div className="h-8 bg-blue-500/5 border-b border-border" />
+                  <div className="h-8" style={{ ...border, background: "rgba(0,212,255,0.05)" }} />
                   {/* Task bars */}
                   {phaseTasks.map((task: Task) => {
                     const barStyle = getBarStyle(task);
                     return (
-                      <div key={task.id} className="h-10 flex items-center border-b border-border/50 relative">
+                      <div key={task.id} className="h-10 flex items-center relative"
+                        style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                         {barStyle && (
                           <div className="absolute" style={{ left: barStyle.left, width: barStyle.width }}>
                             {/* Background bar */}
-                            <div className="h-5 rounded-full bg-secondary/80 relative overflow-hidden mx-0.5">
+                            <div className="h-5 rounded-full relative overflow-hidden mx-0.5" style={{ background: "rgba(255,255,255,0.06)" }}>
                               {/* Progress fill */}
                               <motion.div
                                 initial={{ width: 0 }}

@@ -28,13 +28,15 @@ import {
   Trash2,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
-import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
+import DownloadModal from "@/components/shared/DownloadModal";
 import { MarkdownText } from "@/lib/renderMarkdown";
+import { ACCENT, AccentKey, glassInputClass, glassInputStyle, gradientButtonStyle, glassButtonStyle } from "@/lib/theme";
+import { downloadEntries, ExportColumn, ExportFormat, ExportMode } from "@/lib/export/downloadEntries";
 
 const DOCS_TABS = [
   { href: "/documents",  label: "Documents" },
@@ -44,11 +46,11 @@ const DOCS_TABS = [
 ];
 
 const docTypeData = [
-  { name: "Contracts", value: 28, color: "#3b82f6" },
-  { name: "Safety", value: 22, color: "#ef4444" },
-  { name: "Permits", value: 15, color: "#10b981" },
-  { name: "Reports", value: 20, color: "#f59e0b" },
-  { name: "Drawings", value: 15, color: "#8b5cf6" },
+  { name: "Contracts", value: 28, color: "#3B82F6" },
+  { name: "Safety", value: 22, color: "#EF4444" },
+  { name: "Permits", value: 15, color: "#10B981" },
+  { name: "Reports", value: 20, color: "#F59E0B" },
+  { name: "Drawings", value: 15, color: "#8B5CF6" },
 ];
 
 const fallbackDocs = [
@@ -91,6 +93,14 @@ interface DocMessage {
 
 interface RagMessage { role: "user" | "assistant"; content: string; sources?: { name: string; type: string }[] }
 
+// ─── Shared glass button styles (mirrors Cost & Safety pages) ─
+
+const primaryBtn =
+  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white whitespace-nowrap transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
+const ghostBtn =
+  "flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-white/70 hover:text-white whitespace-nowrap transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
+const cyanGradient = { background: "linear-gradient(135deg, #00D4FF 0%, #1D4ED8 100%)" };
+
 export default function DocumentsPage() {
   const { triggerRefresh } = useDataRefreshStore();
   const [loading, setLoading] = useState(false);
@@ -124,6 +134,9 @@ export default function DocumentsPage() {
   const [finExtractOpen, setFinExtractOpen] = useState(false);
   const [finExtractLoading, setFinExtractLoading] = useState(false);
   const [finExtractResult, setFinExtractResult] = useState<any>(null);
+
+  // Download
+  const [showDownload, setShowDownload] = useState(false);
 
   useEffect(() => {
     fetchDocs();
@@ -307,8 +320,8 @@ export default function DocumentsPage() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "processed": return <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle className="w-3 h-3" />Processed</span>;
-      case "pending": return <span className="flex items-center gap-1 text-xs text-orange-400"><Clock className="w-3 h-3" />Pending</span>;
-      default: return <span className="flex items-center gap-1 text-xs text-blue-400"><Loader2 className="w-3 h-3 animate-spin" />Processing</span>;
+      case "pending": return <span className="flex items-center gap-1 text-xs text-amber-400"><Clock className="w-3 h-3" />Pending</span>;
+      default: return <span className="flex items-center gap-1 text-xs text-cyan-400"><Loader2 className="w-3 h-3 animate-spin" />Processing</span>;
     }
   };
 
@@ -333,37 +346,73 @@ export default function DocumentsPage() {
     return matchSearch && matchCat;
   });
 
+  const kpis: { label: string; value: string; accent: AccentKey; icon: any }[] = [
+    { label: "Total Documents", value: realDocs.length > 0 ? realDocs.length.toString() : "248", accent: "blue", icon: FileText },
+    { label: "Processed", value: realDocs.length > 0 ? realDocs.filter(d => d.status === "processed").length.toString() : "231", accent: "green", icon: CheckCircle },
+    { label: "Pending", value: realDocs.length > 0 ? realDocs.filter(d => d.status === "pending").length.toString() : "12", accent: "amber", icon: Clock },
+    { label: "In Database", value: realDocs.length > 0 ? `${realDocs.length} Live` : "0", accent: "cyan", icon: Database },
+  ];
+
+  const docColumns: ExportColumn[] = [
+    { key: "name", label: "Name" },
+    { key: "category", label: "Category" },
+    { key: "type", label: "Type" },
+    { key: "status", label: "Status" },
+    { key: "date", label: "Date" },
+  ];
+
+  const handleDocsExport = async (format: ExportFormat, mode: ExportMode) => {
+    await downloadEntries({
+      format,
+      mode,
+      title: "Document Library Report",
+      subtitle: `${filtered.length} document${filtered.length === 1 ? "" : "s"}`,
+      kpis: kpis.map((k) => ({ label: k.label, value: k.value })),
+      columns: docColumns,
+      rows: filtered,
+      filenameBase: `CivilAI_Document_Library_${new Date().toISOString().split("T")[0]}`,
+    });
+    toast.success("Document library downloaded");
+  };
+
   return (
     <div className="space-y-6">
       <ModuleTabs tabs={DOCS_TABS} />
+      <DownloadModal open={showDownload} onClose={() => setShowDownload(false)} title="Download Document Library" onExport={handleDocsExport} />
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-4xl font-bold text-foreground">Document Intelligence</h1>
-        <p className="text-muted-foreground text-sm mt-1">
+        <h1 className="text-4xl font-bold text-white tracking-tight">Document Intelligence</h1>
+        <p className="text-white/35 text-[13px] mt-1">
           Upload any construction document — contracts, blueprints, BOQ, reports — and chat with AI
         </p>
       </motion.div>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { label: "Total Documents", value: realDocs.length > 0 ? realDocs.length.toString() : "248", color: "border-blue-500/20 bg-blue-500/5" },
-          { label: "Processed", value: realDocs.length > 0 ? realDocs.filter(d => d.status === "processed").length.toString() : "231", color: "border-emerald-500/20 bg-emerald-500/5" },
-          { label: "Pending", value: realDocs.length > 0 ? realDocs.filter(d => d.status === "pending").length.toString() : "12", color: "border-orange-500/20 bg-orange-500/5" },
-          { label: "In Database", value: realDocs.length > 0 ? `${realDocs.length} Live` : "0", color: "border-cyan-500/20 bg-cyan-500/5" },
-        ].map((kpi, i) => (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
-            whileHover={{ y: -2 }}
-            className={`rounded-2xl border p-5 ${kpi.color}`}
-          >
-            <p className="text-sm text-muted-foreground">{kpi.label}</p>
-            <p className="text-2xl font-bold text-foreground mt-1">{kpi.value}</p>
-          </motion.div>
-        ))}
+        {kpis.map((kpi, i) => {
+          const a = ACCENT[kpi.accent];
+          return (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.08 }}
+              whileHover={{ y: -4, scale: 1.02 }}
+              className="glass-card p-5 group relative overflow-hidden" style={{ borderColor: a.border }}
+            >
+              <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                style={{ background: `radial-gradient(ellipse at top left, ${a.bg}, transparent 70%)` }} />
+              <div className="relative flex items-center justify-between mb-4">
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center"
+                  style={{ background: a.bg, border: `1px solid ${a.border}`, boxShadow: `0 0 16px ${a.shadow}` }}>
+                  <kpi.icon className="w-5 h-5" style={{ color: a.text }} />
+                </div>
+              </div>
+              <p className="relative text-[28px] font-bold" style={{ color: a.text, textShadow: `0 0 20px ${a.shadow}` }}>{kpi.value}</p>
+              <p className="relative text-[13px] text-white/40 mt-1">{kpi.label}</p>
+            </motion.div>
+          );
+        })}
       </div>
 
       {/* Main Content */}
@@ -376,9 +425,10 @@ export default function DocumentsPage() {
           className="space-y-4"
         >
           <div
-            className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer ${
-              dragOver ? "border-blue-500 bg-blue-500/10" : "border-border hover:border-blue-500/50 hover:bg-blue-500/5"
-            }`}
+            className="border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer"
+            style={dragOver
+              ? { borderColor: "rgba(0,212,255,0.5)", background: "rgba(0,212,255,0.08)" }
+              : { borderColor: "rgba(255,255,255,0.1)" }}
             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
             onDrop={(e) => {
@@ -389,16 +439,19 @@ export default function DocumentsPage() {
             }}
           >
             <motion.div animate={{ y: dragOver ? -5 : 0 }} transition={{ duration: 0.2 }}>
-              <div className="w-16 h-16 rounded-2xl gradient-blue flex items-center justify-center mx-auto mb-4">
-                {loading ? <Loader2 className="w-8 h-8 text-white animate-spin" /> : <Upload className="w-8 h-8 text-white" />}
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
+                style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}`, boxShadow: `0 0 20px ${ACCENT.cyan.shadow}` }}>
+                {loading
+                  ? <Loader2 className="w-8 h-8 animate-spin" style={{ color: ACCENT.cyan.text }} />
+                  : <Upload className="w-8 h-8" style={{ color: ACCENT.cyan.text }} />}
               </div>
-              <p className="text-foreground font-semibold text-lg mb-1">
+              <p className="text-white font-semibold text-lg mb-1">
                 {loading ? "Processing & saving to database..." : "Drop your document here"}
               </p>
-              <p className="text-sm text-muted-foreground mb-2">
+              <p className="text-sm text-white/35 mb-2">
                 Contracts · Blueprints · BOQ · Reports · Permits · Invoices
               </p>
-              <p className="text-xs text-muted-foreground mb-4">
+              <p className="text-xs text-white/25 mb-4">
                 PDF · Excel · Word · PNG · JPG — Saved to Supabase Storage
               </p>
             </motion.div>
@@ -408,37 +461,40 @@ export default function DocumentsPage() {
                 placeholder="Optional: What to analyze?"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+                className={glassInputClass + " w-64"}
+                style={glassInputStyle}
                 onClick={(e) => e.stopPropagation()}
               />
-              <Button
-  className="gradient-blue text-white border-0"
-  onClick={(e) => {
-    e.stopPropagation();
-    document.getElementById("file-upload")?.click();
-  }}
->
-  <Upload className="w-4 h-4 mr-2" />
-  Browse Files
-</Button>
-<input
-  id="file-upload"
-  type="file"
-  className="hidden"
-  accept=".pdf,.xlsx,.xls,.docx,.png,.jpg,.jpeg"
-  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-/>
-              <Button
-                variant="outline"
+              <button
+                className={primaryBtn}
+                style={gradientButtonStyle}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  document.getElementById("file-upload")?.click();
+                }}
+              >
+                <Upload className="w-4 h-4" />
+                Browse Files
+              </button>
+              <input
+                id="file-upload"
+                type="file"
+                className="hidden"
+                accept=".pdf,.xlsx,.xls,.docx,.png,.jpg,.jpeg"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+              />
+              <button
+                className={ghostBtn}
+                style={glassButtonStyle}
                 onClick={(e) => {
                   e.stopPropagation();
                   setFinExtractOpen(true);
                   document.getElementById("fin-extract-upload")?.click();
                 }}
               >
-                {finExtractLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Calculator className="w-4 h-4 mr-2 text-cyan-400" />}
+                {finExtractLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4 text-cyan-400" />}
                 Quick Financial Extract
-              </Button>
+              </button>
               <input
                 id="fin-extract-upload"
                 type="file"
@@ -451,38 +507,41 @@ export default function DocumentsPage() {
           </div>
 
           {/* Supported Types */}
-          <div className="bg-card border border-border rounded-2xl p-5">
+          <div className="glass-card p-5">
             <div className="flex items-center gap-2 mb-3">
               <Database className="w-4 h-4 text-emerald-400" />
-              <p className="text-sm font-medium text-foreground">Supported Document Types</p>
+              <p className="text-sm font-medium text-white">Supported Document Types</p>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {[
-                { label: "Contracts", desc: "Risk analysis, clause review", color: "text-blue-400", bg: "bg-blue-500/10" },
-                { label: "Blueprints", desc: "Drawing analysis, AI vision", color: "text-cyan-400", bg: "bg-cyan-500/10" },
-                { label: "BOQ", desc: "Cost extraction, price analysis", color: "text-emerald-400", bg: "bg-emerald-500/10" },
-                { label: "Safety Reports", desc: "Risk identification", color: "text-red-400", bg: "bg-red-500/10" },
-                { label: "Permits", desc: "Expiry tracking, compliance", color: "text-orange-400", bg: "bg-orange-500/10" },
-                { label: "Invoices", desc: "Data extraction, payment terms", color: "text-yellow-400", bg: "bg-yellow-500/10" },
-              ].map((type, i) => (
-                <div key={i} className={`flex items-start gap-2 p-3 rounded-xl ${type.bg}`}>
-                  <ChevronRight className={`w-4 h-4 mt-0.5 flex-shrink-0 ${type.color}`} />
-                  <div>
-                    <p className={`text-xs font-medium ${type.color}`}>{type.label}</p>
-                    <p className="text-xs text-muted-foreground">{type.desc}</p>
+              {([
+                { label: "Contracts", desc: "Risk analysis, clause review", accent: "blue" },
+                { label: "Blueprints", desc: "Drawing analysis, AI vision", accent: "cyan" },
+                { label: "BOQ", desc: "Cost extraction, price analysis", accent: "green" },
+                { label: "Safety Reports", desc: "Risk identification", accent: "red" },
+                { label: "Permits", desc: "Expiry tracking, compliance", accent: "orange" },
+                { label: "Invoices", desc: "Data extraction, payment terms", accent: "amber" },
+              ] as { label: string; desc: string; accent: AccentKey }[]).map((type, i) => {
+                const a = ACCENT[type.accent];
+                return (
+                  <div key={i} className="flex items-start gap-2 p-3 rounded-xl" style={{ background: a.bg }}>
+                    <ChevronRight className="w-4 h-4 mt-0.5 shrink-0" style={{ color: a.text }} />
+                    <div>
+                      <p className="text-xs font-medium" style={{ color: a.text }}>{type.label}</p>
+                      <p className="text-xs text-white/35">{type.desc}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
           {/* Quick Financial Extract result */}
           {finExtractOpen && (
-            <div className="bg-card border border-cyan-500/30 rounded-2xl p-5">
+            <div className="glass-card p-5" style={{ borderColor: ACCENT.cyan.border }}>
               <div className="flex items-center gap-2 mb-3">
                 <Calculator className="w-4 h-4 text-cyan-400" />
-                <p className="text-sm font-medium text-foreground">Quick Financial Extract</p>
-                <button onClick={() => { setFinExtractOpen(false); setFinExtractResult(null); }} className="ml-auto text-muted-foreground hover:text-foreground">
+                <p className="text-sm font-medium text-white">Quick Financial Extract</p>
+                <button onClick={() => { setFinExtractOpen(false); setFinExtractResult(null); }} className="ml-auto text-white/40 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -496,17 +555,17 @@ export default function DocumentsPage() {
                     <span className="text-xs px-2.5 py-1 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-medium">
                       {DOC_TYPE_LABEL[finExtractResult.document_class] ?? finExtractResult.document_class}
                     </span>
-                    {finExtractResult.currency && <span className="text-xs text-muted-foreground">{finExtractResult.currency}</span>}
+                    {finExtractResult.currency && <span className="text-xs text-white/35">{finExtractResult.currency}</span>}
                   </div>
                   {finExtractResult.summary && (
-                    <p className="text-xs text-muted-foreground leading-relaxed">{finExtractResult.summary}</p>
+                    <p className="text-xs text-white/40 leading-relaxed">{finExtractResult.summary}</p>
                   )}
                   {finExtractResult.key_figures?.length > 0 && (
                     <div className="grid grid-cols-2 gap-2">
                       {finExtractResult.key_figures.map((kf: any, i: number) => (
-                        <div key={i} className="rounded-lg px-3 py-2 bg-secondary/50">
-                          <p className="text-[10px] text-muted-foreground uppercase">{kf.label}</p>
-                          <p className="text-sm font-mono font-semibold text-foreground">
+                        <div key={i} className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.03)" }}>
+                          <p className="text-[10px] text-white/35 uppercase">{kf.label}</p>
+                          <p className="text-sm font-mono font-semibold text-white">
                             {kf.suffix === "%" ? `${kf.value}%` : kf.value}
                           </p>
                         </div>
@@ -533,22 +592,22 @@ export default function DocumentsPage() {
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.3 }}
-          className="bg-card border border-border rounded-2xl overflow-hidden flex flex-col"
+          className="glass-card overflow-hidden flex flex-col"
           style={{ minHeight: "500px" }}
         >
           {!docChatOpen ? (
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-secondary flex items-center justify-center mx-auto mb-4">
-                <MessageSquare className="w-8 h-8 text-muted-foreground" />
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: "rgba(255,255,255,0.05)" }}>
+                <MessageSquare className="w-8 h-8 text-white/30" />
               </div>
-              <p className="font-semibold text-foreground mb-2">Ask Your Documents</p>
-              <p className="text-sm text-muted-foreground mb-4">
+              <p className="font-semibold text-white mb-2">Ask Your Documents</p>
+              <p className="text-sm text-white/35 mb-4">
                 Upload a document to start chatting with AI about its content
               </p>
               <div className="space-y-2 w-full max-w-xs">
                 {["What are the payment terms?", "Identify all risks", "Summarize key points"].map((q) => (
-                  <div key={q} className="flex items-center gap-2 p-2.5 rounded-xl bg-secondary/50 text-xs text-muted-foreground">
-                    <Sparkles className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                  <div key={q} className="flex items-center gap-2 p-2.5 rounded-xl text-xs text-white/40" style={{ background: "rgba(255,255,255,0.03)" }}>
+                    <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                     {q}
                   </div>
                 ))}
@@ -557,32 +616,33 @@ export default function DocumentsPage() {
           ) : (
             <>
               {/* Chat Header */}
-              <div className="flex items-center justify-between p-4 border-b border-border bg-blue-500/5">
+              <div className="flex items-center justify-between p-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", background: ACCENT.cyan.bg }}>
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl gradient-blue flex items-center justify-center">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={cyanGradient}>
                     <Bot className="w-4 h-4 text-white" />
                   </div>
                   <div>
-                    <p className="font-medium text-foreground text-sm">Document AI Chat</p>
+                    <p className="font-medium text-white text-sm">Document AI Chat</p>
                     <div className="flex items-center gap-1">
                       <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      <p className="text-xs text-muted-foreground truncate max-w-40">{currentDoc}</p>
+                      <p className="text-xs text-white/35 truncate max-w-40">{currentDoc}</p>
                     </div>
                   </div>
                 </div>
-                <Button variant="ghost" size="icon" onClick={() => setDocChatOpen(false)}>
+                <button onClick={() => setDocChatOpen(false)} className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/5">
                   <X className="w-4 h-4" />
-                </Button>
+                </button>
               </div>
 
               {/* Quick Questions */}
-              <div className="p-3 border-b border-border overflow-x-auto">
+              <div className="p-3 overflow-x-auto" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
                 <div className="flex gap-2 flex-nowrap">
                   {quickQuestions.map((q) => (
                     <button
                       key={q}
                       onClick={() => sendDocMessage(q)}
-                      className="text-xs px-3 py-1.5 rounded-full bg-secondary hover:bg-blue-500/10 hover:text-blue-400 text-muted-foreground border border-border transition-colors whitespace-nowrap"
+                      className="text-xs px-3 py-1.5 rounded-full text-white/40 hover:text-cyan-400 border transition-colors whitespace-nowrap"
+                      style={{ background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.08)" }}
                     >
                       {q}
                     </button>
@@ -600,19 +660,19 @@ export default function DocumentsPage() {
                       animate={{ opacity: 1, y: 0 }}
                       className={`flex gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
                     >
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
-                        msg.role === "assistant" ? "gradient-blue" : "bg-secondary border border-border"
-                      }`}>
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
+                        style={msg.role === "assistant" ? cyanGradient : { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
                         {msg.role === "assistant"
                           ? <Bot className="w-3.5 h-3.5 text-white" />
-                          : <span className="text-xs text-foreground">U</span>
+                          : <span className="text-xs text-white">U</span>
                         }
                       </div>
                       <div className={`max-w-[80%] rounded-2xl px-3 py-2.5 text-xs leading-relaxed ${
-                        msg.role === "assistant"
-                          ? "bg-secondary text-foreground rounded-tl-none border border-border"
-                          : "gradient-blue text-white rounded-tr-none"
-                      }`}>
+                        msg.role === "assistant" ? "text-white rounded-tl-none" : "text-white rounded-tr-none"
+                      }`}
+                        style={msg.role === "assistant"
+                          ? { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }
+                          : cyanGradient}>
                         {msg.content}
                       </div>
                     </motion.div>
@@ -620,14 +680,14 @@ export default function DocumentsPage() {
                 </AnimatePresence>
                 {docChatLoading && (
                   <div className="flex gap-2">
-                    <div className="w-7 h-7 rounded-full gradient-blue flex items-center justify-center">
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center" style={cyanGradient}>
                       <Bot className="w-3.5 h-3.5 text-white" />
                     </div>
-                    <div className="bg-secondary border border-border rounded-2xl rounded-tl-none px-3 py-2">
+                    <div className="rounded-2xl rounded-tl-none px-3 py-2" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
                       <div className="flex gap-1">
-                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                        <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+                        <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "300ms" }} />
                       </div>
                     </div>
                   </div>
@@ -636,23 +696,24 @@ export default function DocumentsPage() {
               </div>
 
               {/* Input */}
-              <div className="p-4 border-t border-border">
+              <div className="p-4" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
                 <div className="flex gap-2">
                   <input
                     value={docInput}
                     onChange={(e) => setDocInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && sendDocMessage()}
                     placeholder="Ask anything about this document..."
-                    className="flex-1 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className={glassInputClass}
+                    style={glassInputStyle}
                   />
-                  <Button
+                  <button
                     onClick={() => sendDocMessage()}
                     disabled={!docInput.trim() || docChatLoading}
-                    size="icon"
-                    className="gradient-blue text-white border-0 rounded-xl"
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0 transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100"
+                    style={gradientButtonStyle}
                   >
                     <Send className="w-4 h-4" />
-                  </Button>
+                  </button>
                 </div>
               </div>
             </>
@@ -662,11 +723,11 @@ export default function DocumentsPage() {
 
       {/* Natural Language Search — RAG across all docs */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}
-        className="bg-card border border-border rounded-2xl overflow-hidden">
-        <div className="flex items-center gap-2 px-5 py-3 border-b border-border bg-cyan-500/5">
+        className="glass-card overflow-hidden">
+        <div className="flex items-center gap-2 px-5 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", background: ACCENT.cyan.bg }}>
           <Sparkles className="w-4 h-4 text-cyan-400" />
-          <p className="text-sm font-semibold text-foreground">Search All Documents</p>
-          <span className="text-xs text-muted-foreground ml-auto">Ask questions across your entire document library</span>
+          <p className="text-sm font-semibold text-white">Search All Documents</p>
+          <span className="text-xs text-white/35 ml-auto">Ask questions across your entire document library</span>
         </div>
         <div className="flex flex-col" style={{ minHeight: ragMessages.length ? 320 : 64 }}>
           {ragMessages.length > 0 && (
@@ -674,11 +735,13 @@ export default function DocumentsPage() {
               {ragMessages.map((msg, i) => (
                 <motion.div key={i} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
                   className={`flex gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${msg.role === "assistant" ? "bg-cyan-500/20" : "bg-secondary border border-border"}`}>
-                    {msg.role === "assistant" ? <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> : <span className="text-xs text-foreground">U</span>}
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
+                    style={msg.role === "assistant" ? { background: "rgba(0,212,255,0.15)" } : { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                    {msg.role === "assistant" ? <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> : <span className="text-xs text-white">U</span>}
                   </div>
                   <div className="max-w-[80%] space-y-1">
-                    <div className={`rounded-2xl px-3 py-2 text-xs leading-relaxed ${msg.role === "assistant" ? "bg-secondary text-foreground border border-border rounded-tl-none" : "gradient-blue text-white rounded-tr-none"}`}>
+                    <div className={`rounded-2xl px-3 py-2 text-xs leading-relaxed text-white ${msg.role === "assistant" ? "rounded-tl-none" : "rounded-tr-none"}`}
+                      style={msg.role === "assistant" ? { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" } : cyanGradient}>
                       {msg.content}
                     </div>
                     {msg.sources && msg.sources.length > 0 && (
@@ -693,10 +756,10 @@ export default function DocumentsPage() {
               ))}
               {ragLoading && (
                 <div className="flex gap-2">
-                  <div className="w-7 h-7 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: "rgba(0,212,255,0.15)" }}>
                     <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
                   </div>
-                  <div className="bg-secondary border border-border rounded-2xl rounded-tl-none px-3 py-2">
+                  <div className="rounded-2xl rounded-tl-none px-3 py-2" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
                     <div className="flex gap-1">
                       {[0, 150, 300].map((d) => <div key={d} className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
                     </div>
@@ -706,13 +769,14 @@ export default function DocumentsPage() {
               <div ref={ragBottomRef} />
             </div>
           )}
-          <div className="p-3 border-t border-border flex gap-2">
+          <div className="p-3 flex gap-2" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
             <input value={ragInput} onChange={(e) => setRagInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && sendRagMessage()}
               placeholder="e.g. What are the payment terms across all contracts?"
-              className="flex-1 px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              className={glassInputClass} style={glassInputStyle} />
             <button onClick={() => sendRagMessage()} disabled={!ragInput.trim() || ragLoading}
-              className="px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2">
+              className="px-4 py-2 rounded-xl text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2 transition-all hover:scale-105 disabled:hover:scale-100"
+              style={gradientButtonStyle}>
               {ragLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
@@ -724,13 +788,13 @@ export default function DocumentsPage() {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-blue-500/30 rounded-2xl p-6"
+          className="glass-card p-6" style={{ borderColor: ACCENT.cyan.border }}
         >
           <div className="flex items-center gap-2 mb-3">
-            <Sparkles className="w-5 h-5 text-blue-400" />
-            <h3 className="font-semibold text-foreground">AI Document Analysis</h3>
+            <Sparkles className="w-5 h-5 text-cyan-400" />
+            <h3 className="font-semibold text-white text-[15px]">AI Document Analysis</h3>
           </div>
-          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
+          <MarkdownText text={analysis} className="text-sm text-white/60 leading-relaxed" />
         </motion.div>
       )}
 
@@ -739,11 +803,11 @@ export default function DocumentsPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.4 }}
-        className="bg-card border border-border rounded-2xl p-6"
+        className="glass-card p-6"
       >
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
           <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-foreground">Document Library</h3>
+            <h3 className="font-semibold text-white">Document Library</h3>
             {realDocs.length > 0 && (
               <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
                 {realDocs.length} from Supabase DB
@@ -752,18 +816,25 @@ export default function DocumentsPage() {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={toggleStorage}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
-                storageOpen ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" : "bg-secondary text-muted-foreground border-border hover:text-foreground"
-              }`}>
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors"
+              style={storageOpen
+                ? { background: "rgba(0,212,255,0.1)", color: "#00D4FF", borderColor: "rgba(0,212,255,0.2)" }
+                : { background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.4)", borderColor: "rgba(255,255,255,0.08)" }}>
               <FolderOpen className="w-3.5 h-3.5" /> Browse Storage
             </button>
+            <button onClick={() => setShowDownload(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors"
+              style={{ background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.4)", borderColor: "rgba(255,255,255,0.08)" }}>
+              <Download className="w-3.5 h-3.5" /> Download
+            </button>
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/35" />
               <input
                 placeholder="Search documents..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="pl-8 pr-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-blue-500 w-48"
+                className="pl-8 pr-3 py-1.5 rounded-xl text-xs text-white placeholder:text-white/30 outline-none border focus:border-cyan-500/50 w-48"
+                style={glassInputStyle}
               />
             </div>
           </div>
@@ -771,34 +842,35 @@ export default function DocumentsPage() {
 
         {/* Raw storage bucket browser */}
         {storageOpen && (
-          <div className="mb-4 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex gap-1 p-1 rounded-lg bg-secondary/60 w-fit">
+          <div className="mb-4 glass-card p-4" style={{ borderColor: ACCENT.cyan.border, background: ACCENT.cyan.bg }}>
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div className="flex gap-1 p-1 rounded-lg w-fit" style={{ background: "rgba(255,255,255,0.04)" }}>
                 {(["documents", "blueprints"] as const).map((b) => (
                   <button key={b} onClick={() => switchBucket(b)}
-                    className={`px-3 py-1 rounded-md text-xs font-medium capitalize transition-colors ${
-                      storageBucket === b ? "bg-cyan-500/20 text-cyan-400" : "text-muted-foreground hover:text-foreground"
-                    }`}>
+                    className="px-3 py-1 rounded-md text-xs font-medium capitalize transition-colors"
+                    style={storageBucket === b
+                      ? { background: "rgba(0,212,255,0.2)", color: "#00D4FF" }
+                      : { color: "rgba(255,255,255,0.4)" }}>
                     {b}
                   </button>
                 ))}
               </div>
-              <span className="text-xs text-muted-foreground">{storageFiles.length} file(s) in bucket</span>
+              <span className="text-xs text-white/35">{storageFiles.length} file(s) in bucket</span>
             </div>
             {storageLoading ? (
               <div className="flex items-center justify-center py-6">
                 <Loader2 className="w-5 h-5 animate-spin text-cyan-400" />
               </div>
             ) : storageFiles.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-4">No files in this bucket</p>
+              <p className="text-xs text-white/35 text-center py-4">No files in this bucket</p>
             ) : (
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
                 {storageFiles.map((f: any, i: number) => (
-                  <div key={f.id || i} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-card/60">
+                  <div key={f.id || i} className="flex items-center gap-3 px-3 py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.03)" }}>
                     <FileText className="w-3.5 h-3.5 text-cyan-400/70 shrink-0" />
-                    <span className="text-xs text-foreground flex-1 truncate">{f.name}</span>
-                    <span className="text-[10px] text-muted-foreground">{fmtBytes(f.metadata?.size)}</span>
-                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                    <span className="text-xs text-white flex-1 truncate">{f.name}</span>
+                    <span className="text-[10px] text-white/35">{fmtBytes(f.metadata?.size)}</span>
+                    <span className="text-[10px] text-white/35 whitespace-nowrap">
                       {f.updated_at ? new Date(f.updated_at).toLocaleDateString() : "—"}
                     </span>
                     <a href={publicUrl(storageBucket, f.name)} target="_blank" rel="noreferrer"
@@ -829,11 +901,10 @@ export default function DocumentsPage() {
             <button
               key={cat}
               onClick={() => setActiveCategory(cat)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                activeCategory === cat
-                  ? "bg-blue-500 text-white"
-                  : "bg-secondary text-muted-foreground hover:text-foreground"
-              }`}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              style={activeCategory === cat
+                ? { background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)", color: "#00D4FF" }
+                : { background: "rgba(255,255,255,0.03)", border: "1px solid transparent", color: "rgba(255,255,255,0.4)" }}
             >
               {cat}
             </button>
@@ -842,15 +913,15 @@ export default function DocumentsPage() {
 
         {docsLoading ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+            <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
           </div>
         ) : (
           <div className="space-y-2">
             {filtered.length === 0 ? (
               <div className="text-center py-8">
-                <FileText className="w-10 h-10 text-muted-foreground mx-auto mb-2" />
-                <p className="text-sm text-muted-foreground">No documents found</p>
-                <p className="text-xs text-muted-foreground">Upload a document to get started</p>
+                <FileText className="w-10 h-10 text-white/30 mx-auto mb-2" />
+                <p className="text-sm text-white/35">No documents found</p>
+                <p className="text-xs text-white/25">Upload a document to get started</p>
               </div>
             ) : (
               filtered.map((doc, i) => (
@@ -859,18 +930,19 @@ export default function DocumentsPage() {
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: i * 0.05 }}
-                  className="flex items-center gap-3 p-3 rounded-xl bg-secondary/40 hover:bg-secondary/70 transition-colors group"
+                  className="flex items-center gap-3 p-3 rounded-xl transition-colors group hover:bg-white/[0.03]"
+                  style={{ background: "rgba(255,255,255,0.015)" }}
                 >
-                  <div className="w-9 h-9 rounded-xl bg-secondary flex items-center justify-center flex-shrink-0">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(255,255,255,0.05)" }}>
                     {getFileIcon(doc.type)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-foreground truncate font-medium">{doc.name}</p>
+                    <p className="text-sm text-white truncate font-medium">{doc.name}</p>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xs text-muted-foreground">{doc.size}</span>
-                      <span className="text-xs text-muted-foreground">·</span>
-                      <span className="text-xs text-muted-foreground">{doc.date}</span>
-                      <span className="text-xs px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground">{doc.category}</span>
+                      <span className="text-xs text-white/35">{doc.size}</span>
+                      <span className="text-xs text-white/35">·</span>
+                      <span className="text-xs text-white/35">{doc.date}</span>
+                      <span className="text-xs px-1.5 py-0.5 rounded-md" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.5)" }}>{doc.category}</span>
                     </div>
                   </div>
                   {getStatusBadge(doc.status)}
@@ -888,17 +960,21 @@ export default function DocumentsPage() {
                         </a>
                       ) : null;
                     })()}
-                    <Button variant="ghost" size="icon" className="w-7 h-7" disabled={!doc.fileUrl}
+                    <button className="w-7 h-7 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5 transition-colors disabled:opacity-40"
+                      disabled={!doc.fileUrl}
                       onClick={() => doc.fileUrl && window.open(doc.fileUrl, "_blank")} title={doc.fileUrl ? "View original file" : "No file available"}>
                       <Eye className="w-3.5 h-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="w-7 h-7" disabled={!doc.fileUrl} asChild={!!doc.fileUrl}>
-                      {doc.fileUrl ? (
-                        <a href={doc.fileUrl} download title="Download">
-                          <Download className="w-3.5 h-3.5" />
-                        </a>
-                      ) : <Download className="w-3.5 h-3.5" />}
-                    </Button>
+                    </button>
+                    {doc.fileUrl ? (
+                      <a href={doc.fileUrl} download title="Download"
+                        className="w-7 h-7 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5 transition-colors">
+                        <Download className="w-3.5 h-3.5" />
+                      </a>
+                    ) : (
+                      <button className="w-7 h-7 rounded-lg flex items-center justify-center text-white/40 opacity-40" disabled>
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </motion.div>
               ))

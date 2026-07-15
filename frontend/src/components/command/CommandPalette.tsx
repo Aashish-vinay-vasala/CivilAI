@@ -88,7 +88,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     { id: "meetings", label: "Meeting Minutes", icon: FileSpreadsheet, group: "Navigate", action: () => navigate("/meetings", "Meetings") },
     { id: "daily-reports", label: "Daily Site Reports", icon: FileText, group: "Navigate", action: () => navigate("/daily-reports", "Daily Reports") },
     { id: "scenario", label: "Scenario Planner", icon: TrendingUp, group: "Navigate", action: () => navigate("/scenario", "Scenario") },
-    { id: "team", label: "Team Management", icon: UserPlus, group: "Navigate", action: () => navigate("/team", "Team") },
+    { id: "team", label: "Team Management", icon: UserPlus, group: "Navigate", keywords: "invite members roles workforce", action: () => navigate("/workforce", "Workforce") },
     { id: "qr", label: "QR Code Tracker", icon: QrCode, group: "Navigate", action: () => navigate("/qr-tracker", "QR Tracker") },
     { id: "voice", label: "Voice Field Report", icon: Mic, group: "Actions", keywords: "speak record audio", action: () => navigate("/daily-reports", "Daily Reports") },
     { id: "transcribe", label: "AI Transcription", icon: Mic, group: "Navigate", keywords: "whisper audio minutes", action: () => navigate("/transcribe", "Transcription") },

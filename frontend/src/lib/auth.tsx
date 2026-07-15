@@ -4,23 +4,13 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { installAxiosAuthInterceptor } from "@/lib/axiosAuthInterceptor";
-import { useRoleStore, type UserRole } from "@/lib/stores/roleStore";
+import { useRoleStore, BACKEND_ROLE_TO_FRONTEND } from "@/lib/stores/roleStore";
 
 // Single seeded Supabase account (admin role) that "Start Demo" signs into —
 // no signup/login form, no other accounts. Real JWT, real backend RBAC, just
 // no user-facing credential entry.
 const DEMO_EMAIL = "aashishvinayvasala@gmail.com";
 const DEMO_PASSWORD = "civilaidemo";
-
-// Maps the backend's real RBAC role vocabulary (profiles.role, checked by
-// backend/app/core/guardrails.ROLE_PERMISSIONS) onto the frontend's cosmetic
-// permission-tier vocabulary (lib/stores/roleStore.ts) so the two stay in sync.
-const BACKEND_ROLE_TO_FRONTEND: Record<string, UserRole> = {
-  project_director: "pm",
-  admin: "admin",
-  engineer: "engineer",
-  contractor: "viewer",
-};
 
 export interface Profile {
   full_name: string;

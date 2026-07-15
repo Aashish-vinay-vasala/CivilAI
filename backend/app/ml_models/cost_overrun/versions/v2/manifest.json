@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "dataset_sources": [
+    {
+      "type": "baseline",
+      "rows": 1000,
+      "file": "cost_overrun_baseline.csv"
+    },
+    {
+      "type": "uploaded",
+      "dataset_id": "154db20f-a712-4a67-8900-72a232891dbe",
+      "filename": "sample_upload_test.csv",
+      "rows": 80
+    }
+  ],
+  "total_rows": 1080,
+  "is_baseline_only": false,
+  "trained_at": "2026-07-10T08:52:52.981813+00:00"
+}

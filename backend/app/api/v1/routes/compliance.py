@@ -11,6 +11,7 @@ from app.ai.compliance_analyzer import (
 )
 from app.ocr.document_processor import process_document
 from app.services.db_service import supabase
+from app.services.storage_service import upload_document
 
 router = APIRouter()
 
@@ -50,6 +51,9 @@ class PermitCreate(BaseModel):
     risk_level: str = "medium"
     project_id: Optional[str] = None
     issued_by: Optional[str] = None
+    file_url: Optional[str] = None
+    file_name: Optional[str] = None
+    bucket: Optional[str] = None
 
 
 class PermitUpdate(BaseModel):
@@ -59,6 +63,9 @@ class PermitUpdate(BaseModel):
     expiry_date: Optional[str] = None
     risk_level: Optional[str] = None
     issued_by: Optional[str] = None
+    file_url: Optional[str] = None
+    file_name: Optional[str] = None
+    bucket: Optional[str] = None
 
 
 # ── AI routes ──────────────────────────────────────────────────────────────
@@ -153,6 +160,27 @@ async def delete_permit(permit_id: str):
     try:
         supabase.table("permits").delete().eq("id", permit_id).execute()
         return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/permits/upload")
+async def upload_permit_file(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    try:
+        file_bytes = await file.read()
+        result = upload_document(file_bytes, file.filename, bucket="permits")
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Upload failed"))
+        return {
+            "status":    "success",
+            "file_name": result["filename"],
+            "file_url":  result["url"],
+            "bucket":    result["bucket"],
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

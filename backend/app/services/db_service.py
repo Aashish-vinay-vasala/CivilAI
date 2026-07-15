@@ -117,3 +117,83 @@ def create_safety_incident(data: dict):
 def create_document(data: dict):
     response = supabase.table("documents").insert(data).execute()
     return response.data
+
+def get_current_bim_model(project_id: str):
+    response = (
+        supabase.table("bim_models")
+        .select("*")
+        .eq("project_id", project_id)
+        .eq("is_current", True)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+def deactivate_bim_models(project_id: str):
+    supabase.table("bim_models").update({"is_current": False}).eq("project_id", project_id).eq("is_current", True).execute()
+
+def create_bim_model(data: dict):
+    response = supabase.table("bim_models").insert(data).execute()
+    return response.data[0] if response.data else None
+
+def get_bim_model_history(project_id: str):
+    response = (
+        supabase.table("bim_models")
+        .select("*")
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+def get_all_current_bim_models():
+    response = (
+        supabase.table("bim_models")
+        .select("*")
+        .eq("is_current", True)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+def get_bim_model_by_id(model_id: str):
+    response = supabase.table("bim_models").select("*").eq("id", model_id).limit(1).execute()
+    return response.data[0] if response.data else None
+
+def delete_bim_model(model_id: str):
+    supabase.table("bim_models").delete().eq("id", model_id).execute()
+
+def delete_bim_models_for_project(project_id: str):
+    supabase.table("bim_models").delete().eq("project_id", project_id).execute()
+
+def promote_latest_bim_model(project_id: str):
+    response = (
+        supabase.table("bim_models")
+        .select("id")
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if response.data:
+        supabase.table("bim_models").update({"is_current": True}).eq("id", response.data[0]["id"]).execute()
+
+def get_current_sensor_reading(project_id: str):
+    response = (
+        supabase.table("sensor_readings")
+        .select("*")
+        .eq("project_id", project_id)
+        .eq("is_current", True)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+def deactivate_sensor_readings(project_id: str):
+    supabase.table("sensor_readings").update({"is_current": False}).eq("project_id", project_id).eq("is_current", True).execute()
+
+def create_sensor_reading(data: dict):
+    response = supabase.table("sensor_readings").insert(data).execute()
+    return response.data[0] if response.data else None

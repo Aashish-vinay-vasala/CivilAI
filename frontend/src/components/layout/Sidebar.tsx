@@ -72,7 +72,6 @@ const SUB_ROUTE_MAP: Record<string, string> = {
   "/evm":               "/cost",
   "/equipment":         "/workforce",
   "/vendors":           "/workforce",
-  "/team":              "/workforce",
   "/contracts":         "/documents",
   "/compliance":        "/documents",
   "/transcribe":        "/documents",

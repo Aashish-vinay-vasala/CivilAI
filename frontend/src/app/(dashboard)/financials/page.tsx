@@ -13,11 +13,13 @@ import {
 import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
+import * as XLSX from "xlsx";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
 import Sparkline from "@/components/shared/Sparkline";
 import { ACCENT, gradientButtonStyle, glassButtonStyle } from "@/lib/theme";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
+import { exportBudgetReport } from "@/lib/exportPDF";
 
 const PROJECT_TABS = [
   { href: "/cost",        label: "Cost & Budget" },
@@ -83,8 +85,8 @@ const COL_DEFS: ColDef[] = [
   { key: "revisedBudget",   header: "Revised Budget",   hColor: "text-white/40", cellColor: ()  => "text-white",      bold: true },
   { key: "pendingChanges",  header: "Pending COs",      hColor: "text-white/40", cellColor: (v) => v === 0 ? "text-white/40" : "text-white" },
   { key: "projectedBudget", header: "Projected Budget", hColor: "text-white/40", cellColor: ()  => "text-white",      bold: true },
-  { key: "committedCosts",  header: "Committed Costs (Live)",  hColor: "text-orange-400",       cellColor: (v) => v === 0 ? "text-white/40" : "text-orange-400 font-medium" },
-  { key: "directCosts",     header: "Direct Costs (Live)",     hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-white/40" : "text-blue-400 font-medium" },
+  { key: "committedCosts",  header: "Committed Costs",  hColor: "text-orange-400",       cellColor: (v) => v === 0 ? "text-white/40" : "text-orange-400 font-medium" },
+  { key: "directCosts",     header: "Direct Costs",     hColor: "text-blue-400",         cellColor: (v) => v === 0 ? "text-white/40" : "text-blue-400 font-medium" },
 ];
 
 const COL_TOOLTIPS: Record<ColKey, string> = {
@@ -94,8 +96,8 @@ const COL_TOOLTIPS: Record<ColKey, string> = {
   revisedBudget:   "Original Budget + Budget Mods + Approved COs",
   pendingChanges:  "Change orders submitted but not yet approved",
   projectedBudget: "Revised Budget + Pending COs — expected final budget",
-  committedCosts:  "Live — pending/approved invoice amounts, allocated across this project's line items by budget share. Not editable here; add or update invoices on the Payments page to change it.",
-  directCosts:     "Live — actual spend from cost entries, allocated across this project's line items by budget share. Not editable here; add or update cost entries on the Cost & Budget page to change it.",
+  committedCosts:  "Committed cost for this line item, as stored on the budget record. Not editable here; update it via Import or Sync Modules.",
+  directCosts:     "Direct cost for this line item, as stored on the budget record. Not editable here; update it via Import or Sync Modules.",
 };
 
 const VIEW_KEYS: Record<ViewMode, ColKey[]> = {
@@ -104,111 +106,10 @@ const VIEW_KEYS: Record<ViewMode, ColKey[]> = {
   direct:    ["originalBudget","directCosts"],
 };
 
-// ─── CSI Blueprint fallback ───────────────────────────────────────────────────
+// ─── CSI division codes ────────────────────────────────────────────────────────
+// Used only to pre-collapse standard divisions before real line-item data loads.
 
-const CSI_BLUEPRINT = [
-  { code:"01", name:"General Requirements",        pct:0.08, items:[
-    { code:"01-010", desc:"Project Manager: Labor",          pct:0.25, coPct:0,     comPct:0,    dirPct:0.30 },
-    { code:"01-011", desc:"Project Engineer: Labor",         pct:0.21, coPct:0,     comPct:0,    dirPct:0.25 },
-    { code:"01-012", desc:"Superintendent: Labor",           pct:0.17, coPct:0,     comPct:0,    dirPct:0.22 },
-    { code:"01-013", desc:"Project Coordinator: Labor",      pct:0.14, coPct:0,     comPct:0,    dirPct:0.06 },
-    { code:"01-014", desc:"Project Executive: Labor",        pct:0.09, coPct:0,     comPct:0,    dirPct:0    },
-    { code:"01-510", desc:"Temporary Utilities: Other",      pct:0.08, coPct:0,     comPct:0,    dirPct:0.06 },
-    { code:"01-520", desc:"Construction Facilities: Other",  pct:0.04, coPct:0,     comPct:0,    dirPct:0.07 },
-    { code:"01-560", desc:"Temporary Barriers & Enclosures", pct:0.02, coPct:0,     comPct:0,    dirPct:0.07 },
-  ]},
-  { code:"02", name:"Site Construction",            pct:0.05, items:[
-    { code:"02-300", desc:"Earthwork: Commitment",   pct:0.47, coPct:0.096, comPct:0.47, dirPct:0 },
-    { code:"02-900", desc:"Landscaping: Commitment", pct:0.53, coPct:0,     comPct:0.53, dirPct:0 },
-  ]},
-  { code:"03", name:"Concrete", pct:0.14, items:[
-    { code:"03-100", desc:"Concrete Formwork",            pct:0.30, coPct:0.02, comPct:0.28, dirPct:0    },
-    { code:"03-200", desc:"Concrete Reinforcing",         pct:0.25, coPct:0.02, comPct:0.24, dirPct:0    },
-    { code:"03-300", desc:"Cast-in-Place Concrete",       pct:0.35, coPct:0.02, comPct:0.32, dirPct:0    },
-    { code:"03-410", desc:"Precast Concrete: Direct",     pct:0.10, coPct:0,    comPct:0,    dirPct:0.09 },
-  ]},
-  { code:"04", name:"Masonry", pct:0.04, items:[
-    { code:"04-200", desc:"Unit Masonry: Commitment",      pct:0.65, coPct:0, comPct:0.55, dirPct:0 },
-    { code:"04-400", desc:"Stone Assemblies: Commitment",  pct:0.35, coPct:0, comPct:0.30, dirPct:0 },
-  ]},
-  { code:"05", name:"Metals", pct:0.10, items:[
-    { code:"05-100", desc:"Structural Steel: Commitment",  pct:0.60, coPct:-0.01, comPct:0.55, dirPct:0    },
-    { code:"05-200", desc:"Steel Joists: Commitment",      pct:0.25, coPct:-0.01, comPct:0.22, dirPct:0    },
-    { code:"05-500", desc:"Metal Fabrications: Direct",    pct:0.15, coPct:0,     comPct:0,    dirPct:0.11 },
-  ]},
-  { code:"07", name:"Thermal & Moisture Protection", pct:0.07, items:[
-    { code:"07-100", desc:"Waterproofing: Commitment",      pct:0.35, coPct:0, comPct:0.30, dirPct:0 },
-    { code:"07-200", desc:"Thermal Insulation: Commitment", pct:0.30, coPct:0, comPct:0.27, dirPct:0 },
-    { code:"07-500", desc:"Roofing: Commitment",            pct:0.35, coPct:0, comPct:0.32, dirPct:0 },
-  ]},
-  { code:"08", name:"Openings", pct:0.06, items:[
-    { code:"08-100", desc:"Metal Doors & Frames",       pct:0.40, coPct:0, comPct:0.35, dirPct:0 },
-    { code:"08-400", desc:"Entrances & Storefronts",    pct:0.35, coPct:0, comPct:0.30, dirPct:0 },
-    { code:"08-800", desc:"Glazing: Commitment",        pct:0.25, coPct:0, comPct:0.20, dirPct:0 },
-  ]},
-  { code:"09", name:"Finishes", pct:0.09, items:[
-    { code:"09-200", desc:"Plaster & Gypsum Board",    pct:0.30, coPct:0.015, comPct:0.25, dirPct:0    },
-    { code:"09-300", desc:"Tiling: Commitment",        pct:0.25, coPct:0.015, comPct:0.20, dirPct:0    },
-    { code:"09-650", desc:"Resilient Flooring",        pct:0.20, coPct:0.015, comPct:0.15, dirPct:0    },
-    { code:"09-900", desc:"Paints & Coatings: Direct", pct:0.25, coPct:0,     comPct:0,    dirPct:0.18 },
-  ]},
-  { code:"10", name:"Specialties", pct:0.03, items:[
-    { code:"10-100", desc:"Visual Display Units: Direct",  pct:0.40, coPct:0, comPct:0,    dirPct:0.35 },
-    { code:"10-440", desc:"Fire Protection Specialties",   pct:0.60, coPct:0, comPct:0.50, dirPct:0    },
-  ]},
-  { code:"22", name:"Plumbing", pct:0.08, items:[
-    { code:"22-000", desc:"Plumbing Systems: Commitment", pct:0.65, coPct:0, comPct:0.60, dirPct:0 },
-    { code:"22-500", desc:"Pool & Fountain Plumbing",     pct:0.35, coPct:0, comPct:0.28, dirPct:0 },
-  ]},
-  { code:"23", name:"HVAC", pct:0.11, items:[
-    { code:"23-000", desc:"HVAC Systems: Commitment",      pct:0.55, coPct:0, comPct:0.48, dirPct:0    },
-    { code:"23-700", desc:"Central HVAC Equipment",        pct:0.30, coPct:0, comPct:0.28, dirPct:0    },
-    { code:"23-800", desc:"Decentralized HVAC: Direct",    pct:0.15, coPct:0, comPct:0,    dirPct:0.10 },
-  ]},
-  { code:"26", name:"Electrical", pct:0.12, items:[
-    { code:"26-050", desc:"Common Work: Commitment",       pct:0.20, coPct:0.03, comPct:0.18, dirPct:0    },
-    { code:"26-100", desc:"Medium-Voltage Distribution",   pct:0.25, coPct:0.03, comPct:0.22, dirPct:0    },
-    { code:"26-200", desc:"Low-Voltage Distribution",      pct:0.35, coPct:0.03, comPct:0.30, dirPct:0    },
-    { code:"26-500", desc:"Lighting: Direct",              pct:0.20, coPct:0,    comPct:0,    dirPct:0.15 },
-  ]},
-];
-
-function buildFallbackDivisions(totalBudget: number, committedTotal: number, directTotal: number): BudgetDivision[] {
-  const pctSum = CSI_BLUEPRINT.reduce((s, d) => s + d.pct, 0);
-  let totalComWeight = 0, totalDirWeight = 0;
-  for (const div of CSI_BLUEPRINT) {
-    const np = div.pct / pctSum;
-    for (const item of div.items) {
-      totalComWeight += np * item.pct * item.comPct;
-      totalDirWeight += np * item.pct * item.dirPct;
-    }
-  }
-  return CSI_BLUEPRINT.map((div) => {
-    const np = div.pct / pctSum;
-    const divBudget = totalBudget * np;
-    return {
-      code: div.code, name: div.name,
-      items: div.items.map((item) => {
-        const orig    = divBudget * item.pct;
-        const co      = orig * item.coPct;
-        const revised = orig + co;
-        const cw      = np * item.pct * item.comPct;
-        const dw      = np * item.pct * item.dirPct;
-        return {
-          code: item.code, description: item.desc, divCode: div.code, divName: div.name,
-          originalBudget:  orig,
-          budgetMods:      0,
-          approvedCOs:     co,
-          revisedBudget:   revised,
-          pendingChanges:  0,
-          projectedBudget: revised,
-          committedCosts:  totalComWeight > 0 ? committedTotal * (cw / totalComWeight) : 0,
-          directCosts:     totalDirWeight > 0 ? directTotal    * (dw / totalDirWeight) : 0,
-        } as BudgetItem;
-      }),
-    };
-  });
-}
+const CSI_DIVISION_CODES = ["01","02","03","04","05","07","08","09","10","22","23","26"];
 
 function dbItemsToDivisions(items: Record<string, unknown>[]): BudgetDivision[] {
   const divMap = new Map<string, BudgetDivision>();
@@ -1368,7 +1269,7 @@ function ItemFormModal({
                   </div>
                 </div>
                 <p className="text-[11px] text-white/35 mt-2">
-                  Computed live from invoices &amp; cost entries — add or update spend on the Payments or Cost &amp; Budget pages to change these.
+                  Stored on this line item's budget record — update via Import or Sync Modules to change these.
                 </p>
               </div>
 
@@ -1410,7 +1311,7 @@ function ItemFormModal({
               <p className="text-xs text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-xl px-3 py-2.5">
                 {isEdit
                   ? "This updates the line item immediately. It does not change the project's overall budget — use Sync to Project Budget below the table for that."
-                  : "This adds a new line item immediately. Committed/Direct costs are computed live and can't be set here."}
+                  : "This adds a new line item immediately. Committed/Direct costs default to $0 and can't be set here — update via Import or Sync Modules."}
               </p>
 
               <div className="flex gap-3 pt-2">
@@ -1532,7 +1433,7 @@ function DeleteAllModal({
             <span className="text-cyan-400 font-medium">{projectName}</span>.
           </p>
           <p className="text-xs text-red-400 bg-red-500/5 border border-red-500/20 rounded-xl px-3 py-2.5">
-            This can&apos;t be undone. The itemized breakdown will fall back to a CSI-percentage estimate until you import or add items again.
+            This can&apos;t be undone. The itemized breakdown will be empty until you import or add items again.
             It does not change the project&apos;s overall budget.
           </p>
           <div>
@@ -1646,7 +1547,7 @@ export default function FinancialsPage() {
   const [deletingAll, setDeletingAll] = useState(false);
   const [showDeleteAllHistory, setShowDeleteAllHistory] = useState(false);
   const [deletingAllHistory, setDeletingAllHistory] = useState(false);
-  const [usingFallback, setUsingFallback] = useState(false);
+  const [noRealItemsGlobal, setNoRealItemsGlobal] = useState(false);
   const [liveActuals,  setLiveActuals]  = useState<{
     project_budget: number;
     direct_costs: number;
@@ -1707,7 +1608,7 @@ export default function FinancialsPage() {
         itemsRes.status === "fulfilled" ? (itemsRes.value.data.items || []) : [];
 
       const hasRealItems = dbItems.length > 0;
-      setUsingFallback(!hasRealItems);
+      setNoRealItemsGlobal(!hasRealItems);
 
       const itemsByProject = new Map<string, Record<string, unknown>[]>();
       for (const item of dbItems) {
@@ -1726,9 +1627,7 @@ export default function FinancialsPage() {
 
         const projItems     = itemsByProject.get(String(p.id)) ?? [];
         const hasProjItems  = projItems.length > 0;
-        const divisions     = hasProjItems
-          ? dbItemsToDivisions(projItems)
-          : buildFallbackDivisions(budget || 2_450_000, committed, direct);
+        const divisions     = hasProjItems ? dbItemsToDivisions(projItems) : [];
 
         return {
           id: String(p.id), name: String(p.name || `Project ${String(p.id).slice(0, 6)}`),
@@ -1738,17 +1637,10 @@ export default function FinancialsPage() {
       });
       setProjects(projectList);
 
-      if (hasRealItems) {
-        setAllDivisions(dbItemsToDivisions(dbItems));
-      } else {
-        const aggBudget    = projectList.reduce((s, p) => s + p.total_budget, 0) || 2_450_000;
-        const aggCommitted = projectList.reduce((s, p) => s + p.committed, 0);
-        const aggDirect    = projectList.reduce((s, p) => s + p.direct, 0);
-        setAllDivisions(buildFallbackDivisions(aggBudget, aggCommitted, aggDirect));
-      }
+      setAllDivisions(hasRealItems ? dbItemsToDivisions(dbItems) : []);
 
       const divCodes = new Set<string>([
-        ...CSI_BLUEPRINT.map((d) => d.code),
+        ...CSI_DIVISION_CODES,
         ...dbItems.map((i) => String(i.div_code || "00")),
       ]);
       const initCollapsed: Record<string, boolean> = {};
@@ -1776,24 +1668,18 @@ export default function FinancialsPage() {
     triggerRefresh("financials");
   }, [fetchData, triggerRefresh]);
 
-  // ── Export: generate CSV client-side from current data ───────────────────────
+  // ── Export ────────────────────────────────────────────────────────────────────
 
-  const handleExport = useCallback(() => {
-    const divsToExport = selectedPid !== "all"
-      ? (projects.find(p => p.id === selectedPid)?.divisions ?? allDivisions)
-      : allDivisions;
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
-    if (divsToExport.length === 0 || divsToExport.every(d => d.items.length === 0)) {
-      toast.error("No budget data to export");
-      return;
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) setShowExportMenu(false);
     }
-
-    // Server-side export — pulls the full DB record for this project rather than
-    // just what's currently loaded/paginated on the client.
-    const url = `${API}/api/v1/financials/export${selectedPid !== "all" ? `?project_id=${selectedPid}` : ""}`;
-    window.open(url, "_blank");
-    toast.success("Exporting budget to CSV…");
-  }, [selectedPid, projects, allDivisions]);
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
 
   // ── Item CRUD ─────────────────────────────────────────────────────────────────
 
@@ -1877,6 +1763,87 @@ export default function FinancialsPage() {
       .filter((d) => d.items.length > 0 || d.name.toLowerCase().includes(q));
   }, [snapshotDivisions, search]);
 
+  // ── Export ────────────────────────────────────────────────────────────────────
+  // Reads from `filteredDivisions` — the same snapshot-applied, search-filtered
+  // set the table renders — so what downloads always matches what's on screen.
+
+  function getExportDivisions(): BudgetDivision[] | null {
+    if (filteredDivisions.length === 0 || filteredDivisions.every(d => d.items.length === 0)) {
+      toast.error("No budget data to export");
+      return null;
+    }
+    return filteredDivisions;
+  }
+
+  function exportFileBase() {
+    const pid = selectedPid !== "all" ? (projects.find(p => p.id === selectedPid)?.name ?? selectedPid) : "all_projects";
+    return `financial_budget_${pid.replace(/\s+/g, "_")}_${new Date().toISOString().split("T")[0]}`;
+  }
+
+  // Built client-side and downloaded synchronously within the click handler (no
+  // await before the anchor click) — some browsers/extensions block a programmatic
+  // download that fires after an async gap because it no longer looks like it came
+  // straight from the user gesture.
+  const handleExportCSV = useCallback(() => {
+    const divs = getExportDivisions();
+    if (!divs) return;
+    setShowExportMenu(false);
+
+    const escape = (v: string | number) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ["Code", "Description", "Div Code", "Division", "Original Budget", "Budget Mods", "Approved COs", "Revised Budget", "Pending COs", "Projected Budget", "Committed Costs", "Direct Costs"];
+    const lines = [header.join(",")];
+    for (const d of divs) {
+      for (const item of d.items) {
+        lines.push([
+          item.code, item.description, d.code, d.name,
+          item.originalBudget, item.budgetMods, item.approvedCOs, item.revisedBudget,
+          item.pendingChanges, item.projectedBudget, item.committedCosts, item.directCosts,
+        ].map(escape).join(","));
+      }
+    }
+
+    const blobUrl = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = `${exportFileBase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    toast.success("Budget exported to CSV");
+  }, [filteredDivisions, selectedPid, projects]);
+
+  const handleExportExcel = useCallback(() => {
+    const divs = getExportDivisions();
+    if (!divs) return;
+    setShowExportMenu(false);
+    const rows = divs.flatMap(d => d.items.map(item => ({
+      "Div Code": d.code, "Division": d.name,
+      "Code": item.code, "Description": item.description,
+      "Original Budget": item.originalBudget, "Budget Mods": item.budgetMods,
+      "Approved COs": item.approvedCOs, "Revised Budget": item.revisedBudget,
+      "Pending COs": item.pendingChanges, "Projected Budget": item.projectedBudget,
+      "Committed Costs": item.committedCosts, "Direct Costs": item.directCosts,
+    })));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Budget");
+    XLSX.writeFile(wb, `${exportFileBase()}.xlsx`);
+    toast.success("Budget exported to Excel");
+  }, [filteredDivisions, selectedPid, projects]);
+
+  const handleExportPDF = useCallback(() => {
+    const divs = getExportDivisions();
+    if (!divs) return;
+    setShowExportMenu(false);
+    const projectName = selectedPid !== "all" ? (projects.find(p => p.id === selectedPid)?.name ?? "All Projects") : "All Projects";
+    exportBudgetReport(divs, projectName);
+    toast.success("Budget exported to PDF");
+  }, [filteredDivisions, selectedPid, projects]);
+
   const flatItems   = useMemo(() => filteredDivisions.flatMap((d) => d.items).sort((a, b) => a.code.localeCompare(b.code)), [filteredDivisions]);
   const grand       = useMemo(() => sumDivisions(filteredDivisions), [filteredDivisions]);
   const activeCols  = useMemo(() => COL_DEFS.filter((c) => VIEW_KEYS[view].includes(c.key)), [view]);
@@ -1898,12 +1865,16 @@ export default function FinancialsPage() {
   const selectedProject = selectedPid !== "all" ? projects.find((p) => p.id === selectedPid) : null;
   const projectCount    = selectedPid === "all" ? projects.length : 1;
 
-  // Only real (DB-backed) items would actually be deleted by "Delete All" —
-  // CSI-fallback estimate rows have no `id` and don't exist in the database.
+  // Only real (DB-backed) items would actually be deleted by "Delete All".
   const realItemsForSelected = useMemo(
     () => (selectedProject ? selectedProject.divisions.flatMap((d) => d.items).filter((i) => i.id) : []),
     [selectedProject]
   );
+
+  // Whether the current selection (one project, or "All Projects") has no real
+  // budget line items in the database. Scoped to the selection so switching to a
+  // project without data doesn't get masked by other projects that do have data.
+  const noDataForSelection = selectedProject ? !selectedProject.hasRealItems : noRealItemsGlobal;
 
   // The history list isn't fetched pre-filtered by project, so scope it to whatever
   // "Delete All" would actually delete — otherwise the visible list and the count
@@ -2081,15 +2052,14 @@ export default function FinancialsPage() {
     </tr>
   );
 
-  // Estimated (CSI-fallback) rows have no `id` — they aren't real database rows,
-  // they're a proportional split of the project's totals computed on the fly.
-  // Edit/Delete can't act on them (there's nothing to update or delete), so show
-  // a plain badge instead of buttons that would silently no-op or, worse, look
-  // like an edit while actually creating an unrelated new real item.
+  // Rows without an `id` aren't real database rows. Edit/Delete can't act on them
+  // (there's nothing to update or delete), so show a plain badge instead of buttons
+  // that would silently no-op or, worse, look like an edit while actually creating
+  // an unrelated new real item.
   const ItemActions = ({ item }: { item: BudgetItem }) => (
     <td className="py-2.5 px-3 text-center">
       {!item.id ? (
-        <span title="Estimated from the project total — add a real line item to edit or delete it" className="text-[10px] text-white/25 cursor-help">est.</span>
+        <span title="Not a saved line item" className="text-[10px] text-white/25 cursor-help">est.</span>
       ) : (
         <div className="flex items-center justify-center gap-1">
           <button
@@ -2308,18 +2278,51 @@ export default function FinancialsPage() {
             <Button style={gradientButtonStyle} className="gradient-blue text-white border-0" size="sm" onClick={() => setShowImport(true)}>
               <Download className="w-4 h-4 mr-2" />Import
             </Button>
-            <Button style={gradientButtonStyle} className="gradient-blue text-white border-0" onClick={handleExport}>
-              <Upload className="w-4 h-4 mr-2" />Export CSV
-            </Button>
+            <div ref={exportMenuRef} className="relative">
+              <Button
+                style={gradientButtonStyle}
+                className="gradient-blue text-white border-0"
+                size="sm"
+                onClick={() => setShowExportMenu((v) => !v)}
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Export
+                <ChevronDown className="w-3.5 h-3.5 ml-1.5" />
+              </Button>
+              <AnimatePresence>
+                {showExportMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 top-11 w-44 rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#0d1220] shadow-2xl z-50 overflow-hidden"
+                  >
+                    <button onClick={handleExportCSV}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-white/80 hover:bg-white/5 hover:text-white transition-colors text-left">
+                      <FileText className="w-3.5 h-3.5 text-emerald-400" />CSV
+                    </button>
+                    <button onClick={handleExportExcel}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-white/80 hover:bg-white/5 hover:text-white transition-colors text-left border-t border-[rgba(255,255,255,0.06)]">
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-blue-400" />Excel
+                    </button>
+                    <button onClick={handleExportPDF}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-white/80 hover:bg-white/5 hover:text-white transition-colors text-left border-t border-[rgba(255,255,255,0.06)]">
+                      <FileText className="w-3.5 h-3.5 text-red-400" />PDF
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </motion.div>
 
-        {/* Fallback / no-data notice */}
-        {usingFallback && !loading && (
+        {/* No-data notice */}
+        {noDataForSelection && !loading && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-400 flex-wrap">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-            <span>No imported budget data — showing CSI-proportional estimates based on project budgets.</span>
+            <span>No budget line items yet{selectedProject ? ` for ${selectedProject.name}` : ""}.</span>
             <button onClick={() => setShowImport(true)} className="underline hover:text-amber-300">Import a file</button>
             <span className="text-white/40">·</span>
             <button onClick={() => setShowSync(true)} className="underline hover:text-amber-300">or sync from Cost Codes</button>
@@ -2327,7 +2330,7 @@ export default function FinancialsPage() {
         )}
 
         {/* Cost codes available hint */}
-        {!loading && liveActuals && liveActuals.cost_codes_count > 0 && usingFallback && (
+        {!loading && liveActuals && liveActuals.cost_codes_count > 0 && noDataForSelection && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             className="flex items-center gap-3 px-4 py-3 rounded-xl bg-teal-500/5 border border-teal-500/20 text-xs text-teal-400 flex-wrap">
             <Sparkles className="w-3.5 h-3.5 shrink-0" />
@@ -2445,7 +2448,7 @@ export default function FinancialsPage() {
                 <button
                   onClick={() => {
                     if (selectedPid === "all") { toast.error("Select a specific project first"); return; }
-                    if (realItemsForSelected.length === 0) { toast.error("No real line items to delete for this project — it's showing the CSI estimate"); return; }
+                    if (realItemsForSelected.length === 0) { toast.error("No line items to delete for this project"); return; }
                     setShowDeleteAll(true);
                   }}
                   title="Delete all line items for this project"
@@ -2473,7 +2476,7 @@ export default function FinancialsPage() {
 
               {loading ? (
                 <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-blue-400" /></div>
-              ) : usingFallback ? (
+              ) : noDataForSelection ? (
                 <div className="flex flex-col items-center justify-center h-64 gap-4 text-white/40 px-6">
                   <PlusCircle className="w-10 h-10 opacity-20" />
                   <p className="text-sm font-medium text-white/60">No budget line items yet</p>
@@ -2500,7 +2503,7 @@ export default function FinancialsPage() {
                     <tbody>
                       {group === "division"  && <DivisionBody divs={filteredDivisions} />}
                       {group === "cost-code" && <CostCodeBody />}
-                      {group === "project"   && selectedPid === "all" ? <ProjectBody /> : <DivisionBody divs={filteredDivisions} />}
+                      {group === "project"   && (selectedPid === "all" ? <ProjectBody /> : <DivisionBody divs={filteredDivisions} />)}
                       <GrandTotalRow totals={grand} />
                     </tbody>
                   </table>
@@ -2578,7 +2581,7 @@ export default function FinancialsPage() {
             snapshotMode:    snapshot,
             groupMode:       group,
             selectedProject: selectedProject?.name ?? "All Projects",
-            dataSource:      usingFallback ? "CSI proportional estimate" : "imported budget data",
+            dataSource:      noDataForSelection ? "no data" : "imported budget data",
           }}
         />
       </div>

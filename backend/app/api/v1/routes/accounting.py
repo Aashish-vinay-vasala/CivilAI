@@ -8,7 +8,7 @@ Endpoints:
   GET    /records/{id}                     Full detail for one record
   DELETE /records/{id}                     Remove a saved record
   GET    /summary/{project_id}             Aggregated financial picture across all modules
-  GET    /reconcile/{project_id}           Cross-reference invoices vs budget vs cost entries
+  GET    /reconcile/{project_id}           Cross-reference invoices vs contracts vs budget
   GET    /glossary                         Full accounting & construction finance glossary
   POST   /analyze-budget                   Compare extracted totals against project budget
   GET    /dashboard                        Financial health KPIs
@@ -274,8 +274,9 @@ def reconcile(
     _user=Depends(protect_route(*_FINANCE_ROLES)),
 ):
     """
-    Cross-reference payment invoices against financial budget items and cost entries.
-    Identifies: unmatched invoices, duplicate amounts, and budget line overruns.
+    Cross-reference payment invoices against contracts and financial budget items.
+    Identifies: invoices with no contract on file, duplicate amounts, and budget
+    line overruns.
     """
     try:
         result = reconcile_project_invoices(project_id)
@@ -330,22 +331,32 @@ def analyze_against_budget(
     try:
         from app.services.db_service import supabase
 
-        res   = supabase.table("financial_budget_items").select(
-            "original_budget,revised_budget,committed_costs,direct_costs,projected_budget"
-        ).eq("project_id", payload.project_id).execute()
-        items = res.data or []
+        # Canonical project budget — same source as /dashboard, /live-actuals, and
+        # db_service.get_projects(). financial_budget_items is an itemized,
+        # independently-imported breakdown that can drift from this figure, so it's
+        # only used below for the revised-budget comparison, never the headline total.
+        proj_res = supabase.table("projects").select("budget").eq("id", payload.project_id).single().execute()
+        total_original = float((proj_res.data or {}).get("budget") or 0)
 
-        if not items:
+        items = supabase.table("financial_budget_items").select(
+            "revised_budget"
+        ).eq("project_id", payload.project_id).execute().data or []
+        total_revised = sum(float(i.get("revised_budget") or 0) for i in items) or total_original
+
+        # Committed / direct spend — canonical sources matching /dashboard exactly:
+        # committed = obligated, unpaid invoices; direct = cost_entries.
+        invs = supabase.table("invoices").select("amount,status").eq("project_id", payload.project_id).execute().data or []
+        total_committed = sum(float(i.get("amount") or 0) for i in invs if i.get("status") in ("pending", "overdue"))
+
+        costs = supabase.table("cost_entries").select("amount").eq("project_id", payload.project_id).execute().data or []
+        total_direct = sum(float(c.get("amount") or 0) for c in costs)
+
+        if total_original == 0:
             return {
                 "status":  "success",
-                "message": "No budget items found for this project",
+                "message": "No budget set for this project",
                 "variance": None,
             }
-
-        total_original  = sum(float(i.get("original_budget")  or 0) for i in items)
-        total_revised   = sum(float(i.get("revised_budget")   or 0) for i in items)
-        total_committed = sum(float(i.get("committed_costs")  or 0) for i in items)
-        total_direct    = sum(float(i.get("direct_costs")     or 0) for i in items)
 
         extracted = payload.extracted_total
         risk      = "low"

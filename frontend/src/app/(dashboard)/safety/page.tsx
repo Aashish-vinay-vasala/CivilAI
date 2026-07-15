@@ -5,17 +5,18 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield, AlertTriangle, CheckCircle, Upload, Loader2, Brain,
   Clock, XCircle, Wrench, FileWarning, Plus, Trash2, Pencil,
-  Search, X, FileText, ChevronDown,
+  Search, X, FileText, ChevronDown, TrendingUp, TrendingDown,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, RadarChart, Radar, PolarGrid, PolarAngleAxis,
+  LineChart, Line,
 } from "recharts";
-import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
 import ModuleChat from "@/components/shared/ModuleChat";
+import CountUp from "@/components/shared/CountUp";
 import { MarkdownText } from "@/lib/renderMarkdown";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -59,18 +60,83 @@ interface Incident {
   project_id?: string;
 }
 
+const _NEAR_MISS_TYPES = new Set(["near miss", "near-miss", "near_miss", "nearmiss"]);
+const isNearMissIncident = (inc: Incident) => {
+  const t = (inc.type || "").toLowerCase().trim();
+  const d = (inc.description || "").toLowerCase();
+  return _NEAR_MISS_TYPES.has(t) || d.includes("near miss") || d.includes("near-miss");
+};
+
+// Builds the AI Safety Risk Prediction payload from the *real* latest incident
+// and live stats, instead of a frozen literal — so the prediction actually
+// shifts when incidents are logged. The model (trained on synthetic data —
+// see chat) only has real ground truth for incident_type/zone/near_miss/month
+// from the incident itself; ppe_worn/training_completed have no per-incident
+// field in the schema, so they fall back to a threshold on the live aggregate
+// rates rather than a fabricated per-incident fact. workers_involved isn't
+// tracked per incident either, so it keeps the model's own baseline default.
+function deriveMlInput(incidents: Incident[], stats: any) {
+  if (incidents.length === 0) return DEFAULT_ML_INPUT;
+  const latest = [...incidents].sort((a, b) =>
+    (b.date || b.created_at || "").localeCompare(a.date || a.created_at || "")
+  )[0];
+  const dateStr = latest.date || latest.created_at?.slice(0, 10) || "";
+  const month = /^\d{4}-\d{2}/.test(dateStr) ? Number(dateStr.slice(5, 7)) : new Date().getMonth() + 1;
+  return {
+    incident_type: latest.type || DEFAULT_ML_INPUT.incident_type,
+    zone: latest.zone || latest.location || DEFAULT_ML_INPUT.zone,
+    workers_involved: DEFAULT_ML_INPUT.workers_involved,
+    ppe_worn: (stats?.ppe_compliance_rate ?? 100) >= 70 ? 1 : 0,
+    training_completed: (stats?.safety_score ?? 100) >= 70 ? 1 : 0,
+    near_miss: isNearMissIncident(latest) ? 1 : 0,
+    month,
+  };
+}
+
+// ── Theme helpers ────────────────────────────────────────────────────────────
+// Mirrors the accent-color recipe used across the main dashboard: a soft tint
+// background, a slightly stronger tint border, and the full color for text/icons.
+
+const ACCENT: Record<string, { bg: string; border: string; text: string; shadow: string }> = {
+  cyan:   { bg: "rgba(0,212,255,0.07)",  border: "rgba(0,212,255,0.18)",  text: "#00D4FF", shadow: "rgba(0,212,255,0.15)" },
+  green:  { bg: "rgba(16,185,129,0.07)", border: "rgba(16,185,129,0.18)", text: "#10B981", shadow: "rgba(16,185,129,0.15)" },
+  amber:  { bg: "rgba(245,158,11,0.07)", border: "rgba(245,158,11,0.18)", text: "#F59E0B", shadow: "rgba(245,158,11,0.15)" },
+  red:    { bg: "rgba(239,68,68,0.07)",  border: "rgba(239,68,68,0.18)",  text: "#EF4444", shadow: "rgba(239,68,68,0.15)" },
+};
+
+const kpiAccent = (status: string) => ACCENT[{ good: "green", warn: "amber", bad: "red" }[status] ?? "cyan"];
+
+const RGB: Record<string, string> = {
+  "#EF4444": "239,68,68", "#F59E0B": "245,158,11", "#10B981": "16,185,129", "#00D4FF": "0,212,255",
+};
+const pillStyle = (hex: string) => ({
+  background: `rgba(${RGB[hex]},0.1)`,
+  border: `1px solid rgba(${RGB[hex]},0.2)`,
+  color: hex,
+});
+
+const inputClass = [
+  "w-full px-3 py-2 rounded-xl text-sm text-white placeholder:text-white/30",
+  "outline-none transition-all",
+  "border focus:border-cyan-500/50 focus:shadow-[0_0_0_2px_rgba(0,212,255,0.08)]",
+].join(" ");
+const inputStyle = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" };
+const selectClass = inputClass + " cursor-pointer";
+
+const primaryBtn =
+  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
+const primaryBtnStyle = {
+  background: "linear-gradient(135deg, rgba(0,212,255,0.25), rgba(0,100,160,0.2))",
+  border: "1px solid rgba(0,212,255,0.3)",
+};
+const ghostBtn =
+  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm text-white/50 hover:text-white/80 transition-colors";
+const ghostBtnStyle = { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" };
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-const SEV_STYLE: Record<string, string> = {
-  high:   "bg-red-500/10 text-red-400 border border-red-500/20",
-  medium: "bg-orange-500/10 text-orange-400 border border-orange-500/20",
-  low:    "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
-};
-const STATUS_STYLE: Record<string, string> = {
-  open:         "bg-red-500/10 text-red-400 border border-red-500/20",
-  investigating:"bg-orange-500/10 text-orange-400 border border-orange-500/20",
-  closed:       "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
-};
+const SEV_COLOR: Record<string, string>    = { high: "#EF4444", medium: "#F59E0B", low: "#10B981" };
+const STATUS_COLOR: Record<string, string> = { open: "#EF4444", investigating: "#F59E0B", closed: "#10B981" };
 const STATUS_NEXT: Record<string, "open"|"investigating"|"closed"> = {
   open: "investigating", investigating: "closed", closed: "open",
 };
@@ -92,8 +158,27 @@ const normStatus = (v: string): "open"|"investigating"|"closed" => {
   return "open";
 };
 
-const inputCls = "w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500";
-const selectCls = inputCls + " cursor-pointer";
+const tooltipStyle = {
+  backgroundColor: "rgba(4,11,25,0.95)",
+  border: "1px solid rgba(0,212,255,0.15)",
+  borderRadius: "12px",
+  color: "#e2e8f0",
+  fontSize: "12px",
+  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+};
+
+// Tiny trend line for the KPI cards — same shape as the one on the main dashboard.
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  if (data.length < 2) return null;
+  const points = data.map((v, i) => ({ i, v }));
+  return (
+    <ResponsiveContainer width="100%" height={28}>
+      <LineChart data={points} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+        <Line type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
@@ -145,24 +230,34 @@ export default function SafetyPage() {
 
   useEffect(() => { fetchAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Refresh when equipment/compliance change elsewhere — the inter-module
-  // alerts below (equipment at risk, permit violations) depend on them.
-  useEffect(() => { fetchAll(); }, [counters.equipment, counters.compliance]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Refresh when incidents/equipment/compliance change elsewhere — the ML
+  // prediction (derived from the latest incident) and the inter-module alerts
+  // (equipment at risk, permit violations) all depend on them.
+  useEffect(() => { fetchAll(); }, [counters.safety, counters.equipment, counters.compliance]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fetchAll = async (input = mlInput) => {
+  // `overrideInput` is only passed by the "Configure inputs" form's Run
+  // Prediction button — every other caller (mount, refresh, CRUD actions)
+  // leaves it undefined so the ML input is re-derived from the incident that
+  // was just fetched, keeping the prediction in sync with real data.
+  const fetchAll = async (overrideInput?: typeof DEFAULT_ML_INPUT) => {
     setStatsLoading(true);
+    let latestStats: any = null;
+    let latestIncidents: Incident[] = [];
     try {
       const [statsRes, incRes] = await Promise.allSettled([
         axios.get(`${API}/api/v1/safety/stats`),
         axios.get(`${API}/api/v1/safety/incidents`),
       ]);
-      if (statsRes.status === "fulfilled") setSafetyStats(statsRes.value.data);
-      if (incRes.status   === "fulfilled") setIncidents(incRes.value.data.incidents ?? []);
+      if (statsRes.status === "fulfilled") { latestStats = statsRes.value.data; setSafetyStats(latestStats); }
+      if (incRes.status   === "fulfilled") { latestIncidents = incRes.value.data.incidents ?? []; setIncidents(latestIncidents); }
     } catch (e) {
       console.error(e);
     } finally {
       setStatsLoading(false);
     }
+
+    const input = overrideInput ?? deriveMlInput(latestIncidents, latestStats);
+    setMlInput(input);
     setMlLoading(true);
     try {
       const mlRes = await axios.post(`${API}/api/v1/ml/safety-risk`, input);
@@ -363,164 +458,207 @@ export default function SafetyPage() {
 
   const s = safetyStats;
 
+  // Real month-over-month series (from safetyStats.monthly_incidents) feed the
+  // sparkline on each KPI card — same pattern as the main dashboard's KPIs.
+  const monthlySeries: any[] = safetyStats?.monthly_incidents ?? [];
+  const monthlyTrend = (key: string) => monthlySeries.map((m) => Number(m[key]) || 0);
+  const nearMissRateTrend = monthlySeries.map((m) =>
+    m.incidents > 0 ? Math.round((m.near_miss / m.incidents) * 1000) / 10 : 0
+  );
+
   const kpis = [
     {
-      label: "Safety Score", icon: Shield,
-      value: s ? `${s.safety_score}/100` : "—",
+      id: "score", label: "Safety Score", icon: Shield,
+      numValue: s?.safety_score ?? 0, suffix: "/100", decimals: 0,
       sub:   s ? `${s.high_risk_count} high-risk` : "",
       status: (s?.safety_score ?? 0) >= 80 ? "good" : (s?.safety_score ?? 0) >= 60 ? "warn" : "bad",
+      trendData: monthlyTrend("safety_score"),
     },
     {
-      label: "Total Incidents", icon: AlertTriangle,
-      value: s ? String(s.total_incidents) : "—",
+      id: "incidents", label: "Total Incidents", icon: AlertTriangle,
+      numValue: s?.total_incidents ?? 0, suffix: "", decimals: 0,
       sub:   s ? `${s.near_miss_count} near-miss` : "",
       status: (s?.total_incidents ?? 0) === 0 ? "good" : (s?.total_incidents ?? 0) < 5 ? "warn" : "bad",
+      trendData: monthlyTrend("incidents"),
     },
     {
-      label: "Days Without Incident", icon: Clock,
-      value: s ? String(s.days_without_incident) : "—",
+      id: "days", label: "Days Without Incident", icon: Clock,
+      numValue: s?.days_without_incident ?? 0, suffix: "", decimals: 0,
       sub:   "since last event",
       status: (s?.days_without_incident ?? 0) >= 30 ? "good" : (s?.days_without_incident ?? 0) >= 7 ? "warn" : "bad",
+      trendData: [] as number[], // running day-count has no month-over-month series
     },
     {
-      label: "Open Violations", icon: XCircle,
-      value: s ? String(s.open_violations) : "—",
+      id: "violations", label: "Open Violations", icon: XCircle,
+      numValue: s?.open_violations ?? 0, suffix: "", decimals: 0,
       sub:   s ? `${s.permit_violations} permit issues` : "",
       status: (s?.open_violations ?? 0) === 0 ? "good" : "bad",
+      trendData: monthlyTrend("open_violations"),
     },
     {
-      label: "Near-Miss Rate", icon: FileWarning,
-      value: s ? `${s.near_miss_rate}%` : "—",
+      id: "nearmiss", label: "Near-Miss Rate", icon: FileWarning,
+      numValue: s?.near_miss_rate ?? 0, suffix: "%", decimals: 1,
       sub:   "of total incidents",
       status: (s?.near_miss_rate ?? 0) < 15 ? "good" : "warn",
+      trendData: nearMissRateTrend,
     },
     {
-      label: "PPE Compliance", icon: CheckCircle,
-      value: s ? `${s.ppe_compliance_rate}%` : "—",
+      id: "ppe", label: "PPE Compliance", icon: CheckCircle,
+      numValue: s?.ppe_compliance_rate ?? 0, suffix: "%", decimals: 1,
       sub:   s ? `${s.equipment_at_risk} equip. at risk` : "",
       status: (s?.ppe_compliance_rate ?? 0) >= 90 ? "good" : "warn",
+      trendData: monthlyTrend("ppe_compliance"),
     },
   ];
-
-  const kpiColor = (status: string) => ({
-    good: "border-emerald-500/20 bg-emerald-500/5",
-    warn: "border-orange-500/20 bg-orange-500/5",
-    bad:  "border-red-500/20 bg-red-500/5",
-  }[status] ?? "border-border bg-card");
-
-  const kpiIcon = (status: string) => ({
-    good: "text-emerald-400", warn: "text-orange-400", bad: "text-red-400",
-  }[status] ?? "text-muted-foreground");
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between">
+        className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-4xl font-bold text-foreground">Safety & Risk</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-4xl font-bold text-white tracking-tight">Safety & Risk</h1>
+          <p className="text-white/35 text-[13px] mt-1">
             AI-powered safety monitoring & incident management
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => { setAddOpen(true); setEditId(null); }}>
-            <Plus className="w-4 h-4 mr-2 text-emerald-400" />
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => { setAddOpen(true); setEditId(null); }}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-white/80 transition-all hover:scale-105"
+            style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}>
+            <Plus className="w-4 h-4 text-emerald-400" />
             Log Incident
-          </Button>
+          </button>
           <input ref={fileInputRef} type="file" className="hidden"
             accept=".pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg"
             onChange={handleFileUpload} />
-          <Button variant="outline" disabled={uploadLoading}
-            onClick={() => fileInputRef.current?.click()}>
-            {uploadLoading
-              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              : <Upload className="w-4 h-4 mr-2" />}
+          <button
+            disabled={uploadLoading}
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-white/80 transition-all hover:scale-105 disabled:opacity-50"
+            style={ghostBtnStyle}>
+            {uploadLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
             Analyze Audit
-          </Button>
+          </button>
           <input ref={extractFileRef} type="file" className="hidden"
             accept=".pdf,.xlsx,.xls,.docx,.doc,.csv"
             onChange={handleExtractUpload} />
-          <Button className="gradient-blue text-white border-0" disabled={extractLoading}
-            onClick={() => extractFileRef.current?.click()}>
-            {extractLoading
-              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              : <Upload className="w-4 h-4 mr-2" />}
+          <button
+            disabled={extractLoading}
+            onClick={() => extractFileRef.current?.click()}
+            className={primaryBtn}
+            style={{ ...primaryBtnStyle, boxShadow: "0 0 20px rgba(0,212,255,0.12)" }}>
+            {extractLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
             Upload
-          </Button>
+          </button>
         </div>
       </motion.div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {kpis.map((kpi, i) => (
-          <motion.div key={i}
-            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.06 }} whileHover={{ y: -2 }}
-            className={`rounded-2xl border p-5 ${kpiColor(kpi.status)}`}>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-muted-foreground">{kpi.label}</p>
-              <kpi.icon className={`w-4 h-4 ${kpiIcon(kpi.status)}`} />
-            </div>
-            <p className="text-2xl font-bold text-foreground">{kpi.value}</p>
-            {kpi.sub && <p className="text-xs text-muted-foreground mt-1">{kpi.sub}</p>}
-          </motion.div>
-        ))}
+        {kpis.map((kpi, i) => {
+          const a = kpiAccent(kpi.status);
+          return (
+            <motion.div key={kpi.id}
+              initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.06 }} whileHover={{ y: -4, scale: 1.02 }}
+              className="glass-card p-5 group relative overflow-hidden h-full flex flex-col"
+              style={{ borderColor: a.border }}>
+              {/* Subtle inner gradient on hover — matches the dashboard KPI cards */}
+              <div className="absolute inset-0 rounded-[0.875rem] opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ background: `radial-gradient(ellipse at top left, ${a.bg}, transparent 70%)` }} />
+
+              <div className="relative flex items-start justify-between mb-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                  style={{ background: a.bg, border: `1px solid ${a.border}`, boxShadow: `0 0 16px ${a.shadow}` }}>
+                  <kpi.icon className="w-4.5 h-4.5" style={{ color: a.text }} />
+                </div>
+                {kpi.sub && (
+                  <div className="flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-full text-right"
+                    style={{ background: a.bg, color: a.text, border: `1px solid ${a.border}` }}>
+                    {kpi.status === "bad" ? <TrendingDown className="w-3 h-3 shrink-0" /> : <TrendingUp className="w-3 h-3 shrink-0" />}
+                    <span className="truncate max-w-20">{kpi.sub}</span>
+                  </div>
+                )}
+              </div>
+
+              {s ? (
+                <CountUp
+                  to={kpi.numValue} suffix={kpi.suffix} decimals={kpi.decimals}
+                  className="text-[26px] font-bold block"
+                  style={{ color: a.text, textShadow: `0 0 20px ${a.shadow}` } as React.CSSProperties}
+                />
+              ) : (
+                <span className="text-[26px] font-bold text-white/20 block">—</span>
+              )}
+              <p className="text-[11px] text-white/40 mt-1">{kpi.label}</p>
+
+              <div className="relative -mx-1 mt-2 opacity-70 flex-1 flex items-end min-h-[28px]">
+                {kpi.trendData.length >= 2 && <Sparkline data={kpi.trendData} color={a.text} />}
+              </div>
+            </motion.div>
+          );
+        })}
       </div>
 
       {/* ML Prediction */}
       {mlLoading ? (
-        <div className="rounded-2xl border border-border p-5 flex items-center gap-3">
-          <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-          <p className="text-sm text-muted-foreground">Loading AI safety prediction...</p>
+        <div className="glass-card p-5 flex items-center gap-3">
+          <Loader2 className="w-5 h-5 animate-spin text-cyan-400" />
+          <p className="text-sm text-white/40">Loading AI safety prediction...</p>
         </div>
-      ) : mlSafety && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          className={`rounded-2xl border p-5 ${
-            mlSafety.risk_level === "High"   ? "border-red-500/30 bg-red-500/5" :
-            mlSafety.risk_level === "Medium" ? "border-orange-500/30 bg-orange-500/5" :
-                                               "border-emerald-500/30 bg-emerald-500/5"
-          }`}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
-                <Brain className="w-5 h-5 text-blue-400" />
+      ) : mlSafety && (() => {
+        const riskAccent = mlSafety.risk_level === "High" ? ACCENT.red : mlSafety.risk_level === "Medium" ? ACCENT.amber : ACCENT.green;
+        return (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+            className="glass-card p-5" style={{ borderColor: riskAccent.border, background: riskAccent.bg }}>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                  style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)" }}>
+                  <Brain className="w-5 h-5 text-cyan-400" />
+                </div>
+                <div>
+                  <p className="text-[11px] text-white/35 mb-0.5">
+                    AI Safety Risk Prediction
+                    <button onClick={() => setMlFormOpen(v => !v)} className="ml-2 text-cyan-400 hover:underline text-[11px]">
+                      (Configure inputs)
+                    </button>
+                  </p>
+                  <p className="text-xl font-bold text-white">
+                    {mlSafety.probability}% severe incident probability
+                  </p>
+                  <p className="text-[13px] text-white/40 mt-0.5">
+                    {mlSafety.severe_risk ? "Immediate action required" : "Risk under control"}
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-xs text-muted-foreground mb-0.5">
-                  AI Safety Risk Prediction
-                  <button onClick={() => setMlFormOpen(v => !v)}
-                    className="ml-2 text-blue-400 hover:underline text-xs">
-                    (Configure inputs)
-                  </button>
-                </p>
-                <p className="text-xl font-bold text-foreground">
-                  {mlSafety.probability}% severe incident probability
-                </p>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  {mlSafety.severe_risk ? "Immediate action required" : "Risk under control"}
-                </p>
-              </div>
+              <span className="text-[12px] px-3 py-1.5 rounded-full font-medium"
+                style={{ background: riskAccent.bg, border: `1px solid ${riskAccent.border}`, color: riskAccent.text }}>
+                {mlSafety.risk_level} Risk
+              </span>
             </div>
-            <span className={`text-sm px-3 py-1.5 rounded-full font-medium ${
-              mlSafety.risk_level === "High"   ? "bg-red-500/10 text-red-400" :
-              mlSafety.risk_level === "Medium" ? "bg-orange-500/10 text-orange-400" :
-                                                 "bg-emerald-500/10 text-emerald-400"
-            }`}>
-              {mlSafety.risk_level} Risk
-            </span>
-          </div>
-        </motion.div>
-      )}
+            {mlSafety.warnings?.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-white/10 flex items-start gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" />
+                <p className="text-[11px] text-amber-300/80 leading-relaxed">
+                  {mlSafety.warnings.join(" ")}
+                </p>
+              </div>
+            )}
+          </motion.div>
+        );
+      })()}
 
       {/* ML config form */}
       <AnimatePresence>
         {mlFormOpen && (
           <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-            className="bg-card border border-blue-500/30 rounded-2xl p-6">
-            <h3 className="font-semibold text-foreground mb-4">Configure AI Risk Prediction</h3>
+            className="glass-card p-6" style={{ borderColor: "rgba(0,212,255,0.22)" }}>
+            <h3 className="font-semibold text-white text-[15px] mb-4">Configure AI Risk Prediction</h3>
             <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
               {[
                 { label: "Incident Type",            key: "incident_type",      type: "text"   },
@@ -531,20 +669,20 @@ export default function SafetyPage() {
                 { label: "Near-Miss Count",          key: "near_miss",          type: "number" },
               ].map(f => (
                 <div key={f.key}>
-                  <label className="text-xs text-muted-foreground mb-1 block">{f.label}</label>
+                  <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">{f.label}</label>
                   <input type={f.type} value={(mlInput as any)[f.key]}
                     onChange={e => setMlInput(prev => ({
                       ...prev,
                       [f.key]: f.type === "number" ? Number(e.target.value) : e.target.value,
                     }))}
-                    className={inputCls} />
+                    className={inputClass} style={inputStyle} />
                 </div>
               ))}
             </div>
-            <Button onClick={() => { fetchAll(mlInput); setMlFormOpen(false); }}
-              className="gradient-blue text-white border-0">
-              <Brain className="w-4 h-4 mr-2" />Run Prediction
-            </Button>
+            <button onClick={() => { fetchAll(mlInput); setMlFormOpen(false); }}
+              className={primaryBtn} style={primaryBtnStyle}>
+              <Brain className="w-4 h-4" />Run Prediction
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
@@ -553,81 +691,81 @@ export default function SafetyPage() {
       <AnimatePresence>
         {addOpen && (
           <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-            className="bg-card border border-emerald-500/30 rounded-2xl p-6">
+            className="glass-card p-6" style={{ borderColor: "rgba(16,185,129,0.25)" }}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-foreground">Log New Incident</h3>
-              <button onClick={() => setAddOpen(false)} className="text-muted-foreground hover:text-foreground">
+              <h3 className="font-semibold text-white text-[15px]">Log New Incident</h3>
+              <button onClick={() => setAddOpen(false)} className="text-white/25 hover:text-white/60 transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
             <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
               {/* Type */}
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Incident Type *</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Incident Type *</label>
                 <select value={newForm.type} onChange={e => setNewForm(p => ({ ...p, type: e.target.value }))}
-                  className={selectCls}>
+                  className={selectClass} style={inputStyle}>
                   <option value="">Select type…</option>
                   {INCIDENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
               {/* Severity */}
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Severity</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Severity</label>
                 <select value={newForm.severity} onChange={e => setNewForm(p => ({ ...p, severity: e.target.value as any }))}
-                  className={selectCls}>
-                  {SEVERITIES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+                  className={selectClass} style={inputStyle}>
+                  {SEVERITIES.map(sv => <option key={sv} value={sv}>{sv.charAt(0).toUpperCase()+sv.slice(1)}</option>)}
                 </select>
               </div>
               {/* Status */}
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Status</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Status</label>
                 <select value={newForm.status} onChange={e => setNewForm(p => ({ ...p, status: e.target.value as any }))}
-                  className={selectCls}>
-                  {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+                  className={selectClass} style={inputStyle}>
+                  {STATUSES.map(st => <option key={st} value={st}>{st.charAt(0).toUpperCase()+st.slice(1)}</option>)}
                 </select>
               </div>
               {/* Zone */}
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Zone / Area</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Zone / Area</label>
                 <input type="text" placeholder="e.g. Zone A, Level 3"
                   value={newForm.zone} onChange={e => setNewForm(p => ({ ...p, zone: e.target.value }))}
-                  className={inputCls} />
+                  className={inputClass} style={inputStyle} />
               </div>
               {/* Location */}
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Location Detail</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Location Detail</label>
                 <input type="text" placeholder="e.g. North stairwell"
                   value={newForm.location} onChange={e => setNewForm(p => ({ ...p, location: e.target.value }))}
-                  className={inputCls} />
+                  className={inputClass} style={inputStyle} />
               </div>
               {/* Date */}
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Date</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Date</label>
                 <input type="date" value={newForm.date}
                   onChange={e => setNewForm(p => ({ ...p, date: e.target.value }))}
-                  className={inputCls} />
+                  className={inputClass} style={inputStyle} />
               </div>
               {/* Injured */}
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Injured (if any)</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Injured (if any)</label>
                 <input type="text" placeholder="None"
                   value={newForm.injured} onChange={e => setNewForm(p => ({ ...p, injured: e.target.value }))}
-                  className={inputCls} />
+                  className={inputClass} style={inputStyle} />
               </div>
               {/* Description */}
               <div className="col-span-2">
-                <label className="text-xs text-muted-foreground mb-1 block">Description</label>
+                <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Description</label>
                 <textarea placeholder="What happened…" rows={2}
                   value={newForm.description} onChange={e => setNewForm(p => ({ ...p, description: e.target.value }))}
-                  className={inputCls + " resize-none"} />
+                  className={inputClass + " resize-none"} style={inputStyle} />
               </div>
             </div>
             <div className="flex gap-2">
-              <Button onClick={addIncident} disabled={submitting} className="gradient-blue text-white border-0">
-                {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+              <button onClick={addIncident} disabled={submitting} className={primaryBtn} style={primaryBtnStyle}>
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                 Save Incident
-              </Button>
-              <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
+              </button>
+              <button onClick={() => setAddOpen(false)} className={ghostBtn} style={ghostBtnStyle}>Cancel</button>
             </div>
           </motion.div>
         )}
@@ -637,33 +775,38 @@ export default function SafetyPage() {
       <AnimatePresence>
         {extractedIncidents.length > 0 && (
           <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-            className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
+            className="glass-card p-5" style={{ borderColor: "rgba(16,185,129,0.25)", background: "rgba(16,185,129,0.03)" }}>
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="font-semibold text-foreground">Extracted Incidents</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">{extractedIncidents.length} incident(s) found — select which to add</p>
+                <h3 className="font-semibold text-white text-[15px]">Extracted Incidents</h3>
+                <p className="text-[11px] text-white/35 mt-0.5">{extractedIncidents.length} incident(s) found — select which to add</p>
               </div>
-              <Button size="sm" className="gradient-blue text-white border-0"
-                disabled={addingExtracted === "all"} onClick={addAllExtractedIncidents}>
-                {addingExtracted === "all" ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+              <button
+                disabled={addingExtracted === "all"} onClick={addAllExtractedIncidents}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-medium text-white transition-all hover:scale-105 disabled:opacity-50"
+                style={primaryBtnStyle}>
+                {addingExtracted === "all" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                 Add All
-              </Button>
+              </button>
             </div>
             <div className="space-y-2">
               {extractedIncidents.map((inc: any, idx: number) => (
-                <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50">
-                  <AlertTriangle className={`w-4 h-4 shrink-0 ${inc.severity === "high" ? "text-red-400" : inc.severity === "medium" ? "text-orange-400" : "text-emerald-400"}`} />
+                <div key={idx} className="flex items-center gap-3 p-3 rounded-xl"
+                  style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <AlertTriangle className="w-4 h-4 shrink-0" style={{ color: SEV_COLOR[inc.severity] ?? SEV_COLOR.low }} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">{inc.type}</p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-sm font-medium text-white truncate">{inc.type}</p>
+                    <p className="text-[11px] text-white/35">
                       {[inc.severity, inc.status, inc.zone || inc.location, inc.date].filter(Boolean).join(" · ")}
                     </p>
-                    {inc.description && <p className="text-xs text-muted-foreground truncate mt-0.5">{inc.description}</p>}
+                    {inc.description && <p className="text-[11px] text-white/30 truncate mt-0.5">{inc.description}</p>}
                   </div>
-                  <Button size="sm" variant="outline" disabled={addingExtracted === String(idx)}
-                    onClick={() => addExtractedIncident(inc, idx)}>
-                    {addingExtracted === String(idx) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                  </Button>
+                  <button disabled={addingExtracted === String(idx)}
+                    onClick={() => addExtractedIncident(inc, idx)}
+                    className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors"
+                    style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)" }}>
+                    {addingExtracted === String(idx) ? <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" /> : <Plus className="w-3.5 h-3.5 text-cyan-400" />}
+                  </button>
                 </div>
               ))}
             </div>
@@ -673,47 +816,51 @@ export default function SafetyPage() {
 
       {/* Incidents Table */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-        className="bg-card border border-border rounded-2xl overflow-hidden">
+        className="glass-card overflow-hidden">
         {/* Table header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border gap-3 flex-wrap">
-          <h3 className="font-semibold text-foreground shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 gap-3 flex-wrap"
+          style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <h3 className="font-semibold text-white text-[15px] shrink-0">
             Incidents
-            <span className="ml-2 text-xs text-muted-foreground font-normal">
+            <span className="ml-2 text-[11px] text-white/35 font-normal">
               {filtered.length} of {incidents.length}
             </span>
           </h3>
           <div className="flex items-center gap-2 flex-1 max-w-2xl">
             {/* Search */}
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/25 pointer-events-none" />
               <input placeholder="Search incidents…" value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="w-full pl-8 pr-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                className="w-full pl-8 pr-3 py-2 rounded-xl text-sm text-white placeholder:text-white/30 outline-none transition-all border focus:border-cyan-500/50"
+                style={inputStyle} />
             </div>
             {/* Severity filter */}
             <select value={filterSev} onChange={e => setFilterSev(e.target.value)}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none cursor-pointer">
+              className="px-3 py-2 rounded-xl text-sm text-white/70 outline-none cursor-pointer border"
+              style={inputStyle}>
               <option value="all">All Severity</option>
-              {SEVERITIES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+              {SEVERITIES.map(sv => <option key={sv} value={sv}>{sv.charAt(0).toUpperCase()+sv.slice(1)}</option>)}
             </select>
             {/* Status filter */}
             <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-              className="px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none cursor-pointer">
+              className="px-3 py-2 rounded-xl text-sm text-white/70 outline-none cursor-pointer border"
+              style={inputStyle}>
               <option value="all">All Status</option>
-              {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+              {STATUSES.map(st => <option key={st} value={st}>{st.charAt(0).toUpperCase()+st.slice(1)}</option>)}
             </select>
           </div>
         </div>
 
         {statsLoading ? (
           <div className="flex items-center gap-3 px-6 py-10">
-            <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-            <p className="text-sm text-muted-foreground">Loading incidents…</p>
+            <Loader2 className="w-5 h-5 animate-spin text-cyan-400" />
+            <p className="text-sm text-white/40">Loading incidents…</p>
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-12">
-            <Shield className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-40" />
-            <p className="text-sm text-muted-foreground">
+            <Shield className="w-10 h-10 text-white/15 mx-auto mb-3" />
+            <p className="text-[13px] text-white/30">
               {incidents.length === 0 ? "No incidents logged yet — click Log Incident to add one." : "No incidents match your filters."}
             </p>
           </div>
@@ -721,9 +868,9 @@ export default function SafetyPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border">
+                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                   {["Date","Type","Zone","Severity","Status","Description","Actions"].map(h => (
-                    <th key={h} className="text-left px-4 py-3 text-xs text-muted-foreground font-medium">{h}</th>
+                    <th key={h} className="text-left px-4 py-3 text-[11px] text-white/35 font-medium">{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -731,31 +878,40 @@ export default function SafetyPage() {
                 {filtered.map((inc, i) => (
                   <Fragment key={inc.id}>
                     <tr
-                      className={`border-b border-border/50 hover:bg-secondary/30 transition-colors ${i % 2 === 0 ? "" : "bg-secondary/10"}`}>
+                      className="transition-colors"
+                      style={{
+                        borderBottom: "1px solid rgba(255,255,255,0.04)",
+                        background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.015)",
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(0,212,255,0.03)"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.015)"; }}
+                    >
                       {/* Date */}
-                      <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                      <td className="px-4 py-3 text-white/40 whitespace-nowrap">
                         {inc.date || inc.created_at?.slice(0,10) || "—"}
                       </td>
                       {/* Type */}
-                      <td className="px-4 py-3 font-medium text-foreground whitespace-nowrap">
+                      <td className="px-4 py-3 font-medium text-white whitespace-nowrap">
                         {editId === inc.id ? (
                           <select value={editForm.type ?? inc.type}
                             onChange={e => setEditForm(p => ({ ...p, type: e.target.value }))}
-                            className="px-2 py-1 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none">
+                            className="px-2 py-1 rounded-lg text-sm text-white outline-none border"
+                            style={inputStyle}>
                             {/* Keep existing value if it's not in our standard list */}
                             {!INCIDENT_TYPES.includes(inc.type) && inc.type && (
                               <option value={inc.type}>{inc.type}</option>
                             )}
                             {INCIDENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                           </select>
-                        ) : (inc.type || <span className="text-muted-foreground italic text-xs">Unknown</span>)}
+                        ) : (inc.type || <span className="text-white/30 italic text-xs">Unknown</span>)}
                       </td>
                       {/* Zone */}
-                      <td className="px-4 py-3 text-muted-foreground">
+                      <td className="px-4 py-3 text-white/40">
                         {editId === inc.id ? (
                           <input value={editForm.zone ?? inc.zone}
                             onChange={e => setEditForm(p => ({ ...p, zone: e.target.value }))}
-                            className="px-2 py-1 bg-secondary border border-border rounded-lg text-sm text-foreground w-24 focus:outline-none" />
+                            className="px-2 py-1 rounded-lg text-sm text-white w-24 outline-none border"
+                            style={inputStyle} />
                         ) : (inc.zone || inc.location || "—")}
                       </td>
                       {/* Severity — normalise legacy values for display */}
@@ -763,11 +919,12 @@ export default function SafetyPage() {
                         {editId === inc.id ? (
                           <select value={editForm.severity ?? normSeverity(inc.severity)}
                             onChange={e => setEditForm(p => ({ ...p, severity: e.target.value as any }))}
-                            className="px-2 py-1 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none">
-                            {SEVERITIES.map(s => <option key={s} value={s}>{s}</option>)}
+                            className="px-2 py-1 rounded-lg text-sm text-white outline-none border"
+                            style={inputStyle}>
+                            {SEVERITIES.map(sv => <option key={sv} value={sv}>{sv}</option>)}
                           </select>
                         ) : (
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SEV_STYLE[normSeverity(inc.severity)]}`}>
+                          <span className="text-[11px] px-2 py-0.5 rounded-full font-medium" style={pillStyle(SEV_COLOR[normSeverity(inc.severity)])}>
                             {normSeverity(inc.severity)}
                           </span>
                         )}
@@ -777,16 +934,18 @@ export default function SafetyPage() {
                         <button
                           onClick={() => cycleStatus({ ...inc, status: normStatus(inc.status) })}
                           title="Click to change status"
-                          className={`text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer transition-opacity hover:opacity-70 ${STATUS_STYLE[normStatus(inc.status)]}`}>
+                          className="text-[11px] px-2 py-0.5 rounded-full font-medium cursor-pointer transition-opacity hover:opacity-70"
+                          style={pillStyle(STATUS_COLOR[normStatus(inc.status)])}>
                           {normStatus(inc.status)}
                         </button>
                       </td>
                       {/* Description */}
-                      <td className="px-4 py-3 text-muted-foreground max-w-xs">
+                      <td className="px-4 py-3 text-white/40 max-w-xs">
                         {editId === inc.id ? (
                           <input value={editForm.description ?? inc.description}
                             onChange={e => setEditForm(p => ({ ...p, description: e.target.value }))}
-                            className="px-2 py-1 bg-secondary border border-border rounded-lg text-sm text-foreground w-full focus:outline-none" />
+                            className="px-2 py-1 rounded-lg text-sm text-white w-full outline-none border"
+                            style={inputStyle} />
                         ) : (
                           <span className="truncate block max-w-50" title={inc.description}>
                             {inc.description || "—"}
@@ -798,35 +957,41 @@ export default function SafetyPage() {
                         <div className="flex items-center gap-1">
                           {editId === inc.id ? (
                             <>
-                              <Button size="sm" className="gradient-blue text-white border-0 h-7 px-2 text-xs"
+                              <button
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-white transition-all hover:scale-105"
+                                style={primaryBtnStyle}
                                 onClick={() => saveEdit(inc.id)} disabled={savingId === inc.id}>
                                 {savingId === inc.id ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
-                              </Button>
-                              <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
-                                onClick={() => { setEditId(null); setEditForm({}); }}>Cancel</Button>
+                              </button>
+                              <button className="px-2.5 py-1 rounded-lg text-[11px] text-white/50 hover:text-white/80 transition-colors"
+                                style={ghostBtnStyle}
+                                onClick={() => { setEditId(null); setEditForm({}); }}>Cancel</button>
                             </>
                           ) : (
                             <>
                               <button title="Edit"
                                 onClick={() => { setEditId(inc.id); setEditForm({ type: inc.type, severity: inc.severity, zone: inc.zone, location: inc.location, description: inc.description }); }}
-                                className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
-                                <Pencil className="w-3.5 h-3.5" />
+                                className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                                style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)" }}>
+                                <Pencil className="w-3.5 h-3.5 text-cyan-400" />
                               </button>
                               <button title="Generate OSHA Report"
                                 onClick={() => generateAiReport(inc)}
                                 disabled={reportingId === inc.id}
-                                className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-blue-400 transition-colors">
+                                className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                                style={{ background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.15)" }}>
                                 {reportingId === inc.id
-                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                  : <FileText className="w-3.5 h-3.5" />}
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                                  : <FileText className="w-3.5 h-3.5 text-cyan-400" />}
                               </button>
                               <button title="Delete"
                                 onClick={() => deleteIncident(inc.id)}
                                 disabled={deletingId === inc.id}
-                                className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-red-400 transition-colors">
+                                className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                                style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}>
                                 {deletingId === inc.id
-                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                  : <Trash2 className="w-3.5 h-3.5" />}
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" />
+                                  : <Trash2 className="w-3.5 h-3.5 text-red-400" />}
                               </button>
                             </>
                           )}
@@ -835,18 +1000,18 @@ export default function SafetyPage() {
                     </tr>
                     {/* AI Report expansion */}
                     {aiReport?.id === inc.id && (
-                      <tr className="bg-blue-500/5">
+                      <tr style={{ background: "rgba(0,212,255,0.03)" }}>
                         <td colSpan={7} className="px-6 py-4">
                           <div className="flex items-start gap-3">
-                            <FileText className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                            <FileText className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
                             <div className="flex-1">
                               <div className="flex items-center justify-between mb-2">
-                                <p className="text-xs font-medium text-blue-400">OSHA Report — {inc.type}</p>
-                                <button onClick={() => setAiReport(null)} className="text-muted-foreground hover:text-foreground">
+                                <p className="text-[11px] font-medium text-cyan-400">OSHA Report — {inc.type}</p>
+                                <button onClick={() => setAiReport(null)} className="text-white/25 hover:text-white/60 transition-colors">
                                   <X className="w-3.5 h-3.5" />
                                 </button>
                               </div>
-                              <MarkdownText text={aiReport.text} className="text-xs text-muted-foreground leading-relaxed" />
+                              <MarkdownText text={aiReport.text} className="text-[12px] text-white/50 leading-relaxed" />
                             </div>
                           </div>
                         </td>
@@ -861,50 +1026,50 @@ export default function SafetyPage() {
       </motion.div>
 
       {/* Charts row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }}
-          className="bg-card border border-border rounded-2xl p-6">
-          <div className="flex items-center justify-between mb-6">
+          className="glass-card p-6">
+          <div className="flex items-center justify-between mb-5">
             <div>
-              <h3 className="font-semibold text-foreground">Incident Trend</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <h3 className="font-semibold text-white text-[14px]">Incident Trend</h3>
+              <p className="text-[11px] text-white/35 mt-0.5">
                 Incidents vs Near-Miss
-                {safetyStats && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live</span>}
+                {safetyStats && <span className="ml-2 text-[11px] px-2 py-0.5 rounded-full" style={pillStyle("#10B981")}>Live</span>}
               </p>
             </div>
           </div>
           {incidentChartData.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">No monthly data yet</p>
+            <p className="text-[13px] text-white/30 text-center py-8">No monthly data yet</p>
           ) : (
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={incidentChartData} barGap={4}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
-                <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
-                <Bar dataKey="incidents" fill="#ef4444" radius={[6,6,0,0]} name="Incidents" />
-                <Bar dataKey="nearMiss"  fill="#f59e0b" radius={[6,6,0,0]} name="Near-Miss" />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(0,212,255,0.06)" }} />
+                <Bar dataKey="incidents" fill="#EF4444" radius={[6,6,0,0]} name="Incidents" />
+                <Bar dataKey="nearMiss"  fill="#F59E0B" radius={[6,6,0,0]} name="Near-Miss" />
               </BarChart>
             </ResponsiveContainer>
           )}
-          <div className="flex gap-4 mt-2">
-            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-400"/><span className="text-xs text-muted-foreground">Incidents</span></div>
-            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-orange-400"/><span className="text-xs text-muted-foreground">Near-Miss</span></div>
+          <div className="flex gap-5 mt-3">
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full" style={{ background: "#EF4444", boxShadow: "0 0 6px #EF4444" }}/><span className="text-[11px] text-white/35">Incidents</span></div>
+            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full" style={{ background: "#F59E0B", boxShadow: "0 0 6px #F59E0B" }}/><span className="text-[11px] text-white/35">Near-Miss</span></div>
           </div>
         </motion.div>
 
         <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.4 }}
-          className="bg-card border border-border rounded-2xl p-6">
-          <h3 className="font-semibold text-foreground mb-1">Safety Compliance</h3>
-          <p className="text-xs text-muted-foreground mb-4">
+          className="glass-card p-6">
+          <h3 className="font-semibold text-white text-[14px] mb-1">Safety Compliance</h3>
+          <p className="text-[11px] text-white/35 mb-4">
             Score by incident category
-            {safetyStats && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live</span>}
+            {safetyStats && <span className="ml-2 text-[11px] px-2 py-0.5 rounded-full" style={pillStyle("#10B981")}>Live</span>}
           </p>
           <ResponsiveContainer width="100%" height={200}>
             <RadarChart data={radarData}>
-              <PolarGrid stroke="#ffffff08" />
-              <PolarAngleAxis dataKey="category" tick={{ fill: "#6b7280", fontSize: 11 }} />
-              <Radar dataKey="score" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.2} strokeWidth={2} />
+              <PolarGrid stroke="rgba(255,255,255,0.06)" />
+              <PolarAngleAxis dataKey="category" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} />
+              <Radar dataKey="score" stroke="#00D4FF" fill="#00D4FF" fillOpacity={0.2} strokeWidth={2} />
             </RadarChart>
           </ResponsiveContainer>
           {safetyStats?.category_compliance && (
@@ -912,9 +1077,8 @@ export default function SafetyPage() {
               {Object.entries(safetyStats.category_compliance as Record<string,number>)
                 .sort(([,a],[,b]) => a-b).slice(0,3)
                 .map(([cat, score]) => (
-                  <span key={cat} className={`text-xs px-2 py-0.5 rounded-full ${
-                    score < 80 ? "bg-red-500/10 text-red-400" : "bg-emerald-500/10 text-emerald-400"
-                  }`}>{cat}: {score}%</span>
+                  <span key={cat} className="text-[11px] px-2 py-0.5 rounded-full"
+                    style={pillStyle(score < 80 ? "#EF4444" : "#10B981")}>{cat}: {score}%</span>
                 ))}
             </div>
           )}
@@ -923,48 +1087,52 @@ export default function SafetyPage() {
 
       {/* Zone Risk Heatmap */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}
-        className="bg-card border border-border rounded-2xl p-6">
+        className="glass-card p-6">
         <div className="flex items-center justify-between mb-6">
-          <h3 className="font-semibold text-foreground">Zone Risk Heatmap</h3>
+          <h3 className="font-semibold text-white text-[14px]">Zone Risk Heatmap</h3>
           {safetyStats && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
+            <span className="text-[11px] px-2 py-0.5 rounded-full" style={pillStyle("#10B981")}>
               Live — {safetyStats.total_incidents} incidents · {safetyStats.active_workers} active workers
             </span>
           )}
         </div>
         {zoneRisks.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No zone data yet — fill in the <strong>Zone</strong> field when logging incidents to see the heatmap.
+          <p className="text-[13px] text-white/30">
+            No zone data yet — fill in the <strong className="text-white/50">Zone</strong> field when logging incidents to see the heatmap.
           </p>
         ) : (
           <div className="space-y-4">
-            {zoneRisks.map((z, i) => (
-              <div key={i} className="flex items-center gap-4">
-                <span className="text-sm text-foreground w-28 truncate">{z.zone}</span>
-                <div className="flex-1 bg-secondary rounded-full h-2.5">
-                  <motion.div
-                    initial={{ width: 0 }} animate={{ width: `${z.risk}%` }}
-                    transition={{ delay: 0.5 + i * 0.1, duration: 0.8 }}
-                    className={`h-2.5 rounded-full ${z.risk > 80 ? "bg-red-500" : z.risk > 60 ? "bg-orange-500" : "bg-emerald-500"}`} />
+            {zoneRisks.map((z, i) => {
+              const color = z.risk > 80 ? "#EF4444" : z.risk > 60 ? "#F59E0B" : "#10B981";
+              return (
+                <div key={i} className="flex items-center gap-4">
+                  <span className="text-sm text-white/70 w-28 truncate">{z.zone}</span>
+                  <div className="flex-1 rounded-full h-2.5" style={{ background: "rgba(255,255,255,0.06)" }}>
+                    <motion.div
+                      initial={{ width: 0 }} animate={{ width: `${z.risk}%` }}
+                      transition={{ delay: 0.5 + i * 0.1, duration: 0.8 }}
+                      className="h-2.5 rounded-full"
+                      style={{ background: color, boxShadow: `0 0 8px ${color}60` }} />
+                  </div>
+                  <span className="text-sm font-medium w-10 text-right" style={{ color }}>
+                    {z.risk}%
+                  </span>
                 </div>
-                <span className={`text-sm font-medium w-10 text-right ${z.risk > 80 ? "text-red-400" : z.risk > 60 ? "text-orange-400" : "text-emerald-400"}`}>
-                  {z.risk}%
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </motion.div>
 
       {/* AI Zone Risk Assessment */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.55 }}
-        className="bg-card border border-border rounded-2xl p-6">
+        className="glass-card p-6">
         <button onClick={() => setZoneRiskOpen(v => !v)} className="w-full flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Brain className="w-4 h-4 text-blue-400" />
-            <h3 className="font-semibold text-foreground">AI Zone Risk Assessment</h3>
+            <Brain className="w-4 h-4 text-cyan-400" />
+            <h3 className="font-semibold text-white text-[14px]">AI Zone Risk Assessment</h3>
           </div>
-          <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${zoneRiskOpen ? "rotate-180" : ""}`} />
+          <ChevronDown className={`w-4 h-4 text-white/35 transition-transform ${zoneRiskOpen ? "rotate-180" : ""}`} />
         </button>
         <AnimatePresence>
           {zoneRiskOpen && (
@@ -972,77 +1140,73 @@ export default function SafetyPage() {
               className="overflow-hidden">
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4 mb-4">
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Zone Name *</label>
+                  <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Zone Name *</label>
                   <input type="text" placeholder="e.g. Zone A — 3rd Floor" value={zoneRiskForm.name}
                     onChange={e => setZoneRiskForm(p => ({ ...p, name: e.target.value }))}
-                    className={inputCls} />
+                    className={inputClass} style={inputStyle} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Workers Present</label>
+                  <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Workers Present</label>
                   <input type="number" min={0} value={zoneRiskForm.workers}
                     onChange={e => setZoneRiskForm(p => ({ ...p, workers: Number(e.target.value) }))}
-                    className={inputCls} />
+                    className={inputClass} style={inputStyle} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Weather</label>
+                  <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Weather</label>
                   <select value={zoneRiskForm.weather}
                     onChange={e => setZoneRiskForm(p => ({ ...p, weather: e.target.value }))}
-                    className={selectCls}>
+                    className={selectClass} style={inputStyle}>
                     {["Clear","Rain","Wind","Heat","Snow","Storm"].map(w => <option key={w} value={w}>{w}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Equipment (comma-separated)</label>
+                  <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Equipment (comma-separated)</label>
                   <input type="text" placeholder="Crane, Scaffolding" value={zoneRiskForm.equipment}
                     onChange={e => setZoneRiskForm(p => ({ ...p, equipment: e.target.value }))}
-                    className={inputCls} />
+                    className={inputClass} style={inputStyle} />
                 </div>
                 <div className="col-span-2 lg:col-span-4">
-                  <label className="text-xs text-muted-foreground mb-1 block">Tasks (comma-separated)</label>
+                  <label className="text-[11px] text-white/35 mb-1.5 block tracking-wide uppercase">Tasks (comma-separated)</label>
                   <input type="text" placeholder="Welding, Working at height, Excavation" value={zoneRiskForm.tasks}
                     onChange={e => setZoneRiskForm(p => ({ ...p, tasks: e.target.value }))}
-                    className={inputCls} />
+                    className={inputClass} style={inputStyle} />
                 </div>
               </div>
-              <Button onClick={runZoneRiskAssessment} disabled={zoneRiskLoading} className="gradient-blue text-white border-0">
-                {zoneRiskLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Brain className="w-4 h-4 mr-2" />}
+              <button onClick={runZoneRiskAssessment} disabled={zoneRiskLoading} className={primaryBtn} style={primaryBtnStyle}>
+                {zoneRiskLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
                 Assess Risk
-              </Button>
+              </button>
 
-              {zoneRiskResult && (
-                <div className={`mt-4 rounded-xl border p-4 ${
-                  zoneRiskResult.risk_level === "High"   ? "border-red-500/30 bg-red-500/5" :
-                  zoneRiskResult.risk_level === "Medium" ? "border-orange-500/30 bg-orange-500/5" :
-                                                            "border-emerald-500/30 bg-emerald-500/5"
-                }`}>
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="font-medium text-foreground">{zoneRiskResult.zone || zoneRiskForm.name}</p>
-                    <span className={`text-xs px-3 py-1 rounded-full font-medium ${
-                      zoneRiskResult.risk_level === "High"   ? "bg-red-500/10 text-red-400" :
-                      zoneRiskResult.risk_level === "Medium" ? "bg-orange-500/10 text-orange-400" :
-                                                                "bg-emerald-500/10 text-emerald-400"
-                    }`}>
-                      {zoneRiskResult.risk_level} Risk · {zoneRiskResult.risk_score}/10
-                    </span>
+              {zoneRiskResult && (() => {
+                const riskAccent = zoneRiskResult.risk_level === "High" ? ACCENT.red : zoneRiskResult.risk_level === "Medium" ? ACCENT.amber : ACCENT.green;
+                return (
+                  <div className="mt-4 rounded-xl p-4" style={{ background: riskAccent.bg, border: `1px solid ${riskAccent.border}` }}>
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="font-medium text-white">{zoneRiskResult.zone || zoneRiskForm.name}</p>
+                      <span className="text-[11px] px-3 py-1 rounded-full font-medium"
+                        style={{ background: riskAccent.bg, color: riskAccent.text }}>
+                        {zoneRiskResult.risk_level} Risk · {zoneRiskResult.risk_score}/10
+                      </span>
+                    </div>
+                    {zoneRiskResult.hazards?.length > 0 && (
+                      <div className="mb-3">
+                        <p className="text-[11px] font-medium text-white/35 mb-1">Hazards</p>
+                        <ul className="text-sm text-white/50 list-disc list-inside space-y-0.5">
+                          {zoneRiskResult.hazards.map((h: string, i: number) => <li key={i}>{h}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {zoneRiskResult.recommendations?.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-medium text-white/35 mb-1">Recommendations</p>
+                        <ul className="text-sm text-white/50 list-disc list-inside space-y-0.5">
+                          {zoneRiskResult.recommendations.map((r: string, i: number) => <li key={i}>{r}</li>)}
+                        </ul>
+                      </div>
+                    )}
                   </div>
-                  {zoneRiskResult.hazards?.length > 0 && (
-                    <div className="mb-3">
-                      <p className="text-xs font-medium text-muted-foreground mb-1">Hazards</p>
-                      <ul className="text-sm text-muted-foreground list-disc list-inside space-y-0.5">
-                        {zoneRiskResult.hazards.map((h: string, i: number) => <li key={i}>{h}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                  {zoneRiskResult.recommendations?.length > 0 && (
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-1">Recommendations</p>
-                      <ul className="text-sm text-muted-foreground list-disc list-inside space-y-0.5">
-                        {zoneRiskResult.recommendations.map((r: string, i: number) => <li key={i}>{r}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
+                );
+              })()}
             </motion.div>
           )}
         </AnimatePresence>
@@ -1052,20 +1216,20 @@ export default function SafetyPage() {
       {safetyStats && (safetyStats.equipment_at_risk > 0 || safetyStats.permit_violations > 0) && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {safetyStats.equipment_at_risk > 0 && (
-            <div className="bg-card border border-red-500/20 bg-red-500/5 rounded-2xl p-4 flex items-center gap-3">
+            <div className="glass-card p-4 flex items-center gap-3" style={{ borderColor: ACCENT.red.border, background: ACCENT.red.bg }}>
               <Wrench className="w-5 h-5 text-red-400 shrink-0" />
               <div>
-                <p className="text-sm font-medium text-foreground">{safetyStats.equipment_at_risk} Equipment at Risk</p>
-                <p className="text-xs text-muted-foreground">Breakdowns or health &lt;50 — check Equipment module</p>
+                <p className="text-sm font-medium text-white">{safetyStats.equipment_at_risk} Equipment at Risk</p>
+                <p className="text-[11px] text-white/35">Breakdowns or health &lt;50 — check Equipment module</p>
               </div>
             </div>
           )}
           {safetyStats.permit_violations > 0 && (
-            <div className="bg-card border border-orange-500/20 bg-orange-500/5 rounded-2xl p-4 flex items-center gap-3">
-              <FileWarning className="w-5 h-5 text-orange-400 shrink-0" />
+            <div className="glass-card p-4 flex items-center gap-3" style={{ borderColor: ACCENT.amber.border, background: ACCENT.amber.bg }}>
+              <FileWarning className="w-5 h-5 text-amber-400 shrink-0" />
               <div>
-                <p className="text-sm font-medium text-foreground">{safetyStats.permit_violations} Permit Issue{safetyStats.permit_violations !== 1 ? "s" : ""}</p>
-                <p className="text-xs text-muted-foreground">Expired or violated permits — check Compliance module</p>
+                <p className="text-sm font-medium text-white">{safetyStats.permit_violations} Permit Issue{safetyStats.permit_violations !== 1 ? "s" : ""}</p>
+                <p className="text-[11px] text-white/35">Expired or violated permits — check Compliance module</p>
               </div>
             </div>
           )}
@@ -1075,17 +1239,17 @@ export default function SafetyPage() {
       {/* Audit AI Analysis */}
       {analysis && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-blue-500/30 rounded-2xl p-6">
+          className="glass-card p-6" style={{ borderColor: "rgba(0,212,255,0.22)" }}>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <Shield className="w-5 h-5 text-blue-400" />
-              <h3 className="font-semibold text-foreground">AI Safety Audit Analysis</h3>
+              <Shield className="w-5 h-5 text-cyan-400" />
+              <h3 className="font-semibold text-white text-[15px]">AI Safety Audit Analysis</h3>
             </div>
-            <button onClick={() => setAnalysis("")} className="text-muted-foreground hover:text-foreground">
+            <button onClick={() => setAnalysis("")} className="text-white/25 hover:text-white/60 transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
-          <MarkdownText text={analysis} className="text-sm text-muted-foreground leading-relaxed" />
+          <MarkdownText text={analysis} className="text-[13px] text-white/50 leading-relaxed" />
         </motion.div>
       )}
 

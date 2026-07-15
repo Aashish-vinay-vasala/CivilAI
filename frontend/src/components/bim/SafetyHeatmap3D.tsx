@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { motion } from "framer-motion";
 import axios from "axios";
 import { Loader2 } from "lucide-react";
+import { ACCENT, glassButtonStyle, glassInputStyle } from "@/lib/theme";
 
 interface Incident {
   id: string;
@@ -30,7 +31,11 @@ const workerPositions = [
   { id: "W4", name: "Tom Brown", floor: 1, x: 5, z: -4, status: "active" },
 ];
 
-export default function SafetyHeatmap3D() {
+interface SafetyHeatmap3DProps {
+  projectId?: string;
+}
+
+export default function SafetyHeatmap3D({ projectId: propProjectId }: SafetyHeatmap3DProps = {}) {
   const mountRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number>(0);
   const zoneMeshesRef = useRef<THREE.Mesh[]>([]);
@@ -51,11 +56,12 @@ export default function SafetyHeatmap3D() {
   const [showWorkers, setShowWorkers] = useState(true);
   const [isRotating, setIsRotating] = useState(true);
   const [projects, setProjects] = useState<any[]>([]);
-  const [projectId, setProjectId] = useState("");
+  const [internalProjectId, setInternalProjectId] = useState("");
+  const projectId = propProjectId || internalProjectId;
 
   useEffect(() => {
-    fetchProjects();
-  }, []);
+    if (!propProjectId) fetchProjects();
+  }, [propProjectId]);
 
   useEffect(() => {
     if (projectId) fetchIncidents();
@@ -65,7 +71,7 @@ export default function SafetyHeatmap3D() {
     try {
       const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/projects/`);
       setProjects(res.data.projects || []);
-      if (res.data.projects?.length > 0) setProjectId(res.data.projects[0].id);
+      if (res.data.projects?.length > 0) setInternalProjectId(res.data.projects[0].id);
     } catch {
       setLoading(false);
     }
@@ -335,8 +341,8 @@ export default function SafetyHeatmap3D() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
-        <p className="ml-3 text-muted-foreground">Loading safety data...</p>
+        <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
+        <p className="ml-3 text-white/35">Loading safety data...</p>
       </div>
     );
   }
@@ -347,11 +353,12 @@ export default function SafetyHeatmap3D() {
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2 items-center justify-between">
         <div className="flex gap-2 items-center">
-          {projects.length > 0 && (
+          {!propProjectId && projects.length > 0 && (
             <select
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              className="px-3 py-1.5 bg-secondary border border-border rounded-xl text-xs text-foreground focus:outline-none"
+              value={internalProjectId}
+              onChange={(e) => setInternalProjectId(e.target.value)}
+              className="px-3 py-1.5 rounded-xl text-xs text-white outline-none border"
+              style={glassInputStyle}
             >
               {projects.map(p => (
                 <option key={p.id} value={p.id}>{p.name}</option>
@@ -360,9 +367,8 @@ export default function SafetyHeatmap3D() {
           )}
           <button
             onClick={() => setShowWorkers(!showWorkers)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
-              showWorkers ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-secondary text-muted-foreground border-border"
-            }`}
+            className="px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors"
+            style={showWorkers ? { background: ACCENT.blue.bg, color: "#3B82F6", borderColor: ACCENT.blue.border } : glassButtonStyle}
           >
             👷 {showWorkers ? "Hide" : "Show"} Workers
           </button>
@@ -371,9 +377,8 @@ export default function SafetyHeatmap3D() {
               stateRef.current.isRotating = !stateRef.current.isRotating;
               setIsRotating(stateRef.current.isRotating);
             }}
-            className={`px-3 py-1.5 rounded-xl text-xs border transition-colors ${
-              isRotating ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-secondary text-muted-foreground border-border"
-            }`}
+            className="px-3 py-1.5 rounded-xl text-xs border transition-colors"
+            style={isRotating ? { background: ACCENT.green.bg, color: "#10B981", borderColor: ACCENT.green.border } : glassButtonStyle}
           >
             {isRotating ? "⏸ Pause" : "▶ Rotate"}
           </button>
@@ -391,40 +396,40 @@ export default function SafetyHeatmap3D() {
         </div>
       </div>
 
-      <div className="relative w-full rounded-2xl overflow-hidden border border-border" style={{ height: "500px" }}>
+      <div className="relative w-full rounded-2xl overflow-hidden" style={{ height: "500px", border: "1px solid rgba(255,255,255,0.08)" }}>
         <div ref={mountRef} className="w-full h-full" />
 
-        <div className="absolute top-4 left-4 bg-black/60 backdrop-blur rounded-xl px-3 py-2 border border-border">
-          <p className="text-xs text-muted-foreground">🖱️ Drag · Scroll · Click zone</p>
+        <div className="absolute top-4 left-4 backdrop-blur rounded-xl px-3 py-2" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs text-white/40">🖱️ Drag · Scroll · Click zone</p>
         </div>
 
-        <div className="absolute top-4 right-4 bg-black/70 backdrop-blur rounded-xl p-3 border border-border">
-          <p className="text-xs font-medium text-foreground mb-2">Risk Levels</p>
+        <div className="absolute top-4 right-4 backdrop-blur rounded-xl p-3" style={{ background: "rgba(4,11,25,0.85)", border: "1px solid rgba(0,212,255,0.12)" }}>
+          <p className="text-xs font-medium text-white mb-2">Risk Levels</p>
           {[
-            { color: "#ef4444", label: "Critical (Severe)" },
-            { color: "#f97316", label: "High (Moderate)" },
-            { color: "#f59e0b", label: "Medium (Minor)" },
-            { color: "#10b981", label: "Low (None)" },
-            { color: "#3b82f6", label: "Worker" },
+            { color: "#EF4444", label: "Critical (Severe)" },
+            { color: "#F97316", label: "High (Moderate)" },
+            { color: "#F59E0B", label: "Medium (Minor)" },
+            { color: "#10B981", label: "Low (None)" },
+            { color: "#3B82F6", label: "Worker" },
           ].map(l => (
             <div key={l.label} className="flex items-center gap-2 mb-1">
               <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: l.color }} />
-              <span className="text-xs text-muted-foreground">{l.label}</span>
+              <span className="text-xs text-white/35">{l.label}</span>
             </div>
           ))}
         </div>
 
         {selectedZone && (
-          <div className="absolute bottom-4 left-4 bg-black/80 backdrop-blur rounded-xl p-3 border border-red-500/30">
+          <div className="absolute bottom-4 left-4 backdrop-blur rounded-xl p-3" style={{ background: "rgba(4,11,25,0.9)", border: "1px solid rgba(239,68,68,0.3)" }}>
             <p className="text-xs font-medium text-red-400 mb-2">
               {selectedZone.type === "worker" ? "👷 Worker" : "⚠️ Zone Info"}
             </p>
             {Object.entries(selectedZone).filter(([k]) => k !== "type").map(([key, val]) => (
               <div key={key} className="flex justify-between gap-4 mb-1">
-                <span className="text-xs text-muted-foreground capitalize">{key}:</span>
+                <span className="text-xs text-white/35 capitalize">{key}:</span>
                 <span className={`text-xs font-medium ${
                   key === "severity" && val === "critical" ? "text-red-400" :
-                  key === "status" && val === "danger" ? "text-red-400" : "text-foreground"
+                  key === "status" && val === "danger" ? "text-red-400" : "text-white"
                 }`}>{String(val)}</span>
               </div>
             ))}
@@ -440,21 +445,22 @@ export default function SafetyHeatmap3D() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.08 }}
-            className={`bg-card border rounded-xl p-3 ${
-              inc.severity === "Severe" ? "border-red-500/30" :
-              inc.severity === "Moderate" ? "border-orange-500/30" : "border-border"
-            }`}
+            className="glass-card p-3"
+            style={
+              inc.severity === "Severe" ? { borderColor: "rgba(239,68,68,0.3)" } :
+              inc.severity === "Moderate" ? { borderColor: "rgba(245,158,11,0.3)" } : undefined
+            }
           >
             <div className="flex justify-between mb-1">
-              <span className="text-xs font-medium text-foreground">{inc.incident_type}</span>
+              <span className="text-xs font-medium text-white">{inc.incident_type}</span>
               <span className={`text-xs px-1.5 py-0.5 rounded-full ${
                 inc.severity === "Severe" ? "bg-red-500/10 text-red-400" :
-                inc.severity === "Moderate" ? "bg-orange-500/10 text-orange-400" :
+                inc.severity === "Moderate" ? "bg-amber-500/10 text-amber-400" :
                 "bg-emerald-500/10 text-emerald-400"
               }`}>{inc.severity}</span>
             </div>
-            <p className="text-xs text-muted-foreground">{inc.location} · {inc.date}</p>
-            <p className="text-xs text-muted-foreground mt-1 truncate">{inc.description}</p>
+            <p className="text-xs text-white/35">{inc.location} · {inc.date}</p>
+            <p className="text-xs text-white/35 mt-1 truncate">{inc.description}</p>
           </motion.div>
         ))}
       </div>

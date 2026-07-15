@@ -202,23 +202,35 @@ def get_progress_chart(
 ):
     try:
         query = supabase.table("schedule_tasks").select(
-            "planned_progress,actual_progress,planned_start"
+            "planned_progress,actual_progress,planned_start,budget"
         )
         if project_id and project_id != "all":
             query = query.eq("project_id", project_id)
         tasks_res = query.execute()
         tasks = tasks_res.data or []
 
-        # Key by (year, month) to avoid cross-year collisions
-        month_data: dict = defaultdict(lambda: {"planned": [], "actual": []})
+        # Key by (year, month) to avoid cross-year collisions. Each task's contribution
+        # is weighted by its budget (same methodology as the EVM page's calculateEVM),
+        # so a $2M task moves the line more than a $20k one; tasks without a budget set
+        # fall back to an unweighted average within that month.
+        month_data: dict = defaultdict(lambda: {
+            "w_budget": 0.0, "w_planned": 0.0, "w_actual": 0.0,
+            "planned": [], "actual": [],
+        })
         for task in tasks:
             start = task.get("planned_start")
             if start:
                 try:
                     dt = datetime.strptime(str(start)[:10], "%Y-%m-%d")
                     key = (dt.year, dt.month)
-                    month_data[key]["planned"].append(int(task.get("planned_progress") or 0))
-                    month_data[key]["actual"].append(int(task.get("actual_progress") or 0))
+                    planned = int(task.get("planned_progress") or 0)
+                    actual = int(task.get("actual_progress") or 0)
+                    budget = float(task.get("budget") or 0)
+                    month_data[key]["w_budget"] += budget
+                    month_data[key]["w_planned"] += budget * planned
+                    month_data[key]["w_actual"] += budget * actual
+                    month_data[key]["planned"].append(planned)
+                    month_data[key]["actual"].append(actual)
                 except Exception:
                     pass
 
@@ -250,12 +262,18 @@ def get_progress_chart(
         multi_year = len({y for y, _ in months_list}) > 1
         result = []
         for (y, m) in months_list:
-            d = month_data.get((y, m), {"planned": [], "actual": []})
+            d = month_data.get((y, m), {"w_budget": 0.0, "w_planned": 0.0, "w_actual": 0.0, "planned": [], "actual": []})
             label = f"{MONTH_NAMES[m - 1]} '{str(y)[2:]}" if multi_year else MONTH_NAMES[m - 1]
+            if d["w_budget"] > 0:
+                planned_val = round(d["w_planned"] / d["w_budget"])
+                actual_val = round(d["w_actual"] / d["w_budget"])
+            else:
+                planned_val = round(sum(d["planned"]) / len(d["planned"])) if d["planned"] else 0
+                actual_val = round(sum(d["actual"]) / len(d["actual"])) if d["actual"] else 0
             result.append({
                 "month": label,
-                "planned": round(sum(d["planned"]) / len(d["planned"])) if d["planned"] else 0,
-                "actual":  round(sum(d["actual"])  / len(d["actual"]))  if d["actual"]  else 0,
+                "planned": planned_val,
+                "actual": actual_val,
             })
 
         return {"status": "success", "data": result}
@@ -387,38 +405,102 @@ def get_cost_chart(
     try:
         pid = project_id if project_id and project_id != "all" else None
 
-        projects_query = supabase.table("projects").select("budget,start_date,end_date")
+        projects_query = supabase.table("projects").select("id,budget,start_date,end_date")
         if pid:
             projects_query = projects_query.eq("id", pid)
         projects_res = projects_query.execute()
         projects_data = projects_res.data or []
-        total_budget = sum(float(p.get("budget", 0)) for p in projects_data)
 
-        # Compute monthly budget from real project durations (same logic as cashflow chart)
-        durations = []
+        task_query = supabase.table("schedule_tasks").select("project_id,budget,planned_start,planned_end")
+        if pid:
+            task_query = task_query.eq("project_id", pid)
+        tasks_data = task_query.execute().data or []
+        tasks_by_project: dict = defaultdict(list)
+        for t in tasks_data:
+            tasks_by_project[t.get("project_id")].append(t)
+
+        def _parse_date(s):
+            if not s:
+                return None
+            try:
+                return datetime.strptime(str(s)[:10], "%Y-%m-%d")
+            except Exception:
+                return None
+
+        def _months_in_span(sd: datetime, ed: datetime) -> list:
+            if ed < sd:
+                sd, ed = ed, sd
+            out = []
+            y, m = sd.year, sd.month
+            while (y, m) <= (ed.year, ed.month):
+                out.append((y, m))
+                m += 1
+                if m > 12:
+                    m, y = 1, y + 1
+            return out
+
+        def _default_span(now_dt: datetime) -> tuple:
+            sd = datetime(now_dt.year, now_dt.month, 1)
+            tm = now_dt.year * 12 + (now_dt.month - 1) + DEFAULT_AVG_DURATION_MONTHS - 1
+            return sd, datetime(tm // 12, (tm % 12) + 1, 1)
+
+        # Time-phase each project's real budget as a straight-line curve across real
+        # dates — the standard way to build a Planned Value curve without a fully
+        # cost-loaded schedule. Tasks with an explicit budget (set in the Scheduling
+        # module) spread that amount evenly across their own planned_start..planned_end
+        # span. Whatever's left of the project's total budget (tasks rarely account for
+        # 100% of it — there's always contingency/overhead) spreads evenly across the
+        # widest known real timeframe for that project, so it's always attributed to
+        # real dates rather than silently dropped or dumped into a single month.
+        task_budget_by_month: dict = defaultdict(float)
         for p in projects_data:
-            s, e = p.get("start_date"), p.get("end_date")
-            if s and e:
-                try:
-                    sd = datetime.strptime(str(s)[:10], "%Y-%m-%d")
-                    ed = datetime.strptime(str(e)[:10], "%Y-%m-%d")
-                    durations.append(max(1, (ed.year - sd.year) * 12 + ed.month - sd.month))
-                except Exception:
-                    pass
-        avg_duration = sum(durations) / len(durations) if durations else DEFAULT_AVG_DURATION_MONTHS
-        monthly_budget_k = round(total_budget / avg_duration / 1000, 1) if total_budget else 0
+            proj_id = p.get("id")
+            total_budget_p = float(p.get("budget") or 0)
+            if total_budget_p <= 0:
+                continue
+            proj_tasks = tasks_by_project.get(proj_id, [])
 
-        # Key by (year, month) to avoid cross-year collisions
-        cost_query = supabase.table("cost_entries").select("amount,created_at")
+            explicit_tasks = [t for t in proj_tasks if float(t.get("budget") or 0) > 0 and _parse_date(t.get("planned_start"))]
+            explicit_sum = sum(float(t.get("budget") or 0) for t in explicit_tasks)
+            unallocated = max(total_budget_p - explicit_sum, 0.0)
+
+            for t in explicit_tasks:
+                sd = _parse_date(t.get("planned_start"))
+                ed = _parse_date(t.get("planned_end"))
+                span = _months_in_span(sd, ed) if ed else [(sd.year, sd.month)]
+                per_month = float(t.get("budget")) / len(span)
+                for key in span:
+                    task_budget_by_month[key] += per_month
+
+            if unallocated > 0:
+                # Use the widest real timeframe known for this project — its own
+                # start_date/end_date plus every task's dates — so a project record
+                # whose own dates are narrower than its actual task schedule (e.g. a
+                # placeholder date range) doesn't cram the whole remainder into one
+                # month either.
+                task_dates = [d for t in proj_tasks for d in (_parse_date(t.get("planned_start")), _parse_date(t.get("planned_end"))) if d]
+                candidates = [d for d in (_parse_date(p.get("start_date")), _parse_date(p.get("end_date"))) if d] + task_dates
+                sd, ed = (min(candidates), max(candidates)) if candidates else _default_span(datetime.now())
+                span = _months_in_span(sd, ed)
+                per_month = unallocated / len(span)
+                for key in span:
+                    task_budget_by_month[key] += per_month
+
+        # Key by (year, month) to avoid cross-year collisions. Bucket by the entry's
+        # real transaction date (date, falling back to entry_date), never created_at —
+        # created_at is just when the row was inserted (e.g. a bulk seed/import), which
+        # can silently misplace real spend into the wrong month (see kpi_daily_snapshots
+        # migration for the same class of bug already fixed on the KPI trend charts).
+        cost_query = supabase.table("cost_entries").select("amount,date,entry_date")
         if pid:
             cost_query = cost_query.eq("project_id", pid)
         cost_res = cost_query.execute()
         month_actuals: dict = defaultdict(float)
         for c in (cost_res.data or []):
-            created = c.get("created_at")
-            if created:
+            spent_on = c.get("date") or c.get("entry_date")
+            if spent_on:
                 try:
-                    dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+                    dt = datetime.strptime(str(spent_on)[:10], "%Y-%m-%d")
                     month_actuals[(dt.year, dt.month)] += float(c.get("amount", 0)) / 1000
                 except Exception:
                     pass
@@ -427,13 +509,13 @@ def get_cost_chart(
         month_keys = _month_span(start_date, end_date) if (start_date and end_date) else None
         if month_keys is None:
             n = max(1, min(months or CHART_LOOKBACK_MONTHS, _MAX_RANGE_MONTHS))
-            month_keys = _months_back(n, now_dt, include_current=False)
+            month_keys = _months_back(n, now_dt, include_current=True)
 
         multi_year = len(month_keys) > 12
         result = [
             {
                 "month": _month_label(y, m, multi_year),
-                "budget": monthly_budget_k,
+                "budget": round(task_budget_by_month.get((y, m), 0) / 1000, 1),
                 "actual": round(month_actuals.get((y, m), 0), 1),
             }
             for (y, m) in month_keys

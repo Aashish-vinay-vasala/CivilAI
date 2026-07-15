@@ -286,13 +286,28 @@ _TYPE_COLORS = {
     "IfcWall": "#334155", "IfcWallStandardCase": "#334155",
     "IfcSlab": "#1e293b", "IfcColumn": "#475569", "IfcBeam": "#64748b",
     "IfcDoor": "#f59e0b", "IfcWindow": "#3b82f6",
-    "IfcRoof": "#0f172a", "IfcStair": "#94a3b8",
+    "IfcRoof": "#0f172a", "IfcStair": "#94a3b8", "IfcSpace": "#14b8a6",
 }
 _MESH_TYPES = list(_TYPE_COLORS.keys())
+_MAX_MESHES_PER_TYPE = 2000  # per-type cap so large models (e.g. fallback demo buildings) aren't silently truncated
+
+
+def _mesh_defaults(element_type: str) -> tuple:
+    """(transparent, opacity) defaults for a mesh type — windows and spaces render
+    see-through so structural elements behind them stay visible."""
+    if element_type == "IfcWindow":
+        return True, 0.4
+    if element_type == "IfcSpace":
+        return True, 0.15
+    return False, 1.0
 
 
 def _extract_geom_meshes(ifc) -> list:
-    """Extract real triangle meshes via ifcopenshell.geom.create_shape."""
+    """Extract real triangle meshes via ifcopenshell.geom.create_shape. Falls back to an
+    approximate placement-based box per element (rather than skipping it) when the real
+    shape fails to build, so one element's failed boolean geometry doesn't silently drop
+    it — and its whole type bucket, if every element of that type happens to fail — from
+    the viewer."""
     sfm = _build_storey_floor_map(ifc)
     settings = ifcopenshell.geom.settings()
     for flag in ("USE_WORLD_COORDS", "WELD_VERTICES"):
@@ -303,32 +318,51 @@ def _extract_geom_meshes(ifc) -> list:
 
     meshes = []
     for element_type in _MESH_TYPES:
-        for element in ifc.by_type(element_type)[:50]:
+        mesh_type = element_type.replace("IfcWallStandardCase", "IfcWall")
+        transparent, opacity = _mesh_defaults(element_type)
+        for element in ifc.by_type(element_type)[:_MAX_MESHES_PER_TYPE]:
             try:
                 shape = ifcopenshell.geom.create_shape(settings, element)
                 geo = shape.geometry
                 verts = list(geo.verts)
                 faces = list(geo.faces)
                 if not verts or not faces:
-                    continue
+                    raise ValueError("empty geometry")
                 # IFC (East, North, Up) → Three.js (East, Up, South)
                 vertices = [
                     [round(verts[i], 4), round(verts[i + 2], 4), round(verts[i + 1], 4)]
                     for i in range(0, len(verts), 3)
                 ]
                 meshes.append({
-                    "type": element_type.replace("IfcWallStandardCase", "IfcWall"),
+                    "type": mesh_type,
                     "id": element.GlobalId,
                     "name": element.Name or element_type,
                     "vertices": vertices,
                     "faces": faces,
                     "color": _TYPE_COLORS.get(element_type, "#334155"),
                     "floor": _floor_idx(element, sfm),
-                    "transparent": element_type == "IfcWindow",
-                    "opacity": 0.4 if element_type == "IfcWindow" else 1.0,
+                    "transparent": transparent,
+                    "opacity": opacity,
                 })
             except Exception:
-                logger.debug("Skipped mesh %s %s", element_type, getattr(element, "GlobalId", "?"))
+                geom = extract_element_geometry(element)
+                if not geom:
+                    logger.debug("Skipped mesh %s %s", element_type, getattr(element, "GlobalId", "?"))
+                    continue
+                px, py, pz = geom["position"]
+                w, h, d = geom["dimensions"]
+                verts_box, faces_box = _box_mesh(px, py, pz, w, h, d)
+                meshes.append({
+                    "type": mesh_type,
+                    "id": element.GlobalId,
+                    "name": element.Name or element_type,
+                    "vertices": verts_box,
+                    "faces": faces_box,
+                    "color": _TYPE_COLORS.get(element_type, "#334155"),
+                    "floor": _floor_idx(element, sfm),
+                    "transparent": transparent,
+                    "opacity": opacity,
+                })
     return meshes
 
 
@@ -351,7 +385,8 @@ def _extract_placement_meshes(ifc) -> list:
     sfm = _build_storey_floor_map(ifc)
     meshes = []
     for element_type, color in _TYPE_COLORS.items():
-        for element in ifc.by_type(element_type)[:50]:
+        transparent, opacity = _mesh_defaults(element_type)
+        for element in ifc.by_type(element_type)[:_MAX_MESHES_PER_TYPE]:
             try:
                 geom = extract_element_geometry(element)
                 if not geom:
@@ -367,8 +402,8 @@ def _extract_placement_meshes(ifc) -> list:
                     "faces": faces,
                     "color": color,
                     "floor": _floor_idx(element, sfm),
-                    "transparent": element_type == "IfcWindow",
-                    "opacity": 0.4 if element_type == "IfcWindow" else 1.0,
+                    "transparent": transparent,
+                    "opacity": opacity,
                 })
             except Exception:
                 continue

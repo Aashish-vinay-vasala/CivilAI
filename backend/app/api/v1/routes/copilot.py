@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File, Form
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, field_validator
-from app.ai.copilot import get_copilot_response, get_copilot_response_stream, analyze_project_data
+from app.ai.copilot import get_copilot_response, get_copilot_response_stream
 from app.ai.chatbot_memory import get_history, add_message, clear_session
 from app.ai.memory_mem0 import mem0_context, mem0_add
 from app.ai.memory_zep import zep_context, zep_add_messages
@@ -54,16 +54,6 @@ class ChatResponse(BaseModel):
     status: str = "success"
     warnings: list[str] = []
     sources: list[Source] = []
-
-
-class CompareItem(BaseModel):
-    name: str
-    data: dict
-
-
-class CompareRequest(BaseModel):
-    context: str = "Risk Analysis"
-    items: list[CompareItem]
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -469,32 +459,6 @@ async def upload_and_chat(
 
     sources = filter_cited_sources(safe_response, web_results)
     return ChatResponse(response=safe_response, session_id=sid, status="success", warnings=warnings, sources=sources)
-
-
-@router.post("/compare", response_model=ChatResponse)
-async def compare_items(request: Request, payload: CompareRequest):
-    """Real LLM-generated comparison narrative across 2+ items (projects, GNN runs, etc.)
-    supplied as structured data — not free-form user text, so this skips the chat
-    guardrail/session pipeline and calls the model directly."""
-    ip = request.client.host if request.client else "unknown"
-    if len(payload.items) < 2:
-        raise HTTPException(status_code=400, detail="Need at least 2 items to compare")
-
-    comparison_data = {item.name: item.data for item in payload.items}
-    question = (
-        f"Compare these {len(payload.items)} {payload.context} results side by side. "
-        "Identify the biggest differences between them, state clearly which is highest-risk and why, "
-        "and give 2-3 concrete, prioritized recommendations based on the comparison."
-    )
-
-    try:
-        raw_response = analyze_project_data(comparison_data, question)
-    except RuntimeError as exc:
-        logger.error("Compare error | ip=%s | error=%s", ip, exc)
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    safe_response, _ = validate_output(raw_response, context=question)
-    return ChatResponse(response=safe_response, status="success")
 
 
 @router.get("/health")

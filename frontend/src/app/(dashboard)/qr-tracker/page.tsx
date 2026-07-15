@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { QrCode, Plus, X, Download, Scan, Package, Wrench, Loader2, Check } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { QrCode, Plus, X, Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
+import { glassInputClass, glassInputStyle, gradientButtonStyle } from "@/lib/theme";
 
 interface QRItem {
   id: string;
@@ -35,10 +35,8 @@ const CATEGORY_STYLES = {
 const STATUS_STYLES = {
   active:      "bg-emerald-500/10 text-emerald-400",
   maintenance: "bg-amber-500/10 text-amber-400",
-  retired:     "bg-gray-500/10 text-gray-400",
+  retired:     "bg-white/10 text-white/40",
 };
-
-const inputClass = "w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500";
 
 function QRCanvas({ data, size = 120 }: { data: string; size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -124,24 +122,29 @@ export default function QRTrackerPage() {
 
   return (
     <div className="space-y-6">
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-4xl font-bold text-foreground">QR Code Tracker</h1>
-          <p className="text-muted-foreground text-sm mt-1">Track equipment, materials & tools with QR codes</p>
+          <h1 className="text-4xl font-bold text-white tracking-tight">QR Code Tracker</h1>
+          <p className="text-white/35 text-[13px] mt-1">Track equipment, materials &amp; tools with QR codes</p>
         </div>
         <button onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium">
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white whitespace-nowrap transition-all hover:scale-105"
+          style={gradientButtonStyle}>
           <Plus className="w-4 h-4" /> New QR Item
         </button>
       </motion.div>
 
       {/* Filter */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-0.5 p-1 rounded-xl w-fit flex-wrap"
+        style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
         {["all","equipment","material","tool","area"].map((cat) => (
           <button key={cat} onClick={() => setFilterCat(cat)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium capitalize transition-colors ${
-              filterCat === cat ? "gradient-blue text-white" : "bg-secondary text-muted-foreground hover:text-foreground"
-            }`}>{cat}</button>
+            className="px-3.5 py-1.5 rounded-lg text-[13px] font-medium capitalize whitespace-nowrap transition-colors"
+            style={filterCat === cat
+              ? { background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)", color: "#00D4FF" }
+              : { border: "1px solid transparent", color: "rgba(255,255,255,0.4)" }}>
+            {cat}
+          </button>
         ))}
       </div>
 
@@ -149,12 +152,12 @@ export default function QRTrackerPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {filtered.map((item, i) => (
           <motion.div key={item.id} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: i * 0.04 }}
-            className="bg-card border border-border rounded-2xl p-4 cursor-pointer hover:border-blue-500/30 transition-all"
+            className="glass-card p-4 cursor-pointer hover:border-cyan-500/30 transition-all"
             onClick={() => setSelectedItem(item)}>
             <div className="flex items-start justify-between mb-3">
               <div>
-                <p className="text-sm font-medium text-foreground">{item.name}</p>
-                {item.location && <p className="text-xs text-muted-foreground mt-0.5">{item.location}</p>}
+                <p className="text-sm font-medium text-white">{item.name}</p>
+                {item.location && <p className="text-xs text-white/35 mt-0.5">{item.location}</p>}
               </div>
               <span className={`text-xs px-2 py-0.5 rounded-full ${CATEGORY_STYLES[item.category]}`}>{item.category}</span>
             </div>
@@ -164,7 +167,7 @@ export default function QRTrackerPage() {
               <div className="text-right">
                 <span className={`text-xs px-2 py-0.5 rounded-full block mb-2 ${STATUS_STYLES[item.status]}`}>{item.status}</span>
                 <button onClick={(e) => { e.stopPropagation(); downloadQR(item); }}
-                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+                  className="text-xs text-white/35 hover:text-white flex items-center gap-1 transition-colors">
                   <Download className="w-3 h-3" /> Save QR
                 </button>
               </div>
@@ -177,26 +180,34 @@ export default function QRTrackerPage() {
       <AnimatePresence>
         {selectedItem && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4"
             onClick={() => setSelectedItem(null)}>
-            <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
+            <motion.div initial={{ scale: 0.94, opacity: 0, y: 12 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0, y: 12 }}
+              transition={{ type: "spring", stiffness: 300, damping: 28 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm">
+              className="w-full max-w-sm rounded-2xl p-6"
+              style={{
+                background: "rgba(4,11,25,0.92)",
+                border: "1px solid rgba(0,212,255,0.15)",
+                boxShadow: "0 0 60px rgba(0,0,0,0.7), 0 0 30px rgba(0,212,255,0.06)",
+                backdropFilter: "blur(32px)",
+              }}>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-foreground">{selectedItem.name}</h3>
-                <button onClick={() => setSelectedItem(null)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+                <h3 className="font-semibold text-white text-[15px]">{selectedItem.name}</h3>
+                <button onClick={() => setSelectedItem(null)} className="text-white/25 hover:text-white/60 transition-colors"><X className="w-4 h-4" /></button>
               </div>
               <div className="flex justify-center mb-4">
                 <QRCanvas data={selectedItem.qr_data} size={160} />
               </div>
               <div className="space-y-2 text-sm mb-4">
-                <div className="flex justify-between"><span className="text-muted-foreground">Category</span><span className={`text-xs px-2 py-0.5 rounded-full ${CATEGORY_STYLES[selectedItem.category]}`}>{selectedItem.category}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Status</span><span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_STYLES[selectedItem.status]}`}>{selectedItem.status}</span></div>
-                {selectedItem.location && <div className="flex justify-between"><span className="text-muted-foreground">Location</span><span className="text-foreground">{selectedItem.location}</span></div>}
-                <div className="flex justify-between"><span className="text-muted-foreground">QR Data</span><span className="text-xs font-mono text-muted-foreground truncate ml-4">{selectedItem.qr_data}</span></div>
+                <div className="flex justify-between"><span className="text-white/35">Category</span><span className={`text-xs px-2 py-0.5 rounded-full ${CATEGORY_STYLES[selectedItem.category]}`}>{selectedItem.category}</span></div>
+                <div className="flex justify-between"><span className="text-white/35">Status</span><span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_STYLES[selectedItem.status]}`}>{selectedItem.status}</span></div>
+                {selectedItem.location && <div className="flex justify-between"><span className="text-white/35">Location</span><span className="text-white">{selectedItem.location}</span></div>}
+                <div className="flex justify-between"><span className="text-white/35">QR Data</span><span className="text-xs font-mono text-white/35 truncate ml-4">{selectedItem.qr_data}</span></div>
               </div>
               <button onClick={() => downloadQR(selectedItem)}
-                className="w-full py-2 rounded-xl bg-secondary text-foreground text-sm flex items-center justify-center gap-2 hover:bg-secondary/80">
+                className="w-full py-2 rounded-xl text-white text-sm flex items-center justify-center gap-2 transition-colors hover:bg-white/6"
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
                 <Download className="w-4 h-4" /> Download QR Code
               </button>
             </motion.div>
@@ -208,26 +219,37 @@ export default function QRTrackerPage() {
       <AnimatePresence>
         {showCreate && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
-              className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm">
+            className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <motion.div initial={{ scale: 0.94, opacity: 0, y: 12 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0, y: 12 }}
+              transition={{ type: "spring", stiffness: 300, damping: 28 }}
+              className="w-full max-w-sm rounded-2xl p-6"
+              style={{
+                background: "rgba(4,11,25,0.92)",
+                border: "1px solid rgba(0,212,255,0.15)",
+                boxShadow: "0 0 60px rgba(0,0,0,0.7), 0 0 30px rgba(0,212,255,0.06)",
+                backdropFilter: "blur(32px)",
+              }}>
               <div className="flex items-center justify-between mb-5">
-                <h3 className="font-semibold text-foreground">New QR Item</h3>
-                <button onClick={() => setShowCreate(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+                <h3 className="font-semibold text-white text-[15px]">New QR Item</h3>
+                <button onClick={() => setShowCreate(false)} className="text-white/25 hover:text-white/60 transition-colors"><X className="w-4 h-4" /></button>
               </div>
               <div className="space-y-3">
-                <div><label className="text-xs text-muted-foreground mb-1 block">Name *</label><input className={inputClass} placeholder="e.g. Excavator EX-01" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} /></div>
-                <div><label className="text-xs text-muted-foreground mb-1 block">Category</label>
-                  <select className={inputClass} value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value as QRItem["category"] }))}>
+                <div><label className="text-xs text-white/35 mb-1 block">Name *</label><input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Excavator EX-01" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} /></div>
+                <div><label className="text-xs text-white/35 mb-1 block">Category</label>
+                  <select className={glassInputClass} style={glassInputStyle} value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value as QRItem["category"] }))}>
                     {["equipment","material","tool","area"].map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
-                <div><label className="text-xs text-muted-foreground mb-1 block">Location</label><input className={inputClass} placeholder="e.g. Site Zone A" value={form.location} onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))} /></div>
-                <div><label className="text-xs text-muted-foreground mb-1 block">Notes</label><textarea className={inputClass} rows={2} placeholder="Additional notes…" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} /></div>
+                <div><label className="text-xs text-white/35 mb-1 block">Location</label><input className={glassInputClass} style={glassInputStyle} placeholder="e.g. Site Zone A" value={form.location} onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))} /></div>
+                <div><label className="text-xs text-white/35 mb-1 block">Notes</label><textarea className={glassInputClass} style={glassInputStyle} rows={2} placeholder="Additional notes…" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} /></div>
               </div>
               <div className="flex gap-3 mt-5">
-                <button onClick={() => setShowCreate(false)} className="flex-1 py-2 rounded-xl bg-secondary text-muted-foreground text-sm">Cancel</button>
-                <button onClick={handleCreate} disabled={saving} className="flex-1 py-2 rounded-xl gradient-blue text-white text-sm flex items-center justify-center gap-2">
+                <button onClick={() => setShowCreate(false)}
+                  className="flex-1 py-2 rounded-xl text-white/70 hover:text-white text-sm transition-colors"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)" }}>Cancel</button>
+                <button onClick={handleCreate} disabled={saving}
+                  className="flex-1 py-2 rounded-xl text-white text-sm flex items-center justify-center gap-2 transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100"
+                  style={gradientButtonStyle}>
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />} Generate QR
                 </button>
               </div>

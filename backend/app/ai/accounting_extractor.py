@@ -1326,6 +1326,17 @@ def build_project_accounting_summary(project_id: str) -> dict:
     try:
         from app.services.db_service import supabase
 
+        # Canonical project budget — same source as /dashboard, /live-actuals, and
+        # db_service.get_projects(). financial_budget_items (below) is an itemized,
+        # independently-imported breakdown that can drift from this figure, so it
+        # must never be used for the headline "Total Budget" number.
+        try:
+            proj_res = supabase.table("projects").select("budget").eq("id", project_id).single().execute()
+            canonical_budget = float((proj_res.data or {}).get("budget") or 0)
+        except Exception as exc:
+            logger.debug("project budget fetch skipped: %s", exc)
+            canonical_budget = 0.0
+
         # Invoices
         try:
             inv_res = supabase.table("invoices").select(
@@ -1423,12 +1434,13 @@ def build_project_accounting_summary(project_id: str) -> dict:
         except Exception as exc:
             logger.debug("accounting records summary skipped: %s", exc)
 
-        # Compute derived totals
-        budget_mod = summary["modules"].get("budget", {})
+        # Compute derived totals — original_budget uses the canonical projects.budget
+        # figure (matches Dashboard's "Total Budget" tile exactly); total_spent uses
+        # cost_entries, the same canonical direct-cost source /dashboard uses.
         invoice_mod = summary["modules"].get("invoices", {})
         cost_mod = summary["modules"].get("cost_entries", {})
 
-        original_budget = budget_mod.get("original_budget", 0)
+        original_budget = canonical_budget
         total_spent = cost_mod.get("total_spent", 0)
         total_invoiced = invoice_mod.get("total_amount", 0)
 
@@ -1452,8 +1464,9 @@ def build_project_accounting_summary(project_id: str) -> dict:
 
 def reconcile_project_invoices(project_id: str) -> dict:
     """
-    Cross-reference payment invoices against financial_budget_items and cost_entries.
-    Identifies: unmatched invoices, duplicates, overpayments, and budget overruns.
+    Cross-reference payment invoices against contracts, budget items, and
+    cost entries. Identifies: invoices with no contract on file, duplicate
+    amounts, and budget overruns.
     """
     result: dict = {
         "project_id":       project_id,
@@ -1472,25 +1485,31 @@ def reconcile_project_invoices(project_id: str) -> dict:
         ).eq("project_id", project_id).execute()
         invoices = inv_res.data or []
 
-        cost_res = supabase.table("cost_entries").select(
-            "id,amount,description,category,created_at"
-        ).eq("project_id", project_id).execute()
-        cost_entries = cost_res.data or []
-
         budget_res = supabase.table("financial_budget_items").select(
             "code,description,original_budget,committed_costs,direct_costs"
         ).eq("project_id", project_id).execute()
         budget_items = budget_res.data or []
 
-        # Find invoices with no matching cost entry
-        cost_amounts = {round(float(c.get("amount") or 0), 2) for c in cost_entries}
+        contract_res = supabase.table("contracts").select("contractor").eq("project_id", project_id).execute()
+        contracted_names = {
+            (c.get("contractor") or "").strip().lower()
+            for c in (contract_res.data or [])
+            if c.get("contractor")
+        }
+
+        # Flag invoices billed by a contractor with no contract on file for this
+        # project — a standard AP control (every payment should trace back to an
+        # authorized contract). Matching invoice amounts against cost_entries amounts
+        # (the previous approach) was unreliable: the two tables track unrelated
+        # things — billed-by-contractor vs. internal cost bookings — with no shared
+        # key, so numerically-equal amounts are coincidental, not a real match.
         for inv in invoices:
-            inv_amount = round(float(inv.get("amount") or 0), 2)
-            if inv_amount not in cost_amounts:
+            contractor = (inv.get("contractor") or "").strip().lower()
+            if contractor and contractor not in contracted_names:
                 result["unmatched_invoices"].append({
                     "invoice_id":     inv.get("id"),
                     "invoice_number": inv.get("invoice_number"),
-                    "amount":         inv_amount,
+                    "amount":         round(float(inv.get("amount") or 0), 2),
                     "status":         inv.get("status"),
                     "contractor":     inv.get("contractor"),
                 })
@@ -1529,8 +1548,13 @@ def reconcile_project_invoices(project_id: str) -> dict:
         total_invoiced  = sum(float(i.get("amount") or 0) for i in invoices)
         total_received  = sum(float(i.get("amount") or 0) for i in invoices if i.get("status") == "received")
         total_overdue   = sum(float(i.get("amount") or 0) for i in invoices if i.get("status") == "overdue")
-        total_budget    = sum(float(b.get("original_budget") or 0) for b in budget_items)
-        total_committed = sum(float(b.get("committed_costs") or 0) for b in budget_items)
+
+        # Canonical sources — same as /dashboard: projects.budget for the total,
+        # obligated/unpaid invoices for committed. financial_budget_items.committed_costs
+        # is a separately-imported figure that can drift from this.
+        proj_res = supabase.table("projects").select("budget").eq("id", project_id).single().execute()
+        total_budget    = float((proj_res.data or {}).get("budget") or 0)
+        total_committed = sum(float(i.get("amount") or 0) for i in invoices if i.get("status") in ("pending", "overdue"))
 
         result["budget_status"] = {
             "total_budget":    total_budget,

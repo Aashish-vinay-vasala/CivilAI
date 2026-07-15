@@ -78,7 +78,7 @@ const MODULE_HREF: Record<string, string> = {
   cost: "/cost", budget: "/cost", schedule: "/scheduling", scheduling: "/scheduling",
   safety: "/safety", workforce: "/workforce", documents: "/documents",
   compliance: "/documents", contracts: "/documents", procurement: "/procurement",
-  equipment: "/workforce", projects: "/projects", vendors: "/workforce",
+  equipment: "/workforce", projects: "/projects", vendors: "/vendors",
   payments: "/payments", financials: "/financials",
 };
 

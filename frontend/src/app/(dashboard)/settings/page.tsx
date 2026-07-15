@@ -15,7 +15,6 @@ import {
   Users,
   Activity,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
@@ -43,9 +42,26 @@ const integrations = [
   { name: "Groq API", desc: "Primary LLM", connected: true, color: "bg-blue-500/10 text-blue-400" },
   { name: "Gemini API", desc: "Vision & Backup LLM", connected: true, color: "bg-cyan-500/10 text-cyan-400" },
   { name: "HuggingFace", desc: "Embeddings", connected: true, color: "bg-orange-500/10 text-orange-400" },
-  { name: "Procore", desc: "Project Management", connected: false, color: "bg-gray-500/10 text-gray-400" },
-  { name: "QuickBooks", desc: "Accounting", connected: false, color: "bg-gray-500/10 text-gray-400" },
+  { name: "Procore", desc: "Project Management", connected: false, color: "bg-white/5 text-white/30" },
+  { name: "QuickBooks", desc: "Accounting", connected: false, color: "bg-white/5 text-white/30" },
 ];
+
+const inputClass = [
+  "w-full px-3 py-2 rounded-xl text-sm text-white placeholder:text-white/30",
+  "outline-none transition-all",
+  "border focus:border-cyan-500/50 focus:shadow-[0_0_0_2px_rgba(0,212,255,0.08)]",
+].join(" ");
+const inputStyle = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" };
+
+const primaryBtn =
+  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
+const primaryBtnStyle = {
+  background: "linear-gradient(135deg, rgba(0,212,255,0.25), rgba(0,100,160,0.2))",
+  border: "1px solid rgba(0,212,255,0.3)",
+};
+const ghostBtn =
+  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-white/50 hover:text-white/80 transition-colors";
+const ghostBtnStyle = { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" };
 
 const ALL_ROLES: UserRole[] = ["admin", "pm", "engineer", "viewer"];
 
@@ -76,23 +92,22 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-4xl font-bold text-foreground">Settings</h1>
-        <p className="text-muted-foreground text-sm mt-1">Manage your account & preferences</p>
+        <h1 className="text-4xl font-bold text-white tracking-tight">Settings</h1>
+        <p className="text-white/35 text-[13px] mt-1">Manage your account & preferences</p>
       </motion.div>
 
       <div className="flex flex-col sm:flex-row gap-6">
         {/* Sidebar Tabs */}
         <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="w-full sm:w-48 shrink-0">
-          <div className="bg-card border border-border rounded-2xl p-2 flex sm:flex-col flex-row flex-wrap gap-1">
+          <div className="glass-card p-2 flex sm:flex-col flex-row flex-wrap gap-1">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-colors whitespace-nowrap ${
-                  activeTab === tab.id
-                    ? "bg-blue-500/10 text-blue-400 font-medium"
-                    : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-                }`}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-colors whitespace-nowrap font-medium"
+                style={activeTab === tab.id
+                  ? { background: "rgba(0,212,255,0.12)", color: "#00D4FF" }
+                  : { color: "rgba(255,255,255,0.4)" }}
               >
                 <tab.icon className="w-4 h-4 shrink-0" />
                 <span className="hidden sm:inline">{tab.label}</span>
@@ -106,15 +121,15 @@ export default function SettingsPage() {
 
           {/* Profile */}
           {activeTab === "profile" && (
-            <div className="bg-card border border-border rounded-2xl p-6 space-y-6">
-              <h2 className="font-semibold text-foreground">Profile Settings</h2>
+            <div className="glass-card p-6 space-y-6">
+              <h2 className="font-semibold text-white">Profile Settings</h2>
               <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-2xl gradient-blue flex items-center justify-center text-white text-xl font-bold shrink-0">
+                <div className="w-16 h-16 rounded-2xl gradient-cyan flex items-center justify-center text-white text-xl font-bold shrink-0">
                   CA
                 </div>
                 <div>
-                  <p className="font-medium text-foreground">{profile.name}</p>
-                  <p className="text-sm text-muted-foreground">{profile.role}</p>
+                  <p className="font-medium text-white">{profile.name}</p>
+                  <p className="text-sm text-white/35">{profile.role}</p>
                   <span className={`inline-flex items-center mt-1 text-xs px-2 py-0.5 rounded-full border font-medium ${ROLE_COLORS[role]}`}>
                     {ROLE_LABELS[role]}
                   </span>
@@ -129,51 +144,51 @@ export default function SettingsPage() {
                   { label: "Phone", key: "phone" },
                 ].map((field) => (
                   <div key={field.key}>
-                    <label className="text-xs text-muted-foreground mb-1.5 block">{field.label}</label>
+                    <label className="text-xs text-white/35 mb-1.5 block">{field.label}</label>
                     <input
                       value={profile[field.key as keyof typeof profile]}
                       onChange={(e) => setProfile({ ...profile, [field.key]: e.target.value })}
-                      className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className={inputClass}
+                      style={inputStyle}
                     />
                   </div>
                 ))}
               </div>
-              <Button onClick={handleSave} disabled={saving} className="gradient-blue text-white border-0">
-                {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+              <button onClick={handleSave} disabled={saving} className={primaryBtn} style={primaryBtnStyle}>
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 Save Changes
-              </Button>
+              </button>
             </div>
           )}
 
           {/* Roles */}
           {activeTab === "roles" && (
-            <div className="bg-card border border-border rounded-2xl p-6 space-y-6">
+            <div className="glass-card p-6 space-y-6">
               <div>
-                <h2 className="font-semibold text-foreground">User Role</h2>
-                <p className="text-sm text-muted-foreground mt-1">Select your role to configure permissions</p>
+                <h2 className="font-semibold text-white">User Role</h2>
+                <p className="text-sm text-white/35 mt-1">Select your role to configure permissions</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {ALL_ROLES.map((r) => (
                   <button
                     key={r}
                     onClick={() => { setRole(r); toast.success(`Role changed to ${ROLE_LABELS[r]}`); }}
-                    className={`p-4 rounded-xl border text-left transition-all ${
-                      role === r
-                        ? "border-blue-500 bg-blue-500/5"
-                        : "border-border hover:border-border/80 hover:bg-secondary/50"
-                    }`}
+                    className={`p-4 rounded-xl border text-left transition-all ${role === r ? "" : "hover:bg-white/5"}`}
+                    style={role === r
+                      ? { borderColor: "rgba(0,212,255,0.4)", background: "rgba(0,212,255,0.06)" }
+                      : { borderColor: "rgba(255,255,255,0.08)" }}
                   >
                     <div className="flex items-center justify-between mb-2">
                       <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${ROLE_COLORS[r]}`}>
                         {ROLE_LABELS[r]}
                       </span>
-                      {role === r && <CheckCircle className="w-4 h-4 text-blue-400" />}
+                      {role === r && <CheckCircle className="w-4 h-4 text-cyan-400" />}
                     </div>
                     <div className="mt-2 space-y-1">
                       {Object.entries(ROLE_PERMISSIONS[r]).map(([k, v]) => (
                         <div key={k} className="flex items-center gap-2">
-                          <div className={`w-1.5 h-1.5 rounded-full ${v ? "bg-emerald-400" : "bg-gray-600"}`} />
-                          <span className="text-xs text-muted-foreground capitalize">
+                          <div className={`w-1.5 h-1.5 rounded-full ${v ? "bg-emerald-400" : "bg-white/15"}`} />
+                          <span className="text-xs text-white/35 capitalize">
                             {k.replace(/([A-Z])/g, " $1").replace("can ", "")}
                           </span>
                         </div>
@@ -187,8 +202,8 @@ export default function SettingsPage() {
 
           {/* Notifications */}
           {activeTab === "notifications" && (
-            <div className="bg-card border border-border rounded-2xl p-6 space-y-6">
-              <h2 className="font-semibold text-foreground">Notification Preferences</h2>
+            <div className="glass-card p-6 space-y-6">
+              <h2 className="font-semibold text-white">Notification Preferences</h2>
               <div className="space-y-4">
                 {[
                   { label: "Cost overrun alerts", desc: "Get notified when budget exceeds threshold" },
@@ -198,16 +213,18 @@ export default function SettingsPage() {
                   { label: "Weekly reports", desc: "Auto-generated weekly summary" },
                   { label: "AI insights", desc: "New AI recommendations available" },
                 ].map((item, i) => (
-                  <div key={i} className="flex items-center justify-between p-4 bg-secondary/40 rounded-xl">
+                  <div key={i} className="flex items-center justify-between p-4 rounded-xl"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
                     <div>
-                      <p className="text-sm font-medium text-foreground">{item.label}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">{item.desc}</p>
+                      <p className="text-sm font-medium text-white">{item.label}</p>
+                      <p className="text-xs text-white/35 mt-0.5">{item.desc}</p>
                     </div>
                     <button
                       onClick={() => setNotifToggles((t) => t.map((v, j) => j === i ? !v : v))}
-                      className={`w-10 h-6 rounded-full transition-colors relative ${
-                        notifToggles[i] ? "bg-blue-500" : "bg-secondary border border-border"
-                      }`}
+                      className="w-10 h-6 rounded-full transition-colors relative"
+                      style={notifToggles[i]
+                        ? { background: "#00D4FF" }
+                        : { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)" }}
                     >
                       <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${
                         notifToggles[i] ? "translate-x-5" : "translate-x-1"
@@ -225,34 +242,35 @@ export default function SettingsPage() {
 
           {/* Security */}
           {activeTab === "security" && (
-            <div className="bg-card border border-border rounded-2xl p-6 space-y-6">
-              <h2 className="font-semibold text-foreground">Security Settings</h2>
+            <div className="glass-card p-6 space-y-6">
+              <h2 className="font-semibold text-white">Security Settings</h2>
               <div className="space-y-4">
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1.5 block">Current Password</label>
-                  <input type="password" placeholder="••••••••" className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <label className="text-xs text-white/35 mb-1.5 block">Current Password</label>
+                  <input type="password" placeholder="••••••••" className={inputClass} style={inputStyle} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1.5 block">New Password</label>
-                  <input type="password" placeholder="••••••••" className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <label className="text-xs text-white/35 mb-1.5 block">New Password</label>
+                  <input type="password" placeholder="••••••••" className={inputClass} style={inputStyle} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground mb-1.5 block">Confirm Password</label>
-                  <input type="password" placeholder="••••••••" className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <label className="text-xs text-white/35 mb-1.5 block">Confirm Password</label>
+                  <input type="password" placeholder="••••••••" className={inputClass} style={inputStyle} />
                 </div>
-                <Button onClick={handleSave} disabled={saving} className="gradient-blue text-white border-0">
-                  {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Shield className="w-4 h-4 mr-2" />}
+                <button onClick={handleSave} disabled={saving} className={primaryBtn} style={primaryBtnStyle}>
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
                   Update Password
-                </Button>
+                </button>
               </div>
-              <div className="border-t border-border pt-4">
-                <h3 className="font-medium text-foreground mb-3">Two-Factor Authentication</h3>
-                <div className="flex items-center justify-between p-4 bg-secondary/40 rounded-xl">
+              <div className="pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                <h3 className="font-medium text-white mb-3">Two-Factor Authentication</h3>
+                <div className="flex items-center justify-between p-4 rounded-xl"
+                  style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
                   <div>
-                    <p className="text-sm font-medium text-foreground">Enable 2FA</p>
-                    <p className="text-xs text-muted-foreground">Add extra security to your account</p>
+                    <p className="text-sm font-medium text-white">Enable 2FA</p>
+                    <p className="text-xs text-white/35">Add extra security to your account</p>
                   </div>
-                  <Button variant="outline" size="sm">Enable</Button>
+                  <button className={ghostBtn} style={ghostBtnStyle}>Enable</button>
                 </div>
               </div>
             </div>
@@ -260,20 +278,19 @@ export default function SettingsPage() {
 
           {/* Appearance */}
           {activeTab === "appearance" && (
-            <div className="bg-card border border-border rounded-2xl p-6 space-y-6">
-              <h2 className="font-semibold text-foreground">Appearance</h2>
+            <div className="glass-card p-6 space-y-6">
+              <h2 className="font-semibold text-white">Appearance</h2>
               <div>
-                <p className="text-sm text-muted-foreground mb-3">Theme</p>
+                <p className="text-sm text-white/35 mb-3">Theme</p>
                 <div className="grid grid-cols-3 gap-3">
                   {["dark", "light", "system"].map((t) => (
                     <button
                       key={t}
                       onClick={() => setTheme(t)}
-                      className={`p-4 rounded-xl border text-sm font-medium capitalize transition-colors ${
-                        theme === t
-                          ? "border-blue-500 bg-blue-500/10 text-blue-400"
-                          : "border-border text-muted-foreground hover:text-foreground"
-                      }`}
+                      className={`p-4 rounded-xl border text-sm font-medium capitalize transition-colors ${theme === t ? "" : "hover:text-white"}`}
+                      style={theme === t
+                        ? { borderColor: "rgba(0,212,255,0.4)", background: "rgba(0,212,255,0.1)", color: "#00D4FF" }
+                        : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.35)" }}
                     >
                       {t === "dark" ? "🌙" : t === "light" ? "☀️" : "💻"} {t}
                     </button>
@@ -281,13 +298,13 @@ export default function SettingsPage() {
                 </div>
               </div>
               <div>
-                <p className="text-sm text-muted-foreground mb-3">Accent Color</p>
+                <p className="text-sm text-white/35 mb-3">Accent Color</p>
                 <div className="flex gap-3">
-                  {["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ef4444"].map((color) => (
+                  {["#00D4FF", "#10b981", "#8b5cf6", "#f59e0b", "#ef4444"].map((color) => (
                     <button
                       key={color}
-                      className="w-8 h-8 rounded-full border-2 border-border hover:scale-110 transition-transform"
-                      style={{ backgroundColor: color }}
+                      className="w-8 h-8 rounded-full border-2 hover:scale-110 transition-transform"
+                      style={{ backgroundColor: color, borderColor: "rgba(255,255,255,0.15)" }}
                     />
                   ))}
                 </div>
@@ -297,18 +314,19 @@ export default function SettingsPage() {
 
           {/* Integrations */}
           {activeTab === "integrations" && (
-            <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
-              <h2 className="font-semibold text-foreground">Integrations</h2>
+            <div className="glass-card p-6 space-y-4">
+              <h2 className="font-semibold text-white">Integrations</h2>
               <div className="space-y-3">
                 {integrations.map((integration, i) => (
-                  <div key={i} className="flex items-center justify-between p-4 bg-secondary/40 rounded-xl">
+                  <div key={i} className="flex items-center justify-between p-4 rounded-xl"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
                     <div className="flex items-center gap-3">
                       <div className={`w-9 h-9 rounded-xl ${integration.color} flex items-center justify-center text-xs font-bold`}>
                         {integration.name[0]}
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-foreground">{integration.name}</p>
-                        <p className="text-xs text-muted-foreground">{integration.desc}</p>
+                        <p className="text-sm font-medium text-white">{integration.name}</p>
+                        <p className="text-xs text-white/35">{integration.desc}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -318,7 +336,7 @@ export default function SettingsPage() {
                           <span className="text-xs text-emerald-400">Connected</span>
                         </>
                       ) : (
-                        <Button variant="outline" size="sm">Connect</Button>
+                        <button className={ghostBtn} style={ghostBtnStyle}>Connect</button>
                       )}
                     </div>
                   </div>
@@ -329,8 +347,8 @@ export default function SettingsPage() {
 
           {/* API Keys */}
           {activeTab === "api" && (
-            <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
-              <h2 className="font-semibold text-foreground">API Keys</h2>
+            <div className="glass-card p-6 space-y-4">
+              <h2 className="font-semibold text-white">API Keys</h2>
               <div className="space-y-3">
                 {[
                   { name: "Groq API Key", value: "gsk_••••••••••••••••••••" },
@@ -338,13 +356,15 @@ export default function SettingsPage() {
                   { name: "Supabase URL", value: "https://••••.supabase.co" },
                   { name: "HuggingFace Token", value: "hf_••••••••••••••••••" },
                 ].map((key, i) => (
-                  <div key={i} className="p-4 bg-secondary/40 rounded-xl">
-                    <p className="text-xs text-muted-foreground mb-2">{key.name}</p>
+                  <div key={i} className="p-4 rounded-xl"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    <p className="text-xs text-white/35 mb-2">{key.name}</p>
                     <div className="flex items-center gap-2">
-                      <code className="flex-1 text-sm text-foreground font-mono bg-secondary px-3 py-2 rounded-lg truncate">
+                      <code className="flex-1 text-sm text-white font-mono px-3 py-2 rounded-lg truncate"
+                        style={{ background: "rgba(255,255,255,0.04)" }}>
                         {key.value}
                       </code>
-                      <Button variant="outline" size="sm">Edit</Button>
+                      <button className={ghostBtn} style={ghostBtnStyle}>Edit</button>
                     </div>
                   </div>
                 ))}

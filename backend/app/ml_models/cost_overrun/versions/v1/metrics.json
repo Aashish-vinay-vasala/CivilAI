@@ -1,0 +1,39 @@
+{
+  "cv_accuracy_mean": 0.8169,
+  "cv_accuracy_std": 0.0301,
+  "cv_f1_mean": 0.8207,
+  "cv_f1_std": 0.029,
+  "cv_roc_auc_mean": 0.902,
+  "cv_roc_auc_std": 0.0283,
+  "test_accuracy": 0.8344,
+  "test_f1": 0.8387,
+  "test_roc_auc": 0.9074,
+  "test_brier_score": 0.124,
+  "regression_r2_p50": 0.6702,
+  "feature_percentiles": {
+    "duration_months": [
+      6.0,
+      47.0
+    ],
+    "team_size": [
+      11.0,
+      197.01
+    ],
+    "change_orders": [
+      0.0,
+      24.0
+    ],
+    "material_price_increase": [
+      0.33,
+      39.392399999999995
+    ],
+    "weather_impact_days": [
+      0.0,
+      44.0
+    ],
+    "subcontractor_count": [
+      1.0,
+      19.0
+    ]
+  }
+}

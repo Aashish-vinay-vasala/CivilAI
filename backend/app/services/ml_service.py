@@ -353,8 +353,11 @@ async def get_safety_stats(project_id: str | None = None) -> dict:
         ppe_compliance_rate = round(max(0.0, 100 - ppe_issues / max(total, 1) * 100), 1)
 
         # --- days without incident ---
+        # Prefer the incident's own `date` (when it actually happened) over
+        # `created_at` (when the row was inserted) — for seeded/imported data
+        # those can differ by months, which throws off every date-based stat.
         date_strs = [
-            str(i.get("created_at") or i.get("date") or "")[:10]
+            str(i.get("date") or i.get("created_at") or "")[:10]
             for i in incidents
         ]
         date_strs = [d for d in date_strs if len(d) == 10]
@@ -366,13 +369,31 @@ async def get_safety_stats(project_id: str | None = None) -> dict:
             days_without_incident = 0
 
         # --- monthly incidents (last 6 months, real near-miss per month) ---
-        monthly: dict = defaultdict(lambda: {"incidents": 0, "near_miss": 0})
+        # Also tracks per-month severity/PPE/open counts so the frontend can
+        # chart real month-over-month trends for safety score, PPE compliance,
+        # and open violations — not just the incident/near-miss counts.
+        monthly: dict = defaultdict(lambda: {
+            "incidents": 0, "near_miss": 0, "high": 0, "medium": 0, "low": 0,
+            "ppe": 0, "open": 0,
+        })
         for i in incidents:
-            raw = str(i.get("created_at") or i.get("date") or "")[:7]
+            raw = str(i.get("date") or i.get("created_at") or "")[:7]
             if len(raw) == 7:
-                monthly[raw]["incidents"] += 1
+                m = monthly[raw]
+                m["incidents"] += 1
                 if _is_near_miss(i):
-                    monthly[raw]["near_miss"] += 1
+                    m["near_miss"] += 1
+                sev = str(i.get("severity") or "").lower()
+                if sev == "high":
+                    m["high"] += 1
+                elif sev == "medium":
+                    m["medium"] += 1
+                else:
+                    m["low"] += 1
+                if _matches(i, _CAT_KEYWORDS["PPE"]):
+                    m["ppe"] += 1
+                if str(i.get("status") or "").lower() in ("open", "investigating"):
+                    m["open"] += 1
 
         monthly_incidents = [
             {
@@ -381,6 +402,9 @@ async def get_safety_stats(project_id: str | None = None) -> dict:
                 "month": int(k[5:7]),
                 "incidents": v["incidents"],
                 "near_miss": v["near_miss"],
+                "safety_score": max(0.0, round(100 - v["high"] * 10 - v["medium"] * 5 - v["low"] * 2, 1)),
+                "ppe_compliance": round(max(0.0, 100 - v["ppe"] / max(v["incidents"], 1) * 100), 1),
+                "open_violations": v["open"],
             }
             for k, v in sorted(monthly.items())
         ][-6:]

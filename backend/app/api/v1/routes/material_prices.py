@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
 from pydantic import BaseModel
 
 from app.services.db_service import supabase
-from app.services.material_price_sync import sync_all_material_prices
 from app.ai.material_price_analyzer import extract_material_prices
 from app.ocr.document_processor import process_document
 
@@ -140,31 +139,20 @@ class PriceEntryUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-# A material can have two independent price series that must never be compared
-# against each other: a "quote" series (manual entries, document extraction —
-# real $/unit numbers) and an "index" series (live_sync from FRED — index points,
-# not dollar amounts). Mixing them when computing change_pct produces meaningless
-# (and previously overflow-prone) percentages. Every lookup below is scoped to one
-# basis or the other, never across both.
-
-_QUOTE_SOURCES = ("manual", "ai_extracted", "structured_parse")
-_INDEX_SOURCES = ("live_sync",)
-
-
-def _basis_for_source(source: str) -> str:
-    return "index" if source in _INDEX_SOURCES else "quote"
-
-
-def _latest_price_for(material: str, basis: str) -> Optional[float]:
-    q = supabase.table("material_prices").select("price").eq("material", material)
-    q = q.in_("source", list(_INDEX_SOURCES if basis == "index" else _QUOTE_SOURCES))
-    res = q.order("fetched_at", desc=True).limit(1).execute()
+def _latest_price_for(material: str) -> Optional[float]:
+    res = (
+        supabase.table("material_prices")
+        .select("price")
+        .eq("material", material)
+        .order("fetched_at", desc=True)
+        .limit(1)
+        .execute()
+    )
     return float(res.data[0]["price"]) if res.data else None
 
 
-# change_pct column is numeric(12,2) — cap well inside that so a scale mismatch
-# between sources (e.g. a live index-point value vs. an old $/unit manual entry
-# for the same material) can never overflow the column, no matter what gets compared.
+# change_pct column is numeric(12,2) — cap well inside that so no computed swing can
+# ever overflow the column.
 _MAX_CHANGE_PCT = 999_999.99
 
 
@@ -192,14 +180,11 @@ def list_material_prices(material: Optional[str] = Query(None), history: bool = 
 
         res = supabase.table("material_prices").select("*").order("fetched_at", desc=True).execute()
         rows = res.data or []
-        # Latest row per (material, basis) — a material can legitimately appear twice
-        # (once as a $/unit quote, once as a live market index), never conflated.
-        latest: dict[tuple, dict] = {}
+        # Latest row per material.
+        latest: dict[str, dict] = {}
         for r in rows:
-            basis = _basis_for_source(r.get("source", "manual"))
-            key = (r["material"], basis)
-            if key not in latest:
-                latest[key] = {**r, "basis": basis}
+            if r["material"] not in latest:
+                latest[r["material"]] = r
         return {"status": "success", "prices": list(latest.values())}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -208,7 +193,7 @@ def list_material_prices(material: Optional[str] = Query(None), history: bool = 
 @router.post("/")
 def create_manual_price(body: ManualPriceEntry):
     try:
-        prior = _latest_price_for(body.material, "quote")
+        prior = _latest_price_for(body.material)
         payload = {
             "material": body.material,
             "price": body.price,
@@ -237,20 +222,12 @@ def update_price_entry(entry_id: str, body: PriceEntryUpdate):
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
 
+        # An edit overwrites this row in place rather than adding a new one, so the
+        # only meaningful "before" value left to measure a swing against is whatever
+        # this row's own price was right before the edit — not some other row for
+        # the same material (which reflects a separate observation entirely).
         if "price" in updates:
-            basis = _basis_for_source(existing.get("source", "manual"))
-            predecessor_res = (
-                supabase.table("material_prices")
-                .select("price")
-                .eq("material", existing["material"])
-                .in_("source", list(_INDEX_SOURCES if basis == "index" else _QUOTE_SOURCES))
-                .lt("fetched_at", existing["fetched_at"])
-                .order("fetched_at", desc=True)
-                .limit(1)
-                .execute()
-            )
-            prior_price = float(predecessor_res.data[0]["price"]) if predecessor_res.data else None
-            updates["change_pct"] = _change_pct(updates["price"], prior_price)
+            updates["change_pct"] = _change_pct(updates["price"], existing["price"])
 
         res = supabase.table("material_prices").update(updates).eq("id", entry_id).execute()
         return {"status": "success", "entry": res.data[0] if res.data else {}}
@@ -329,7 +306,7 @@ async def import_reviewed_prices(items: str = Form(...), source: str = Form("ai_
         price = item.get("price")
         if not material or price is None:
             continue
-        prior = _latest_price_for(material, "quote")
+        prior = _latest_price_for(material)
         row = {
             "material": material,
             "price": float(price),
@@ -347,14 +324,3 @@ async def import_reviewed_prices(items: str = Form(...), source: str = Form("ai_
 
     res = supabase.table("material_prices").insert(inserted).execute()
     return {"status": "success", "imported_rows": len(res.data or inserted)}
-
-
-# ── Live market sync ────────────────────────────────────────────────────────────
-
-@router.post("/sync")
-async def sync_now():
-    try:
-        result = await sync_all_material_prices()
-        return {"status": "success", **result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

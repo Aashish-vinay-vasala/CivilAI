@@ -3,14 +3,14 @@
 import { useState, useRef, useEffect, useCallback, Suspense } from "react";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
-import { Send, Bot, User, Loader2, RefreshCw, Hash, X, FileText, Image, AudioLines, Scale, Plus, Sparkles } from "lucide-react";
+import { Send, Bot, User, Loader2, RefreshCw, Hash, X, FileText, Image, AudioLines, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import VoiceButton from "@/components/shared/VoiceButton";
 
 const WritingPage = dynamic(() => import("../writing/page"), {
   ssr: false,
-  loading: () => <div className="flex items-center justify-center h-40"><Loader2 className="w-5 h-5 animate-spin text-blue-400" /></div>,
+  loading: () => <div className="flex items-center justify-center h-40"><Loader2 className="w-5 h-5 animate-spin text-cyan-400" /></div>,
 });
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "";
@@ -18,16 +18,8 @@ const SESSION_KEY = "civilai_copilot_session";
 
 const COPILOT_TABS = [
   { id: "chat",    label: "Chat" },
-  { id: "compare", label: "Compare" },
   { id: "writing", label: "Writing Assistant" },
 ];
-
-interface CompareAttr { key: string; value: string }
-interface CompareItem { name: string; attrs: CompareAttr[] }
-
-function emptyCompareItem(label: string): CompareItem {
-  return { name: label, attrs: [{ key: "", value: "" }] };
-}
 
 const SUGGESTIONS = [
   "What are the main causes of construction delays?",
@@ -64,22 +56,24 @@ function Bubble({ msg, onFollowUp }: { msg: Message; onFollowUp?: (text: string)
       animate={{ opacity: 1, y: 0 }}
       className={cn("flex gap-3", isUser && "flex-row-reverse")}
     >
-      <div className={cn(
-        "w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5",
-        isUser ? "bg-secondary border border-border" : "gradient-blue",
-      )}>
+      <div
+        className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+        style={isUser
+          ? { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }
+          : { background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)" }}
+      >
         {isUser
-          ? <User className="w-4 h-4 text-foreground" />
-          : <Bot  className="w-4 h-4 text-white" />
+          ? <User className="w-4 h-4 text-white/70" />
+          : <Bot  className="w-4 h-4 text-cyan-400" />
         }
       </div>
       <div className="max-w-[78%] space-y-1">
-        <div className={cn(
-          "px-4 py-3 rounded-2xl text-sm leading-relaxed",
-          isUser
-            ? "gradient-blue rounded-tr-none text-white"
-            : "bg-card border border-border rounded-tl-none text-foreground",
-        )}>
+        <div
+          className={cn("px-4 py-3 rounded-2xl text-sm leading-relaxed", isUser ? "rounded-tr-none text-white" : "rounded-tl-none text-white/80")}
+          style={isUser
+            ? { background: "linear-gradient(135deg, rgba(0,212,255,0.25), rgba(0,100,160,0.2))", border: "1px solid rgba(0,212,255,0.3)" }
+            : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}
+        >
           <p className="whitespace-pre-wrap">{renderContent(msg.content)}</p>
         </div>
         {!isUser && (msg.domain || msg.confidence !== undefined) && (
@@ -99,12 +93,12 @@ function Bubble({ msg, onFollowUp }: { msg: Message; onFollowUp?: (text: string)
         {!isUser && msg.followUp && (
           <button
             onClick={() => onFollowUp?.(msg.followUp!)}
-            className="ml-1 text-xs text-blue-400 hover:text-blue-300 hover:underline text-left"
+            className="ml-1 text-xs text-cyan-400 hover:text-cyan-300 hover:underline text-left"
           >
             → {msg.followUp}
           </button>
         )}
-        <p className={cn("text-[10px] text-muted-foreground", isUser ? "text-right pr-1" : "pl-1")}>
+        <p className={cn("text-[10px] text-white/25", isUser ? "text-right pr-1" : "pl-1")}>
           {msg.timestamp}
         </p>
       </div>
@@ -115,15 +109,17 @@ function Bubble({ msg, onFollowUp }: { msg: Message; onFollowUp?: (text: string)
 function TypingDots() {
   return (
     <div className="flex gap-3">
-      <div className="w-8 h-8 rounded-full gradient-blue flex items-center justify-center shrink-0">
-        <Bot className="w-4 h-4 text-white" />
+      <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+        style={{ background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)" }}>
+        <Bot className="w-4 h-4 text-cyan-400" />
       </div>
-      <div className="bg-card border border-border rounded-2xl rounded-tl-none px-4 py-3">
+      <div className="rounded-2xl rounded-tl-none px-4 py-3"
+        style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
         <div className="flex gap-1 items-center h-4">
           {[0, 1, 2].map((i) => (
             <motion.div
               key={i}
-              className="w-1.5 h-1.5 rounded-full bg-blue-400/60"
+              className="w-1.5 h-1.5 rounded-full bg-cyan-400/60"
               animate={{ y: [0, -4, 0] }}
               transition={{ duration: 0.6, repeat: Infinity, delay: i * 0.15 }}
             />
@@ -148,12 +144,6 @@ export default function CopilotPage() {
   const docInputRef  = useRef<HTMLInputElement>(null);
   const imgInputRef  = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
-
-  // Compare tab
-  const [compareContext, setCompareContext] = useState("Risk Analysis");
-  const [compareItems, setCompareItems] = useState<CompareItem[]>([emptyCompareItem("Item A"), emptyCompareItem("Item B")]);
-  const [compareResult, setCompareResult] = useState("");
-  const [compareLoading, setCompareLoading] = useState(false);
 
   const AUDIO_EXTS = new Set(["mp3", "wav", "webm", "m4a", "ogg", "flac", "mp4"]);
   const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
@@ -306,74 +296,17 @@ export default function CopilotPage() {
     }
   };
 
-  const addCompareItem = () => {
-    setCompareItems((prev) => [...prev, emptyCompareItem(`Item ${String.fromCharCode(65 + prev.length)}`)]);
-  };
-
-  const removeCompareItem = (idx: number) => {
-    setCompareItems((prev) => prev.filter((_, i) => i !== idx));
-  };
-
-  const updateCompareItemName = (idx: number, name: string) => {
-    setCompareItems((prev) => prev.map((it, i) => i === idx ? { ...it, name } : it));
-  };
-
-  const addCompareAttr = (idx: number) => {
-    setCompareItems((prev) => prev.map((it, i) => i === idx ? { ...it, attrs: [...it.attrs, { key: "", value: "" }] } : it));
-  };
-
-  const updateCompareAttr = (idx: number, attrIdx: number, field: "key" | "value", val: string) => {
-    setCompareItems((prev) => prev.map((it, i) => i === idx
-      ? { ...it, attrs: it.attrs.map((a, ai) => ai === attrIdx ? { ...a, [field]: val } : a) }
-      : it));
-  };
-
-  const removeCompareAttr = (idx: number, attrIdx: number) => {
-    setCompareItems((prev) => prev.map((it, i) => i === idx
-      ? { ...it, attrs: it.attrs.filter((_, ai) => ai !== attrIdx) }
-      : it));
-  };
-
-  const runCompare = async () => {
-    const items = compareItems
-      .filter((it) => it.name.trim())
-      .map((it) => ({
-        name: it.name.trim(),
-        data: Object.fromEntries(it.attrs.filter((a) => a.key.trim()).map((a) => [a.key.trim(), a.value])),
-      }));
-    if (items.length < 2) {
-      setCompareResult("");
-      return;
-    }
-    setCompareLoading(true);
-    setCompareResult("");
-    try {
-      const res = await fetch(`${API}/api/v1/copilot/compare`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ context: compareContext, items }),
-      });
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      setCompareResult(data.response ?? "No comparison generated.");
-    } catch {
-      setCompareResult("Sorry, the comparison failed. Please try again.");
-    } finally {
-      setCompareLoading(false);
-    }
-  };
-
   const tabBar = (
-    <div className="flex gap-0 border-b border-border shrink-0">
+    <div className="flex items-center gap-1 p-1 rounded-xl w-fit shrink-0"
+      style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
       {COPILOT_TABS.map((t) => (
         <button
           key={t.id}
           onClick={() => setSubTab(t.id)}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
-            subTab === t.id
-              ? "border-blue-500 text-blue-400"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
+          className="px-3.5 py-1.5 rounded-lg text-[13px] font-medium whitespace-nowrap transition-colors"
+          style={subTab === t.id
+            ? { background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)", color: "#00D4FF" }
+            : { border: "1px solid transparent", color: "rgba(255,255,255,0.4)" }}
         >
           {t.label}
         </button>
@@ -381,99 +314,11 @@ export default function CopilotPage() {
     </div>
   );
 
-  if (subTab === "compare") {
-    return (
-      <div className="space-y-6">
-        {tabBar}
-        <div className="pt-6 space-y-4">
-          <div>
-            <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
-              <Scale className="w-5 h-5 text-blue-400" /> Compare Items
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Get an AI-generated side-by-side comparison of 2 or more projects, runs, or datasets.
-            </p>
-          </div>
-
-          <input
-            placeholder="Comparison context (e.g. Risk Analysis, Cost Overrun, Vendor Performance)"
-            value={compareContext}
-            onChange={(e) => setCompareContext(e.target.value)}
-            className="w-full px-3 py-2 bg-secondary border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {compareItems.map((item, idx) => (
-              <div key={idx} className="bg-card border border-border rounded-2xl p-4 space-y-3">
-                <div className="flex items-center gap-2">
-                  <input
-                    value={item.name}
-                    onChange={(e) => updateCompareItemName(idx, e.target.value)}
-                    placeholder="Item name"
-                    className="flex-1 px-3 py-1.5 bg-secondary border border-border rounded-lg text-sm font-medium text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  {compareItems.length > 2 && (
-                    <button onClick={() => removeCompareItem(idx)} className="text-muted-foreground hover:text-red-400 p-1">
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  {item.attrs.map((attr, attrIdx) => (
-                    <div key={attrIdx} className="flex items-center gap-2">
-                      <input
-                        value={attr.key}
-                        onChange={(e) => updateCompareAttr(idx, attrIdx, "key", e.target.value)}
-                        placeholder="Field (e.g. risk_score)"
-                        className="flex-1 px-2.5 py-1.5 bg-secondary border border-border rounded-lg text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                      <input
-                        value={attr.value}
-                        onChange={(e) => updateCompareAttr(idx, attrIdx, "value", e.target.value)}
-                        placeholder="Value"
-                        className="flex-1 px-2.5 py-1.5 bg-secondary border border-border rounded-lg text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                      {item.attrs.length > 1 && (
-                        <button onClick={() => removeCompareAttr(idx, attrIdx)} className="text-muted-foreground hover:text-red-400 p-1 shrink-0">
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <button onClick={() => addCompareAttr(idx)}
-                  className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300">
-                  <Plus className="w-3.5 h-3.5" /> Add field
-                </button>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Button variant="outline" onClick={addCompareItem}>
-              <Plus className="w-4 h-4 mr-2" /> Add Item
-            </Button>
-            <Button onClick={runCompare} disabled={compareLoading} className="gradient-blue text-white border-0">
-              {compareLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-              Compare
-            </Button>
-          </div>
-
-          {compareResult && (
-            <div className="bg-card border border-blue-500/20 rounded-2xl p-6">
-              <p className="whitespace-pre-wrap text-sm text-foreground leading-relaxed">{renderContent(compareResult)}</p>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   if (subTab !== "chat") {
     return (
       <div className="space-y-0">
         {tabBar}
-        <Suspense fallback={<div className="flex items-center justify-center h-40"><Loader2 className="w-5 h-5 animate-spin text-blue-400" /></div>}>
+        <Suspense fallback={<div className="flex items-center justify-center h-40"><Loader2 className="w-5 h-5 animate-spin text-cyan-400" /></div>}>
           {subTab === "writing" && <div className="pt-6"><WritingPage /></div>}
         </Suspense>
       </div>
@@ -485,50 +330,52 @@ export default function CopilotPage() {
       {tabBar}
 
       {/* Header */}
-      <div className="flex items-center justify-between py-3 shrink-0">
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+        className="flex items-center justify-between py-3 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl gradient-blue flex items-center justify-center">
-            <Bot className="w-5 h-5 text-white" />
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+            style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)", boxShadow: "0 0 16px rgba(0,212,255,0.15)" }}>
+            <Bot className="w-5 h-5 text-cyan-400" />
           </div>
           <div>
-            <h1 className="text-4xl font-bold text-foreground">AI Copilot</h1>
+            <h1 className="text-4xl font-bold text-white tracking-tight">AI Copilot</h1>
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <p className="text-xs text-muted-foreground">Groq LLaMA 3.3 · Persistent memory</p>
+              <p className="text-[13px] text-white/35">Groq LLaMA 3.3 · Persistent memory</p>
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant={structuredMode ? "default" : "ghost"}
-            size="sm"
+        <div className="flex items-center gap-2">
+          <button
             onClick={() => setStructuredMode((v) => !v)}
             title="Structured mode — confidence score, domain tag, follow-up suggestion"
-            className={structuredMode ? "gradient-blue text-white border-0 text-xs" : "text-muted-foreground hover:text-foreground text-xs"}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all"
+            style={structuredMode
+              ? { background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)", color: "#00D4FF" }
+              : { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.5)" }}
           >
-            <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+            <Sparkles className="w-3.5 h-3.5" />
             Structured
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
+          </button>
+          <button
             onClick={clearSession}
             title="New conversation"
-            className="text-muted-foreground hover:text-foreground"
+            className="w-8 h-8 rounded-xl flex items-center justify-center text-white/50 hover:text-white/80 transition-colors"
+            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
           >
             <RefreshCw className="w-4 h-4" />
-          </Button>
+          </button>
         </div>
-      </div>
+      </motion.div>
 
       {/* Session info strip */}
       <div className="flex items-center gap-3 mb-2 px-1 shrink-0">
-        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-[10px] text-white/35">
           <Hash className="w-3 h-3" />
           <span className="font-mono">{sessionId ? `${sessionId.slice(0, 24)}…` : "—"}</span>
         </div>
         {msgCount > 0 && (
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-[10px] text-white/35">
             {msgCount} exchange{msgCount !== 1 ? "s" : ""} remembered
           </span>
         )}
@@ -548,7 +395,8 @@ export default function CopilotPage() {
               <button
                 key={s}
                 onClick={() => send(s)}
-                className="text-left text-xs p-3 rounded-xl bg-secondary hover:bg-secondary/80 border border-border text-muted-foreground hover:text-foreground transition-colors"
+                className="text-left text-xs p-3 rounded-xl text-white/40 hover:text-white/75 transition-colors"
+                style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)" }}
               >
                 {s}
               </button>
@@ -560,17 +408,18 @@ export default function CopilotPage() {
       </div>
 
       {/* Input bar */}
-      <div className="shrink-0 bg-secondary border border-border rounded-xl p-3">
+      <div className="shrink-0 glass-card p-3">
         {/* Attached file chip */}
         {attachedFile && (() => {
           const FileIcon = getFileIcon(attachedFile.name);
           return (
-            <div className="flex items-center gap-1.5 mb-2 px-2 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 w-fit max-w-full">
-              <FileIcon className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-              <span className="text-xs text-blue-400 truncate max-w-50">{attachedFile.name}</span>
+            <div className="flex items-center gap-1.5 mb-2 px-2 py-1 rounded-lg w-fit max-w-full"
+              style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)" }}>
+              <FileIcon className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span className="text-xs text-cyan-400 truncate max-w-50">{attachedFile.name}</span>
               <button
                 onClick={() => setAttachedFile(null)}
-                className="ml-0.5 text-blue-400/60 hover:text-blue-400 shrink-0"
+                className="ml-0.5 text-cyan-400/60 hover:text-cyan-400 shrink-0"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -587,7 +436,7 @@ export default function CopilotPage() {
           }}
           placeholder={attachedFile ? "Ask a question about this file…" : "Ask CivilAI anything about your project…"}
           rows={1}
-          className="w-full bg-transparent resize-none text-sm text-foreground placeholder:text-muted-foreground focus:outline-none min-h-[36px] max-h-32 leading-relaxed"
+          className="w-full bg-transparent resize-none text-sm text-white placeholder:text-white/30 focus:outline-none min-h-9 max-h-32 leading-relaxed"
           style={{ scrollbarWidth: "none" }}
         />
 
@@ -606,7 +455,7 @@ export default function CopilotPage() {
         />
 
         <div className="flex items-center justify-between mt-2">
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-[10px] text-white/30">
             Enter to send · Shift+Enter for newline
           </p>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -615,7 +464,7 @@ export default function CopilotPage() {
               onClick={() => docInputRef.current?.click()}
               size="icon"
               variant="ghost"
-              className="w-8 h-8 rounded-lg text-muted-foreground hover:text-blue-400"
+              className="w-8 h-8 rounded-lg text-white/40 hover:text-cyan-400"
               title="Attach PDF or document"
             >
               <FileText className="w-3.5 h-3.5" />
@@ -625,7 +474,7 @@ export default function CopilotPage() {
               onClick={() => imgInputRef.current?.click()}
               size="icon"
               variant="ghost"
-              className="w-8 h-8 rounded-lg text-muted-foreground hover:text-emerald-400"
+              className="w-8 h-8 rounded-lg text-white/40 hover:text-emerald-400"
               title="Attach image"
             >
               <Image className="w-3.5 h-3.5" />
@@ -635,7 +484,7 @@ export default function CopilotPage() {
               onClick={() => audioInputRef.current?.click()}
               size="icon"
               variant="ghost"
-              className="w-8 h-8 rounded-lg text-muted-foreground hover:text-amber-400"
+              className="w-8 h-8 rounded-lg text-white/40 hover:text-amber-400"
               title="Attach audio"
             >
               <AudioLines className="w-3.5 h-3.5" />
@@ -645,17 +494,17 @@ export default function CopilotPage() {
               onResult={onVoiceResult}
               size="sm"
             />
-            <Button
+            <button
               onClick={() => send()}
               disabled={(!input.trim() && !attachedFile) || loading}
-              size="icon"
-              className="w-8 h-8 rounded-lg gradient-blue text-white border-0 shrink-0"
+              className="w-8 h-8 rounded-lg text-white flex items-center justify-center shrink-0 transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100"
+              style={{ background: "linear-gradient(135deg, rgba(0,212,255,0.25), rgba(0,100,160,0.2))", border: "1px solid rgba(0,212,255,0.3)" }}
             >
               {loading
                 ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 : <Send    className="w-3.5 h-3.5" />
               }
-            </Button>
+            </button>
           </div>
         </div>
       </div>

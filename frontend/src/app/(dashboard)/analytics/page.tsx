@@ -36,6 +36,34 @@ const MODULE_LINKS = [
   { href: "/compliance", icon: ClipboardList, label: "Compliance", color: "text-red-400 bg-red-500/10 border-red-500/20" },
 ];
 
+// ── Theme helpers ────────────────────────────────────────────────────────────
+// Mirrors the accent-color recipe used across the main dashboard: a soft tint
+// background, a slightly stronger tint border, and the full color for text/icons.
+
+const ACCENT: Record<string, { bg: string; border: string; text: string; shadow: string }> = {
+  cyan:   { bg: "rgba(0,212,255,0.07)",   border: "rgba(0,212,255,0.18)",   text: "#00D4FF", shadow: "rgba(0,212,255,0.15)" },
+  amber:  { bg: "rgba(245,158,11,0.07)",  border: "rgba(245,158,11,0.18)",  text: "#F59E0B", shadow: "rgba(245,158,11,0.15)" },
+  red:    { bg: "rgba(239,68,68,0.07)",   border: "rgba(239,68,68,0.18)",   text: "#EF4444", shadow: "rgba(239,68,68,0.15)" },
+  green:  { bg: "rgba(16,185,129,0.07)",  border: "rgba(16,185,129,0.18)",  text: "#10B981", shadow: "rgba(16,185,129,0.15)" },
+  blue:   { bg: "rgba(59,130,246,0.07)",  border: "rgba(59,130,246,0.18)",  text: "#3B82F6", shadow: "rgba(59,130,246,0.15)" },
+  orange: { bg: "rgba(249,115,22,0.07)",  border: "rgba(249,115,22,0.18)",  text: "#F97316", shadow: "rgba(249,115,22,0.15)" },
+  purple: { bg: "rgba(139,92,246,0.07)",  border: "rgba(139,92,246,0.18)",  text: "#8B5CF6", shadow: "rgba(139,92,246,0.15)" },
+  teal:   { bg: "rgba(20,184,166,0.07)",  border: "rgba(20,184,166,0.18)",  text: "#14B8A6", shadow: "rgba(20,184,166,0.15)" },
+};
+
+const ghostBtn =
+  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-white/50 hover:text-white/80 transition-colors";
+const ghostBtnStyle = { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" };
+
+const tooltipStyle = {
+  backgroundColor: "rgba(4,11,25,0.95)",
+  border: "1px solid rgba(0,212,255,0.15)",
+  borderRadius: "12px",
+  color: "#e2e8f0",
+  fontSize: "12px",
+  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+};
+
 /* ─── PDF export ─────────────────────────────────────────────── */
 
 function exportToPDF(
@@ -293,10 +321,10 @@ export default function AnalyticsPage() {
   ].filter(i => !i.text.includes("undefined")) : [];
 
   const kpis = [
-    { label: "Delay Rate",       value: allStats ? `${allStats.delay?.delay_rate_pct}%`           : "—", trend: (allStats?.delay?.delay_rate_pct ?? 0) < 30 ? "up" : "down",                 change: allStats ? `${allStats.delay?.avg_delay_days}d avg overrun` : "Live ML",  color: "border-orange-500/20 bg-orange-500/5", href: "/scheduling" },
-    { label: "Turnover Rate",    value: allStats ? `${allStats.workforce?.turnover_rate_pct}%`     : "—", trend: (allStats?.workforce?.turnover_rate_pct ?? 100) < 25 ? "up" : "down",          change: allStats ? `${allStats.workforce?.active_workers} active` : "Live ML",     color: "border-red-500/20 bg-red-500/5",       href: "/workforce" },
-    { label: "Equipment Health", value: allStats ? `${allStats.equipment?.avg_health_score}%`      : "—", trend: (allStats?.equipment?.avg_health_score ?? 0) > 70 ? "up" : "down",             change: allStats ? `${allStats.equipment?.total_equipment} units` : "Live ML",     color: "border-emerald-500/20 bg-emerald-500/5",href: "/equipment" },
-    { label: "Cost Overrun Risk",value: predictions ? `${predictions.probability}%`               : "—", trend: predictions?.risk_level === "High" ? "down" : "up",                            change: predictions?.risk_level ?? "Live ML",                                        color: "border-blue-500/20 bg-blue-500/5",     href: "/cost" },
+    { label: "Delay Rate",       value: allStats ? `${allStats.delay?.delay_rate_pct}%`           : "—", trend: (allStats?.delay?.delay_rate_pct ?? 0) < 30 ? "up" : "down",                 change: allStats ? `${allStats.delay?.avg_delay_days}d avg overrun` : "Live ML",  accent: "orange", href: "/scheduling" },
+    { label: "Turnover Rate",    value: allStats ? `${allStats.workforce?.turnover_rate_pct}%`     : "—", trend: (allStats?.workforce?.turnover_rate_pct ?? 100) < 25 ? "up" : "down",          change: allStats ? `${allStats.workforce?.active_workers} active` : "Live ML",     accent: "red",    href: "/workforce" },
+    { label: "Equipment Health", value: allStats ? `${allStats.equipment?.avg_health_score}%`      : "—", trend: (allStats?.equipment?.avg_health_score ?? 0) > 70 ? "up" : "down",             change: allStats ? `${allStats.equipment?.total_equipment} units` : "Live ML",     accent: "green",  href: "/equipment" },
+    { label: "Cost Overrun Risk",value: predictions ? `${predictions.probability}%`               : "—", trend: predictions?.risk_level === "High" ? "down" : "up",                            change: predictions?.risk_level ?? "Live ML",                                        accent: "blue",   href: "/cost" },
   ];
 
   const maxRisk = Math.max(costRisk, scheduleRisk, safetyRisk, workforceRisk, equipmentRisk, complianceRisk);
@@ -311,32 +339,35 @@ export default function AnalyticsPage() {
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-4xl font-bold text-foreground">Analytics</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-4xl font-bold text-white tracking-tight">Analytics</h1>
+          <p className="text-white/35 text-sm mt-1">
             Advanced project intelligence — all data live from Supabase
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {["1M", "3M", "6M", "1Y"].map((p) => (
             <button key={p} onClick={() => handlePeriodChange(p)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${period === p ? "bg-blue-500 text-white" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              style={period === p
+                ? { background: "rgba(0,212,255,0.15)", border: "1px solid rgba(0,212,255,0.3)", color: "#00D4FF" }
+                : { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)" }}>
               {p}
             </button>
           ))}
-          <button onClick={fetchAllData} disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-muted-foreground hover:text-foreground text-xs transition-colors">
+          <button onClick={fetchAllData} disabled={loading} className={ghostBtn} style={ghostBtnStyle}>
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             Refresh
           </button>
           {!loading && allStats && (
             <button onClick={() => exportToPDF(allStats, predictions, complianceScore, riskData, period)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground text-xs transition-colors">
+              className={ghostBtn} style={ghostBtnStyle}>
               <Download className="w-3.5 h-3.5" /> PDF
             </button>
           )}
           {!loading && allStats && !summaryOpen && (
             <button onClick={() => setSummaryOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs hover:bg-cyan-500/20 transition-colors">
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors hover:scale-105"
+              style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}`, color: ACCENT.cyan.text }}>
               <Sparkles className="w-3.5 h-3.5" /> AI Summary
             </button>
           )}
@@ -345,34 +376,37 @@ export default function AnalyticsPage() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((kpi, i) => (
-          <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }} whileHover={{ y: -2 }}
-            className={`rounded-2xl border p-5 ${kpi.color}`}>
-            <p className="text-sm text-muted-foreground">{kpi.label}</p>
-            {loading ? <Loader2 className="w-5 h-5 animate-spin text-blue-400 mt-2" /> : (
-              <>
-                <p className="text-2xl font-bold text-foreground mt-1">{kpi.value}</p>
-                <div className="flex items-center justify-between mt-1">
-                  <div className={`flex items-center gap-1 text-xs ${kpi.trend === "up" ? "text-emerald-400" : "text-red-400"}`}>
-                    {kpi.trend === "up" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                    {kpi.change}
+        {kpis.map((kpi, i) => {
+          const a = ACCENT[kpi.accent] ?? ACCENT.cyan;
+          return (
+            <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.1 }} whileHover={{ y: -4, scale: 1.02 }}
+              className="glass-card p-5" style={{ borderColor: a.border, background: a.bg }}>
+              <p className="text-sm text-white/40">{kpi.label}</p>
+              {loading ? <Loader2 className="w-5 h-5 animate-spin text-cyan-400 mt-2" /> : (
+                <>
+                  <p className="text-2xl font-bold text-white mt-1">{kpi.value}</p>
+                  <div className="flex items-center justify-between mt-1">
+                    <div className={`flex items-center gap-1 text-xs ${kpi.trend === "up" ? "text-emerald-400" : "text-red-400"}`}>
+                      {kpi.trend === "up" ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                      {kpi.change}
+                    </div>
+                    <Link href={kpi.href} className="text-xs text-cyan-400 hover:underline">View →</Link>
                   </div>
-                  <Link href={kpi.href} className="text-xs text-blue-400 hover:underline">View →</Link>
-                </div>
-              </>
-            )}
-          </motion.div>
-        ))}
+                </>
+              )}
+            </motion.div>
+          );
+        })}
       </div>
 
       {/* AI Insights */}
       {!loading && insights.length > 0 && (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-          className="bg-card border border-border rounded-2xl p-6">
+          className="glass-card p-6">
           <div className="flex items-center gap-2 mb-4">
-            <Brain className="w-5 h-5 text-blue-400" />
-            <h3 className="font-semibold text-foreground">AI Insights</h3>
+            <Brain className="w-5 h-5 text-cyan-400" />
+            <h3 className="font-semibold text-white">AI Insights</h3>
             <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live Supabase Data</span>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -382,7 +416,7 @@ export default function AnalyticsPage() {
                   transition={{ delay: 0.2 + i * 0.08 }}
                   className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer hover:opacity-80 transition-opacity ${insight.color}`}>
                   <insight.icon className={`w-4 h-4 shrink-0 ${insight.color.split(" ")[0]}`} />
-                  <p className="text-sm text-foreground">{insight.text}</p>
+                  <p className="text-sm text-white">{insight.text}</p>
                 </motion.div>
               </Link>
             ))}
@@ -393,92 +427,93 @@ export default function AnalyticsPage() {
       {/* AI Verbose Summary */}
       {!loading && allStats && summaryOpen && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card border border-cyan-500/20 rounded-2xl overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-border/50">
+          className="glass-card overflow-hidden" style={{ borderColor: "rgba(0,212,255,0.2)" }}>
+          <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                style={{ background: ACCENT.cyan.bg, border: `1px solid ${ACCENT.cyan.border}` }}>
                 <Sparkles className="w-4 h-4 text-cyan-400" />
               </div>
               <div>
-                <p className="font-semibold text-foreground text-sm">AI Analytics Intelligence Summary</p>
-                <p className="text-xs text-muted-foreground">Verbose technical + plain-language report · {period} period</p>
+                <p className="font-semibold text-white text-sm">AI Analytics Intelligence Summary</p>
+                <p className="text-xs text-white/40">Verbose technical + plain-language report · {period} period</p>
               </div>
               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${overallColor} ${maxRisk > 70 ? "border-red-500/30 bg-red-500/5" : maxRisk > 40 ? "border-yellow-500/30 bg-yellow-500/5" : "border-emerald-500/30 bg-emerald-500/5"}`}>
                 {overallLevel} Risk
               </span>
             </div>
             <button onClick={() => setSummaryOpen(false)}
-              className="p-1.5 rounded-lg hover:bg-secondary/50 transition-colors">
-              <X className="w-4 h-4 text-muted-foreground" />
+              className="p-1.5 rounded-lg hover:bg-white/5 transition-colors">
+              <X className="w-4 h-4 text-white/40" />
             </button>
           </div>
           <div className="px-6 pb-6 space-y-5 text-sm leading-relaxed">
 
                   {/* Executive Summary */}
                   <div className="pt-5">
-                    <p className="font-bold text-base text-foreground mb-2">Executive Summary</p>
-                    <p className="text-muted-foreground">
-                      This Analytics Intelligence Report covers a <strong className="text-foreground">{period}</strong> analysis
+                    <p className="font-bold text-base text-white mb-2">Executive Summary</p>
+                    <p className="text-white/40">
+                      This Analytics Intelligence Report covers a <strong className="text-white">{period}</strong> analysis
                       period, synthesizing live data from{" "}
-                      <strong className="text-foreground">Supabase</strong> across{" "}
-                      <strong className="text-foreground">six construction management domains</strong>: Schedule, Workforce, Equipment,
+                      <strong className="text-white">Supabase</strong> across{" "}
+                      <strong className="text-white">six construction management domains</strong>: Schedule, Workforce, Equipment,
                       Cost, Safety, and Compliance. CivilAI's ML ensemble — comprising{" "}
-                      <strong className="text-foreground">XGBoost</strong> and{" "}
-                      <strong className="text-foreground">Random Forest classifiers</strong> — provides real-time risk quantification
+                      <strong className="text-white">XGBoost</strong> and{" "}
+                      <strong className="text-white">Random Forest classifiers</strong> — provides real-time risk quantification
                       and health scoring for each domain. The portfolio presents an overall risk level of{" "}
                       <strong className={overallColor}>{overallLevel}</strong> with a peak risk index of{" "}
-                      <strong className="text-foreground">{maxRisk}%</strong> observed in the{" "}
-                      <strong className="text-foreground">
+                      <strong className="text-white">{maxRisk}%</strong> observed in the{" "}
+                      <strong className="text-white">
                         {riskData.sort((a, b) => b.rate - a.rate)[0]?.category ?? "—"} domain
                       </strong>.
                     </p>
                   </div>
 
                   {/* Schedule */}
-                  <div className="p-4 rounded-xl border border-border bg-secondary/20">
-                    <p className="font-bold text-foreground mb-2 flex items-center gap-2">
+                  <div className="p-4 rounded-xl border border-white/10 bg-white/[0.03]">
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
                       <Calendar className="w-4 h-4 text-yellow-400" />
                       Schedule Performance
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${scheduleRisk > 70 ? "text-red-400 border-red-500/30 bg-red-500/5" : scheduleRisk > 40 ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/5" : "text-emerald-400 border-emerald-500/30 bg-emerald-500/5"} border`}>
                         {scheduleRisk}% risk
                       </span>
                     </p>
-                    <p className="text-muted-foreground">
-                      The <strong className="text-foreground">XGBoost delay model</strong> reports a{" "}
-                      <strong className="text-foreground">{allStats?.delay?.delay_rate_pct ?? 0}%</strong> task delay rate with an
-                      average overrun of <strong className="text-foreground">{allStats?.delay?.avg_delay_days ?? 0} days</strong> per
+                    <p className="text-white/40">
+                      The <strong className="text-white">XGBoost delay model</strong> reports a{" "}
+                      <strong className="text-white">{allStats?.delay?.delay_rate_pct ?? 0}%</strong> task delay rate with an
+                      average overrun of <strong className="text-white">{allStats?.delay?.avg_delay_days ?? 0} days</strong> per
                       delayed task. Schedule delays compound through{" "}
-                      <strong className="text-foreground">critical path dependencies</strong> — even a moderate delay rate
+                      <strong className="text-white">critical path dependencies</strong> — even a moderate delay rate
                       can shift project completion by 3–8 weeks on medium-complexity projects due to resource contention
                       and handoff cascades.
                       {scheduleRisk > 40
                         ? <> <strong className="text-yellow-400">Warning:</strong> delay rate exceeds threshold. Consider{" "}
-                          <strong className="text-foreground">resource augmentation</strong>,{" "}
-                          <strong className="text-foreground">activity compression</strong>, or scope re-prioritization
+                          <strong className="text-white">resource augmentation</strong>,{" "}
+                          <strong className="text-white">activity compression</strong>, or scope re-prioritization
                           on critical-path tasks.</>
                         : <> Schedule variance is within acceptable tolerances. Maintain current resource allocation
-                          and review the <strong className="text-foreground">critical path buffer</strong> weekly.</>
+                          and review the <strong className="text-white">critical path buffer</strong> weekly.</>
                       }
                     </p>
                   </div>
 
                   {/* Workforce */}
-                  <div className="p-4 rounded-xl border border-border bg-secondary/20">
-                    <p className="font-bold text-foreground mb-2 flex items-center gap-2">
+                  <div className="p-4 rounded-xl border border-white/10 bg-white/[0.03]">
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
                       <Users className="w-4 h-4 text-cyan-400" />
                       Workforce Analysis
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${workforceRisk > 70 ? "text-red-400 border-red-500/30 bg-red-500/5" : workforceRisk > 40 ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/5" : "text-emerald-400 border-emerald-500/30 bg-emerald-500/5"} border`}>
                         {workforceRisk}% risk
                       </span>
                     </p>
-                    <p className="text-muted-foreground">
-                      <strong className="text-foreground">{allStats?.workforce?.active_workers ?? 0} active workers</strong> are
+                    <p className="text-white/40">
+                      <strong className="text-white">{allStats?.workforce?.active_workers ?? 0} active workers</strong> are
                       tracked with a turnover rate of{" "}
                       <strong className={workforceRisk > 40 ? "text-red-400" : "text-emerald-400"}>{allStats?.workforce?.turnover_rate_pct ?? 0}%</strong>.
-                      {" "}The industry warning threshold is <strong className="text-foreground">25%</strong>. Each departure in a
+                      {" "}The industry warning threshold is <strong className="text-white">25%</strong>. Each departure in a
                       skilled construction role incurs approximately{" "}
-                      <strong className="text-foreground">15–30% of annual salary</strong> in replacement and onboarding costs,
-                      and introduces <strong className="text-foreground">safety risk</strong> from undertrained personnel
+                      <strong className="text-white">15–30% of annual salary</strong> in replacement and onboarding costs,
+                      and introduces <strong className="text-white">safety risk</strong> from undertrained personnel
                       on active sites. High turnover also degrades institutional knowledge on complex multi-phase projects.
                       {workforceRisk > 40
                         ? <> <strong className="text-red-400">Action required:</strong> review compensation benchmarks,
@@ -489,24 +524,24 @@ export default function AnalyticsPage() {
                   </div>
 
                   {/* Equipment */}
-                  <div className="p-4 rounded-xl border border-border bg-secondary/20">
-                    <p className="font-bold text-foreground mb-2 flex items-center gap-2">
+                  <div className="p-4 rounded-xl border border-white/10 bg-white/[0.03]">
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
                       <Wrench className="w-4 h-4 text-orange-400" />
                       Equipment Health
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${equipmentRisk > 70 ? "text-red-400 border-red-500/30 bg-red-500/5" : equipmentRisk > 40 ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/5" : "text-emerald-400 border-emerald-500/30 bg-emerald-500/5"} border`}>
                         {equipmentRisk}% risk
                       </span>
                     </p>
-                    <p className="text-muted-foreground">
+                    <p className="text-white/40">
                       Fleet average health score is{" "}
                       <strong className={equipmentRisk > 40 ? "text-orange-400" : "text-emerald-400"}>{allStats?.equipment?.avg_health_score ?? 0}%</strong>
-                      {" "}across <strong className="text-foreground">{allStats?.equipment?.total_equipment ?? 0} tracked units</strong>.
-                      {" "}The <strong className="text-foreground">Random Forest equipment failure model</strong> uses health score
+                      {" "}across <strong className="text-white">{allStats?.equipment?.total_equipment ?? 0} tracked units</strong>.
+                      {" "}The <strong className="text-white">Random Forest equipment failure model</strong> uses health score
                       distributions, operating hour accumulation, and maintenance gaps as primary features.
-                      {" "}Units below <strong className="text-foreground">70% health</strong> are flagged for preventive maintenance;
-                      below <strong className="text-foreground">50%</strong> constitutes an operational risk. Equipment failure
+                      {" "}Units below <strong className="text-white">70% health</strong> are flagged for preventive maintenance;
+                      below <strong className="text-white">50%</strong> constitutes an operational risk. Equipment failure
                       cascades to schedule delays at a mean rate of{" "}
-                      <strong className="text-foreground">3.2 days per failure event</strong> on critical-path machinery.
+                      <strong className="text-white">3.2 days per failure event</strong> on critical-path machinery.
                       {equipmentRisk > 40
                         ? <> <strong className="text-orange-400">Action required:</strong> prioritize units below threshold for
                           immediate service and consider rental contingencies to maintain critical-path productivity.</>
@@ -516,20 +551,20 @@ export default function AnalyticsPage() {
                   </div>
 
                   {/* Cost */}
-                  <div className="p-4 rounded-xl border border-border bg-secondary/20">
-                    <p className="font-bold text-foreground mb-2 flex items-center gap-2">
+                  <div className="p-4 rounded-xl border border-white/10 bg-white/[0.03]">
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
                       <DollarSign className="w-4 h-4 text-blue-400" />
                       Cost &amp; Financial Risk
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${costRisk > 70 ? "text-red-400 border-red-500/30 bg-red-500/5" : costRisk > 40 ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/5" : "text-emerald-400 border-emerald-500/30 bg-emerald-500/5"} border`}>
                         {costRisk}% risk
                       </span>
                     </p>
-                    <p className="text-muted-foreground">
+                    <p className="text-white/40">
                       Cost overrun probability: <strong className={costRisk > 70 ? "text-red-400" : costRisk > 40 ? "text-yellow-400" : "text-emerald-400"}>{predictions?.probability ?? 0}%</strong>{" "}
-                      (<strong className="text-foreground">{predictions?.risk_level ?? "—"} risk</strong>), derived from{" "}
-                      <strong className="text-foreground">{predictions?.inputs?.change_orders ?? 0} change orders</strong> and{" "}
-                      <strong className="text-foreground">{predictions?.inputs?.team_size ?? 0} active workers</strong>.
-                      {" "}The XGBoost cost model factors in <strong className="text-foreground">procurement deviation signals</strong>,
+                      (<strong className="text-white">{predictions?.risk_level ?? "—"} risk</strong>), derived from{" "}
+                      <strong className="text-white">{predictions?.inputs?.change_orders ?? 0} change orders</strong> and{" "}
+                      <strong className="text-white">{predictions?.inputs?.team_size ?? 0} active workers</strong>.
+                      {" "}The XGBoost cost model factors in <strong className="text-white">procurement deviation signals</strong>,
                       change order frequency, workforce density, and material price variance.
                       {" "}Projects at this risk level historically see budget overruns of 8–22% without intervention.
                       {costRisk > 50
@@ -542,23 +577,23 @@ export default function AnalyticsPage() {
                   </div>
 
                   {/* Safety & Compliance */}
-                  <div className="p-4 rounded-xl border border-border bg-secondary/20">
-                    <p className="font-bold text-foreground mb-2 flex items-center gap-2">
+                  <div className="p-4 rounded-xl border border-white/10 bg-white/[0.03]">
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
                       <HardHat className="w-4 h-4 text-emerald-400" />
                       Safety &amp; Compliance
                     </p>
-                    <p className="text-muted-foreground">
-                      <strong className="text-foreground">Safety score: {allStats?.safety?.safety_score ?? 0}%</strong> —
+                    <p className="text-white/40">
+                      <strong className="text-white">Safety score: {allStats?.safety?.safety_score ?? 0}%</strong> —
                       {" "}{allStats?.safety?.total_incidents ?? 0} total incidents recorded,
-                      {" "}<strong className="text-foreground">{allStats?.safety?.days_without_incident ?? 0} days</strong> incident-free.
+                      {" "}<strong className="text-white">{allStats?.safety?.days_without_incident ?? 0} days</strong> incident-free.
                       {" "}The Random Forest safety model achieved 88% accuracy and flags severity-weighted
                       incident patterns combined with workforce exposure density as primary risk drivers.
-                      {" "}<strong className="text-foreground">Compliance permit approval rate: {complianceScore}%</strong> with{" "}
+                      {" "}<strong className="text-white">Compliance permit approval rate: {complianceScore}%</strong> with{" "}
                       <strong className={complianceRisk > 30 ? "text-yellow-400" : "text-emerald-400"}>{allStats?.compliance?.open_violations ?? 0} open violations</strong>.
-                      {" "}A compliance score below <strong className="text-foreground">70%</strong> elevates regulatory exposure.
+                      {" "}A compliance score below <strong className="text-white">70%</strong> elevates regulatory exposure.
                       {(safetyRisk > 40 || complianceRisk > 30)
                         ? <> <strong className="text-red-400">Action:</strong> conduct site safety audit, resolve open violations,
-                          and ensure all corrective actions are documented within <strong className="text-foreground">48 hours</strong>.</>
+                          and ensure all corrective actions are documented within <strong className="text-white">48 hours</strong>.</>
                         : <> Safety and compliance posture is satisfactory. Maintain documentation cadence and
                           conduct scheduled PPE audits.</>
                       }
@@ -566,23 +601,23 @@ export default function AnalyticsPage() {
                   </div>
 
                   {/* Methodology */}
-                  <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5">
-                    <p className="font-bold text-foreground mb-2 flex items-center gap-2">
-                      <BarChart2 className="w-4 h-4 text-blue-400" />
+                  <div className="p-4 rounded-xl" style={{ border: `1px solid ${ACCENT.cyan.border}`, background: ACCENT.cyan.bg }}>
+                    <p className="font-bold text-white mb-2 flex items-center gap-2">
+                      <BarChart2 className="w-4 h-4 text-cyan-400" />
                       Methodology &amp; Data Sources
                     </p>
-                    <p className="text-muted-foreground">
-                      All statistics are derived from <strong className="text-foreground">live Supabase queries</strong> against
+                    <p className="text-white/40">
+                      All statistics are derived from <strong className="text-white">live Supabase queries</strong> against
                       incident, task, equipment, and workforce tables — no cached or stale data.
                       {" "}ML models (XGBoost and Random Forest) trained on construction industry benchmarks achieve{" "}
-                      <strong className="text-foreground">83–88.5% accuracy</strong>.
-                      {" "}The <strong className="text-foreground">project health radar</strong> shows health scores
+                      <strong className="text-white">83–88.5% accuracy</strong>.
+                      {" "}The <strong className="text-white">project health radar</strong> shows health scores
                       (100% = perfect health), while the risk chart shows risk rates (higher = worse) — these
                       are complementary views of the same underlying data.
                       {" "}Risk thresholds: <strong className="text-emerald-400">Low (&lt;40%)</strong>,{" "}
                       <strong className="text-yellow-400">Medium (40–70%)</strong>,{" "}
                       <strong className="text-red-400">High (&gt;70%)</strong>.
-                      {" "}Analysis period: <strong className="text-foreground">{period}</strong>.
+                      {" "}Analysis period: <strong className="text-white">{period}</strong>.
                     </p>
                   </div>
                 </div>
@@ -591,26 +626,26 @@ export default function AnalyticsPage() {
 
       {/* Performance Trends */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
-        className="bg-card border border-border rounded-2xl p-6">
+        className="glass-card p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h3 className="font-semibold text-foreground">Performance Trends</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">Monthly scores — Cost/Safety from Supabase, Schedule from tasks, Compliance from permits</p>
+            <h3 className="font-semibold text-white">Performance Trends</h3>
+            <p className="text-xs text-white/40 mt-0.5">Monthly scores — Cost/Safety from Supabase, Schedule from tasks, Compliance from permits</p>
           </div>
-          {trendLoading && <Loader2 className="w-4 h-4 animate-spin text-blue-400" />}
+          {trendLoading && <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />}
           {!trendLoading && performanceData.length > 0 && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live</span>
           )}
         </div>
         {performanceData.length === 0 && !loading && !trendLoading ? (
-          <p className="text-center text-muted-foreground text-sm py-8">No data for this period yet</p>
+          <p className="text-center text-white/40 text-sm py-8">No data for this period yet</p>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={performanceData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-              <XAxis dataKey="month" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis domain={[0, 100]} tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
-              <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} formatter={(v: any) => [`${v}%`]} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+              <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis domain={[0, 100]} tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
+              <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${v}%`]} />
               <Line type="monotone" dataKey="cost"       stroke="#3b82f6" strokeWidth={2} dot={{ r: 3, fill: "#3b82f6" }} name="Cost" connectNulls />
               <Line type="monotone" dataKey="schedule"   stroke="#f59e0b" strokeWidth={2} dot={{ r: 3, fill: "#f59e0b" }} name="Schedule" connectNulls />
               <Line type="monotone" dataKey="safety"     stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: "#10b981" }} name="Safety" connectNulls />
@@ -627,7 +662,7 @@ export default function AnalyticsPage() {
           ].map((l) => (
             <Link key={l.label} href={l.href} className="flex items-center gap-1.5 hover:opacity-70 transition-opacity">
               <div className={`w-2 h-2 rounded-full ${l.color}`} />
-              <span className="text-xs text-muted-foreground">{l.label}</span>
+              <span className="text-xs text-white/40">{l.label}</span>
             </Link>
           ))}
         </div>
@@ -636,21 +671,21 @@ export default function AnalyticsPage() {
       {/* Risk by Category + Radar */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.4 }}
-          className="bg-card border border-border rounded-2xl p-6">
+          className="glass-card p-6">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="font-semibold text-foreground">Risk by Category</h3>
+            <h3 className="font-semibold text-white">Risk by Category</h3>
             {allStats && <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live</span>}
           </div>
-          <p className="text-xs text-muted-foreground mb-4">Risk levels from live Supabase data</p>
+          <p className="text-xs text-white/40 mb-4">Risk levels from live Supabase data</p>
           {loading ? (
-            <div className="flex items-center justify-center h-40"><Loader2 className="w-8 h-8 animate-spin text-blue-400" /></div>
+            <div className="flex items-center justify-center h-40"><Loader2 className="w-8 h-8 animate-spin text-cyan-400" /></div>
           ) : (
             <ResponsiveContainer width="100%" height={210}>
               <BarChart data={riskData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                <XAxis type="number" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" domain={[0, 100]} />
-                <YAxis dataKey="category" type="category" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} width={80} />
-                <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} formatter={(v: any) => [`${v}%`]} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis type="number" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" domain={[0, 100]} />
+                <YAxis dataKey="category" type="category" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} width={80} />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${v}%`]} />
                 <Bar dataKey="rate" fill="#ef4444" radius={[0, 6, 6, 0]} name="Risk %" />
               </BarChart>
             </ResponsiveContainer>
@@ -658,21 +693,21 @@ export default function AnalyticsPage() {
         </motion.div>
 
         <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 }}
-          className="bg-card border border-border rounded-2xl p-6">
+          className="glass-card p-6">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="font-semibold text-foreground">Project Health Radar</h3>
+            <h3 className="font-semibold text-white">Project Health Radar</h3>
             {allStats && <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Live</span>}
           </div>
-          <p className="text-xs text-muted-foreground mb-4">All dimensions from real module data</p>
+          <p className="text-xs text-white/40 mb-4">All dimensions from real module data</p>
           {loading ? (
-            <div className="flex items-center justify-center h-40"><Loader2 className="w-8 h-8 animate-spin text-blue-400" /></div>
+            <div className="flex items-center justify-center h-40"><Loader2 className="w-8 h-8 animate-spin text-cyan-400" /></div>
           ) : (
             <ResponsiveContainer width="100%" height={220}>
               <RadarChart data={radarData}>
-                <PolarGrid stroke="#ffffff08" />
-                <PolarAngleAxis dataKey="metric" tick={{ fill: "#6b7280", fontSize: 12 }} />
+                <PolarGrid stroke="rgba(255,255,255,0.04)" />
+                <PolarAngleAxis dataKey="metric" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 12 }} />
                 <Radar dataKey="score" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.2} strokeWidth={2} name="Score" />
-                <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} formatter={(v: any) => [`${v}%`]} />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${v}%`]} />
               </RadarChart>
             </ResponsiveContainer>
           )}
@@ -681,11 +716,11 @@ export default function AnalyticsPage() {
 
       {/* Cross-Module Quick Links */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6 }}
-        className="bg-card border border-border rounded-2xl p-6">
+        className="glass-card p-6">
         <div className="flex items-center gap-2 mb-4">
-          <Activity className="w-4 h-4 text-blue-400" />
-          <h3 className="font-semibold text-foreground text-sm">Connected Modules</h3>
-          <span className="text-xs text-muted-foreground">Analytics pulls live data from these modules</span>
+          <Activity className="w-4 h-4 text-cyan-400" />
+          <h3 className="font-semibold text-white text-sm">Connected Modules</h3>
+          <span className="text-xs text-white/40">Analytics pulls live data from these modules</span>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
           {MODULE_LINKS.map((m) => (

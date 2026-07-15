@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+import uuid
+
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from fastapi import Query
 from starlette.concurrency import run_in_threadpool
 from app.services.ml_service import (
     predict_cost_overrun,
@@ -63,6 +64,22 @@ class EquipmentInput(BaseModel):
     maintenance_count: int
     last_service_days_ago: int
     breakdowns: int
+
+class TrainRequest(BaseModel):
+    dataset_ids: list[str] = []
+
+_ML_DATASETS_BUCKET = "ml-datasets"
+_COST_OVERRUN_REQUIRED_COLUMNS = [
+    "duration_months", "team_size", "change_orders",
+    "material_price_increase", "weather_impact_days", "subcontractor_count",
+]
+
+
+def _ensure_ml_datasets_bucket(sb) -> None:
+    try:
+        sb.storage.create_bucket(_ML_DATASETS_BUCKET, options={"public": False})
+    except Exception:
+        pass  # already exists
 
 @router.post("/cost-overrun")
 async def cost_overrun(data: CostInput):
@@ -145,11 +162,119 @@ async def cost_overrun_auto(project_id: str | None = Query(default=None)):
 
 
 @router.post("/cost-overrun/train")
-async def cost_overrun_train():
-    """Retrain the cost-overrun classifier + regressor on the synthetic baseline
-    plus any completed projects in Supabase, and hot-swap the served model."""
+async def cost_overrun_train(body: TrainRequest = TrainRequest()):
+    """Retrain the cost-overrun classifier + regressor on the synthetic baseline plus any
+    completed projects in Supabase, plus any validated uploaded datasets (dataset_ids),
+    and hot-swap the served model to a new, permanently retained version. dataset_ids
+    defaults to empty — the plain "Train Model" button keeps its existing behavior."""
     try:
-        result = await run_in_threadpool(train_cost_overrun_model)
+        result = await run_in_threadpool(train_cost_overrun_model, body.dataset_ids)
         return {"status": "success", **result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cost-overrun/dataset/validate")
+async def cost_overrun_dataset_validate(file: UploadFile = File(...)):
+    """Parse + validate an uploaded CSV/XLSX of training rows against the required column
+    schema. On success, persists the raw file to Storage and the normalized rows to
+    ml_dataset_uploads (status='validated') and returns a dataset_id — this does NOT train
+    anything; training only happens when /cost-overrun/train is called with that id."""
+    from app.services.cost_overrun_dataset_validator import validate_cost_overrun_file
+    from app.services.db_service import supabase
+
+    file_bytes = await file.read()
+    filename = file.filename or "upload"
+    parsed_rows, column_map, errors, warnings = validate_cost_overrun_file(file_bytes, filename)
+
+    matched_columns = sorted(set(column_map.values()))
+    missing_columns = [c for c in _COST_OVERRUN_REQUIRED_COLUMNS if c not in matched_columns]
+    preview = parsed_rows[:20]
+
+    if errors or not parsed_rows:
+        return {
+            "dataset_id": None, "filename": filename, "row_count": 0,
+            "column_mapping": column_map, "matched_columns": matched_columns,
+            "missing_columns": missing_columns, "errors": errors, "warnings": warnings,
+            "preview": preview,
+        }
+
+    try:
+        _ensure_ml_datasets_bucket(supabase)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "csv"
+        storage_path = f"{uuid.uuid4()}.{ext}"
+        supabase.storage.from_(_ML_DATASETS_BUCKET).upload(
+            path=storage_path, file=file_bytes,
+            file_options={"content-type": "application/octet-stream"},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to store uploaded dataset: {e}")
+
+    try:
+        inserted = supabase.table("ml_dataset_uploads").insert({
+            "model_name": "cost_overrun",
+            "filename": filename,
+            "storage_path": storage_path,
+            "row_count": len(parsed_rows),
+            "column_mapping": column_map,
+            "validation": {"errors": errors, "warnings": warnings},
+            "parsed_rows": parsed_rows,
+            "status": "validated",
+        }).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save validated dataset: {e}")
+
+    return {
+        "dataset_id": inserted.data[0]["id"], "filename": filename, "row_count": len(parsed_rows),
+        "column_mapping": column_map, "matched_columns": matched_columns,
+        "missing_columns": missing_columns, "errors": errors, "warnings": warnings,
+        "preview": preview,
+    }
+
+
+@router.get("/cost-overrun/history")
+async def cost_overrun_history():
+    try:
+        from app.services.db_service import supabase
+        res = (
+            supabase.table("ml_training_runs")
+            .select("*")
+            .eq("model_name", "cost_overrun")
+            .order("version", desc=True)
+            .execute()
+        )
+        return {"runs": res.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cost-overrun/versions/{version}/activate")
+async def cost_overrun_activate_version(version: int):
+    """Roll the served model forward or back to any permanently retained past version —
+    this is what makes 'preserve the original training' actionable, not just a promise."""
+    from app.services import cost_overrun_model
+    from app.services.db_service import supabase
+
+    res = (
+        supabase.table("ml_training_runs")
+        .select("id")
+        .eq("model_name", "cost_overrun")
+        .eq("version", version)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail=f"No cost-overrun model version {version} found")
+    run_id = res.data[0]["id"]
+
+    try:
+        cost_overrun_model.activate_version(version)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    supabase.table("ml_training_runs").update({"is_active": True}).eq("id", run_id).execute()
+    supabase.table("ml_training_runs").update({"is_active": False}).eq(
+        "model_name", "cost_overrun"
+    ).neq("id", run_id).execute()
+
+    return {"status": "success", "active_version": version}
