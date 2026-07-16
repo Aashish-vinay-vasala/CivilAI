@@ -8,6 +8,7 @@ Voice API — three endpoints:
   GET  /voices       → list of available TTS voices
   GET  /health       → liveness check
 """
+import asyncio
 import json
 import logging
 import urllib.parse
@@ -20,6 +21,9 @@ from pydantic import BaseModel
 from app.ai.voice_processor import transcribe_audio, text_to_speech, AVAILABLE_VOICES, diarize_with_transcript
 from app.ai.vad_processor import webrtc_vad, silero_vad, diarize, detect_wakeword_oww
 from app.ai.copilot import get_copilot_response
+from app.ai.chatbot_memory import get_history, add_message
+from app.ai.memory_mem0 import mem0_add
+from app.ai.memory_zep import zep_add_messages
 from app.core.guardrails import sanitize_prompt, validate_output
 from app.core.llama_guard import check_input
 from app.services.voice_db_service import build_module_context
@@ -145,13 +149,20 @@ async def voice_chat_endpoint(
             "status":     "input_blocked",
         }
 
-    # 3 — Parse history + LLM call
-    try:
-        history = json.loads(chat_history) if chat_history else []
-        if not isinstance(history, list):
+    # 3 — History: server-side session history takes precedence over the
+    # client-sent chat_history, matching /api/v1/copilot/chat's behavior —
+    # this is what lets voice turns join the same shared conversation as
+    # typed turns from the widget or the Copilot page.
+    sid = session_id.strip()
+    if sid:
+        history = get_history(sid)
+    else:
+        try:
+            history = json.loads(chat_history) if chat_history else []
+            if not isinstance(history, list):
+                history = []
+        except Exception:
             history = []
-    except Exception:
-        history = []
 
     # Fetch live project data from other modules based on keywords in the query
     try:
@@ -180,6 +191,13 @@ async def voice_chat_endpoint(
         raise HTTPException(500, f"LLM error: {exc}")
 
     safe_response, _ = validate_output(response_text, context=clean_msg)
+
+    if sid:
+        add_message(sid, "user", transcript)
+        add_message(sid, "assistant", safe_response)
+        turn_messages = [{"role": "user", "content": transcript}, {"role": "assistant", "content": safe_response}]
+        asyncio.create_task(asyncio.to_thread(mem0_add, turn_messages, sid))
+        asyncio.create_task(zep_add_messages(sid, turn_messages))
 
     result = {
         "transcript": transcript,

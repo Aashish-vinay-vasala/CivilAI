@@ -14,8 +14,10 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWebSpeechSTT } from "@/hooks/useWebSpeechSTT";
 import { supabase } from "@/lib/supabase";
+import { speak as speakText, stopSpeaking as stopSpeakingPlayback, fetchGroqVoices, type VoiceChoice } from "@/lib/ttsPlayback";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "";
+const VOICE_KEY = "civilai_voicepage_voice";
 
 function renderContent(text: string) {
   return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
@@ -33,33 +35,6 @@ interface Turn {
   response:   string;
   timestamp:  string;
   status:     "success" | "blocked" | "error";
-}
-
-// ── Groq PlayAI TTS ──────────────────────────────────────────────────────────────
-
-async function speakViaBackend(
-  text: string,
-  voice: string | null,
-  audioRef: React.MutableRefObject<HTMLAudioElement | null>,
-  onEnd: () => void,
-): Promise<void> {
-  audioRef.current?.pause();
-  try {
-    const form = new FormData();
-    form.append("text", text.slice(0, 1000));
-    form.append("voice", voice || "autumn");
-    const res = await fetch(`${API}/api/v1/voice/speak`, { method: "POST", body: form });
-    if (!res.ok) throw new Error("TTS request failed");
-    const blob  = await res.blob();
-    const url   = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audioRef.current = audio;
-    audio.onended = () => { URL.revokeObjectURL(url); onEnd(); };
-    audio.onerror = () => { URL.revokeObjectURL(url); onEnd(); };
-    await audio.play();
-  } catch {
-    onEnd();
-  }
 }
 
 // ── Waveform ───────────────────────────────────────────────────────────────────
@@ -1656,21 +1631,24 @@ type Tab = "chat" | "transcribe" | "diarize" | "vad" | "history";
 
 export default function VoicePage() {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
-  const [recState,    setRecState]   = useState<RecordState>("idle");
-  const [turns,       setTurns]      = useState<Turn[]>([]);
-  const [error,       setError]      = useState("");
-  const [voices,      setVoices]     = useState<string[]>([]);
-  const [voice,       setVoice]      = useState<string | null>(null);
-  const [showPicker,  setShowPicker] = useState(false);
-  const [liveText,    setLiveText]   = useState("");
+  const [recState,      setRecState]      = useState<RecordState>("idle");
+  const [turns,         setTurns]         = useState<Turn[]>([]);
+  const [error,         setError]         = useState("");
+  const [groqVoices,    setGroqVoices]    = useState<string[]>([]);
+  const [browserVoices, setBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [voiceChoice,   setVoiceChoice]   = useState<VoiceChoice>({ engine: "groq", name: "autumn" });
+  const [showPicker,    setShowPicker]    = useState(false);
+  const [liveText,      setLiveText]      = useState("");
 
-  const recStateRef  = useRef<RecordState>("idle");
-  const recorderRef  = useRef<MediaRecorder | null>(null);
-  const chunksRef    = useRef<Blob[]>([]);
-  const streamRef    = useRef<MediaStream | null>(null);
-  const scrollRef    = useRef<HTMLDivElement>(null);
-  const sessionIdRef = useRef<string>(crypto.randomUUID());
-  const audioRef     = useRef<HTMLAudioElement | null>(null);
+  const recStateRef       = useRef<RecordState>("idle");
+  const recorderRef       = useRef<MediaRecorder | null>(null);
+  const chunksRef         = useRef<Blob[]>([]);
+  const streamRef         = useRef<MediaStream | null>(null);
+  const scrollRef         = useRef<HTMLDivElement>(null);
+  const sessionIdRef      = useRef<string>(crypto.randomUUID());
+  const audioRef          = useRef<HTMLAudioElement | null>(null);
+  const voiceChoiceRef    = useRef<VoiceChoice>({ engine: "groq", name: "autumn" });
+  const hasExplicitVoiceRef = useRef(false);
 
   const setRec = (s: RecordState) => { recStateRef.current = s; setRecState(s); };
 
@@ -1680,17 +1658,51 @@ export default function VoicePage() {
     onFinal:   (t) => setLiveText(t),
   });
 
-  // Load available Groq PlayAI TTS voices from the backend
+  // TTS voice (persisted) — browser (Google/Microsoft) voices + Groq AI voices,
+  // same dual-engine picker as the ModuleChat widget and the Copilot page.
   useEffect(() => {
     (async () => {
-      try {
-        const res  = await fetch(`${API}/api/v1/voice/voices`);
-        const data = await res.json();
-        const v: string[] = data.voices ?? [];
-        if (v.length) { setVoices(v); setVoice(v[0]); }
-      } catch { /* backend unreachable — voice picker stays empty */ }
+      const list = await fetchGroqVoices();
+      if (list.length) setGroqVoices(list);
     })();
+
+    try {
+      const saved = localStorage.getItem(VOICE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as VoiceChoice;
+        setVoiceChoice(parsed);
+        voiceChoiceRef.current = parsed;
+        hasExplicitVoiceRef.current = true;
+      }
+    } catch {}
+
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+
+    const loadBrowserVoices = () => {
+      const list = window.speechSynthesis.getVoices();
+      if (!list.length) return;
+      setBrowserVoices(list);
+      if (!hasExplicitVoiceRef.current) {
+        const preferred = list.find(v => /^en/i.test(v.lang)) ?? list[0];
+        const choice: VoiceChoice = { engine: "browser", voiceURI: preferred.voiceURI, name: preferred.name };
+        setVoiceChoice(choice);
+        voiceChoiceRef.current = choice;
+      }
+    };
+    loadBrowserVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", loadBrowserVoices);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", loadBrowserVoices);
   }, []);
+
+  const selectVoice = (choice: VoiceChoice) => {
+    setVoiceChoice(choice);
+    voiceChoiceRef.current = choice;
+    hasExplicitVoiceRef.current = true;
+    setShowPicker(false);
+    try { localStorage.setItem(VOICE_KEY, JSON.stringify(choice)); } catch {}
+  };
+
+  const voiceLabel = voiceChoice.engine === "browser" ? voiceChoice.name.replace(/\s*\(.*\)\s*$/, "") : voiceChoice.name;
 
   useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: "smooth" }); }, [turns]);
 
@@ -1743,7 +1755,7 @@ export default function VoicePage() {
       };
 
       setRec("playing");
-      speakViaBackend(response, voice, audioRef, () => setRec("idle"));
+      speakText({ text: response, voiceChoice: voiceChoiceRef.current, speechRate: 1, audioRef, onEnd: () => setRec("idle") });
 
       setTurns((prev) => [...prev, {
         id: crypto.randomUUID(), transcript, response,
@@ -1755,7 +1767,7 @@ export default function VoicePage() {
       setRec("idle");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voice, turns]);
+  }, [turns]);
 
   const startRecording = useCallback(async () => {
     if (recStateRef.current !== "idle") return;
@@ -1795,7 +1807,7 @@ export default function VoicePage() {
     const s = recStateRef.current;
     if (s === "idle")      return startRecording();
     if (s === "recording") return stopRecording();
-    if (s === "playing")   { audioRef.current?.pause(); setRec("idle"); }
+    if (s === "playing")   { stopSpeakingPlayback(audioRef, () => setRec("idle")); }
   };
 
   const statusLabel: Record<RecordState, string> = {
@@ -1825,11 +1837,11 @@ export default function VoicePage() {
               <Trash2 className="w-4 h-4" />
             </Button>
           )}
-          {/* Voice picker */}
+          {/* Voice picker — browser (Google/Microsoft) voices + Groq AI voices */}
           <div className="relative">
             <Button variant="outline" size="sm" onClick={() => setShowPicker((v) => !v)} className="gap-2 text-xs max-w-[160px] truncate">
               <Settings2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span className="truncate capitalize">{voice ?? "Default voice"}</span>
+              <span className="truncate capitalize">{voiceLabel}</span>
               <ChevronDown className="w-3 h-3 shrink-0" />
             </Button>
             <AnimatePresence>
@@ -1837,17 +1849,44 @@ export default function VoicePage() {
                 <motion.div
                   initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
                   className="absolute right-0 top-full mt-1 z-50 rounded-xl overflow-hidden shadow-2xl"
-                  style={{ background: "rgba(4,11,25,0.98)", border: "1px solid rgba(0,212,255,0.15)", minWidth: "220px" }}
+                  style={{ background: "rgba(4,11,25,0.98)", border: "1px solid rgba(0,212,255,0.15)", minWidth: "300px" }}
                 >
-                  <div className="py-1 max-h-64 overflow-y-auto flex flex-col">
-                    {voices.map((v) => (
-                      <button key={v} onClick={() => { setVoice(v); setShowPicker(false); }}
-                        className={cn("block w-full text-left px-4 py-2 text-xs capitalize transition-colors",
-                          v === voice ? "text-cyan-400 bg-cyan-500/10" : "text-white/60 hover:text-white hover:bg-white/4"
-                        )}>
-                        {v}
-                      </button>
-                    ))}
+                  <div className="py-3 px-2 max-h-96 overflow-y-auto flex flex-col gap-1.5">
+                    {browserVoices.length > 0 && (
+                      <>
+                        <p className="px-2.5 pt-1.5 pb-2 text-[9.5px] font-semibold text-white/30 uppercase tracking-wider">
+                          Browser (Google / Microsoft)
+                        </p>
+                        <div className="flex flex-col gap-1.5">
+                          {browserVoices.map((v) => (
+                            <button key={v.voiceURI}
+                              onClick={() => selectVoice({ engine: "browser", voiceURI: v.voiceURI, name: v.name })}
+                              title={v.name}
+                              className={cn("block w-full text-left rounded-lg px-3 py-2.5 text-[12px] leading-tight truncate transition-colors",
+                                voiceChoice.engine === "browser" && voiceChoice.voiceURI === v.voiceURI
+                                  ? "text-cyan-400 bg-cyan-500/15" : "text-white/65 hover:text-white hover:bg-white/8"
+                              )}>
+                              {v.name}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="my-2.5 border-t border-white/10" />
+                      </>
+                    )}
+                    <p className="px-2.5 pt-1.5 pb-2 text-[9.5px] font-semibold text-white/30 uppercase tracking-wider">
+                      AI Voices
+                    </p>
+                    <div className="flex flex-col gap-1.5">
+                      {groqVoices.map((v) => (
+                        <button key={v} onClick={() => selectVoice({ engine: "groq", name: v })}
+                          className={cn("block w-full text-left rounded-lg px-3 py-2.5 text-[12px] leading-tight capitalize transition-colors",
+                            voiceChoice.engine === "groq" && voiceChoice.name === v
+                              ? "text-cyan-400 bg-cyan-500/15" : "text-white/65 hover:text-white hover:bg-white/8"
+                          )}>
+                          {v}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </motion.div>
               )}
@@ -1975,7 +2014,7 @@ export default function VoicePage() {
         </div>
 
         <p className="text-[10px] text-white/20 capitalize">
-          {voice ? `Voice: ${voice}` : "No TTS voice loaded"}
+          Voice: {voiceLabel}
           {!stt.isSupported && " · Live preview unavailable in this browser"}
         </p>
       </div>

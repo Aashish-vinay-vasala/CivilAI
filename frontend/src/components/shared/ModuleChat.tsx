@@ -7,17 +7,24 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Bot, Send, X, Loader2, Sparkles, Mic, MicOff, Volume2, Gauge, Globe, Copy, Check,
   Maximize2, Minimize2, Plus, History as HistoryIcon, Download, ChevronLeft, Trash2, ChevronDown,
-  Image as ImageIcon, FileAudio, FileText, RefreshCw, Search, Activity,
+  Image as ImageIcon, FileAudio, FileText, RefreshCw, Search, Activity, Wrench, CheckCircle2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import axios from "axios";
-import jsPDF from "jspdf";
-import { supabase } from "@/lib/supabase";
+import ChatText from "@/components/shared/ChatText";
+import { faviconProxyUrl } from "@/lib/chatTokenize";
+import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import { speak as speakText, stopSpeaking as stopSpeakingPlayback, fetchGroqVoices, type VoiceChoice } from "@/lib/ttsPlayback";
+import { buildChatPdf } from "@/lib/chatPdf";
+import {
+  streamChat, sendVoiceChat, uploadFileChat, saveTranscript, fetchSessionHistory,
+  listSessions, upsertSession, deleteSession,
+  type SavedSession,
+} from "@/lib/copilotClient";
 import {
   useChatWidgetStore,
   type ChatMessage as Message,
-  type ChatSource as Source,
 } from "@/lib/stores/chatWidgetStore";
+import type { ToolEvent } from "@/lib/copilotClient";
 
 const POSITION_KEY    = "civilai_widget_pos";
 const SPEECH_RATE_KEY = "civilai_widget_speech_rate";
@@ -39,29 +46,6 @@ const UPLOAD_IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp"]);
 
 type VoiceState = "idle" | "recording" | "processing" | "speaking";
 
-// "browser" = the OS/browser's own speech engine (window.speechSynthesis) — on
-// Windows these are literally named "Microsoft David/Zira/...", and Chrome adds
-// "Google US English" etc. Free, instant, no backend round-trip.
-// "groq" = the backend's Groq Orpheus TTS voices (server round-trip, MP3).
-type VoiceChoice =
-  | { engine: "browser"; voiceURI: string; name: string }
-  | { engine: "groq"; name: string };
-
-// Plain fetch() isn't covered by the axios auth interceptor (axiosAuthInterceptor.ts),
-// so the voice endpoints need their Supabase bearer token attached manually.
-async function authHeaders(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-interface SavedSession {
-  id: string;
-  label: string;
-  messages: Message[];
-  created_at: string;
-}
-
 interface ModuleChatProps {
   context: string;
   placeholder?: string;
@@ -79,128 +63,57 @@ function defaultPos() {
   };
 }
 
-type InlineToken =
-  | { type: "text"; content: string }
-  | { type: "bold"; content: string }
-  | { type: "link"; content: string; url: string }
-  | { type: "navlink"; content: string; href: string };
+// Human-readable labels for the agent's tool calls — see backend/app/ai/agent_copilot.py _TOOLS.
+const TOOL_LABELS: Record<string, string> = {
+  list_projects:            "Listing Projects",
+  get_project_dashboard:    "Building Project Dashboard",
+  analyze_schedule_data:    "Analysing Schedule",
+  analyze_safety_data:      "Analysing Safety Report",
+  analyze_cost_data:        "Analysing Cost Data",
+  analyze_contract_data:    "Analysing Contract",
+  analyze_contract_terms:   "Analysing Contract Terms",
+  calculate_evm_metrics:    "Calculating EVM Metrics",
+  assess_compliance_data:   "Checking Compliance",
+  analyze_equipment_data:   "Analysing Equipment",
+  generate_document:        "Generating Document",
+  analyze_vendor_data:      "Scoring Vendor",
+  analyze_payment_data:     "Analysing Payments",
+  get_accounting_reconciliation: "Reconciling Accounts",
+  analyze_workforce_data:   "Analysing Workforce",
+  analyze_procurement_data: "Analysing Procurement",
+  assess_green_metrics:     "Assessing Sustainability",
+  analyze_punch_list_data:  "Analysing Punch List",
+  summarize_meetings:       "Summarising Meeting Minutes",
+  get_evm_history:          "Analysing EVM Trend",
+  analyze_bim_data:         "Analysing BIM / Clashes",
+  extract_material_prices_from_text: "Extracting Material Prices",
+  extract_budget_items_from_text:    "Extracting Budget Items",
+  run_what_if_scenario:     "Running What-If Scenario",
+  generate_advanced_report: "Generating Advanced Report",
+};
 
-// Recognized module keywords → internal route, for turning plain mentions like
-// "3 open RFIs" into an in-app link. Ordered roughly most- to least-specific;
-// first match wins at each position so more specific phrases beat generic ones.
-const MODULE_LINKS: { re: RegExp; href: string }[] = [
-  { re: /\bRFIs?\b/i,                                   href: "/rfis" },
-  { re: /\bsafety incidents?\b/i,                       href: "/safety" },
-  { re: /\bsafety score\b/i,                            href: "/safety" },
-  { re: /\bcost overruns?\b/i,                          href: "/cost" },
-  { re: /\bbudget\b/i,                                  href: "/cost" },
-  { re: /\b(?:EVM|earned value management|CPI|SPI)\b/,  href: "/evm" },
-  { re: /\bcritical path\b/i,                           href: "/scheduling" },
-  { re: /\bschedul(?:e|ing|ed) (?:tasks?|delays?)\b/i,   href: "/scheduling" },
-  { re: /\bworkforce\b/i,                                href: "/workforce" },
-  { re: /\bequipment\b/i,                                href: "/equipment" },
-  { re: /\bchange orders?\b/i,                           href: "/contracts" },
-  { re: /\bcontracts?\b/i,                                href: "/contracts" },
-  { re: /\bpermits?\b/i,                                 href: "/compliance" },
-  { re: /\bpurchase orders?\b/i,                         href: "/procurement" },
-  { re: /\bvendors?\b/i,                                 href: "/vendors" },
-  { re: /\binvoices?\b/i,                                href: "/payments" },
-  { re: /\bpayments?\b/i,                                href: "/payments" },
-  { re: /\bsubmittals?\b/i,                              href: "/documents" },
-  { re: /\bdaily reports?\b/i,                           href: "/daily-reports" },
-  { re: /\bmeetings?\b/i,                                href: "/meetings" },
-  { re: /\banomal(?:y|ies)\b/i,                          href: "/anomaly" },
-  { re: /\bsupport tickets?\b/i,                         href: "/support" },
-];
-
-// Splits a plain-text run into text/navlink pieces by finding the earliest
-// MODULE_LINKS match and recursing on the remainder.
-function linkifyModules(text: string): InlineToken[] {
-  let earliest: { index: number; length: number; href: string } | null = null;
-  for (const { re, href } of MODULE_LINKS) {
-    const m = re.exec(text);
-    if (m && (earliest === null || m.index < earliest.index)) {
-      earliest = { index: m.index, length: m[0].length, href };
-    }
-  }
-  if (!earliest) return text ? [{ type: "text", content: text }] : [];
-  const before = text.slice(0, earliest.index);
-  const match   = text.slice(earliest.index, earliest.index + earliest.length);
-  const after   = text.slice(earliest.index + earliest.length);
-  const tokens: InlineToken[] = [];
-  if (before) tokens.push({ type: "text", content: before });
-  tokens.push({ type: "navlink", content: match, href: earliest.href });
-  tokens.push(...linkifyModules(after));
-  return tokens;
-}
-
-// Splits message text into plain / **bold** / [markdown link](url) segments, in
-// order, then further expands plain-text runs into recognized module deep-links.
-function parseInlineTokens(text: string): InlineToken[] {
-  const rawTokens: InlineToken[] = [];
-  const re = /(\*\*[^*]+\*\*)|(\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > lastIndex) rawTokens.push({ type: "text", content: text.slice(lastIndex, match.index) });
-    if (match[1]) {
-      rawTokens.push({ type: "bold", content: match[1].slice(2, -2) });
-    } else if (match[2]) {
-      const linkMatch = match[2].match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
-      if (linkMatch) rawTokens.push({ type: "link", content: linkMatch[1], url: linkMatch[2] });
-    }
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < text.length) rawTokens.push({ type: "text", content: text.slice(lastIndex) });
-
-  const tokens: InlineToken[] = [];
-  for (const tok of rawTokens) {
-    if (tok.type === "text") tokens.push(...linkifyModules(tok.content));
-    else tokens.push(tok);
-  }
-  return tokens;
-}
-
-// Proxied through our own backend (not called directly) — the favicon provider
-// sends no CORS headers, so a raw <img src="https://www.google.com/s2/favicons...">
-// would display fine but couldn't be read as pixel data for the PDF export.
-function faviconProxyUrl(pageUrl: string): string {
-  return `${API}/api/v1/copilot/favicon?url=${encodeURIComponent(pageUrl)}`;
-}
-
-function renderContent(text: string, navigate: (href: string) => void) {
-  return parseInlineTokens(text).map((tok, i) => {
-    if (tok.type === "bold") return <strong key={i}>{tok.content}</strong>;
-    if (tok.type === "link") {
-      return (
-        <a
+// Compact "tool used" chips shown above an assistant reply — while a tool is
+// running it pulses, once done it shows a checkmark (details aren't expanded
+// here, unlike the full Agent page, to keep the floating widget lightweight).
+function ToolStepChips({ steps }: { steps: NonNullable<Message["toolSteps"]> }) {
+  if (steps.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {steps.map((s, i) => (
+        <span
           key={i}
-          href={tok.url}
-          target="_blank"
-          rel="noreferrer"
-          onMouseDown={e => e.stopPropagation()}
-          className="inline-flex items-center gap-1 text-cyan-400 underline decoration-cyan-400/40 hover:text-cyan-300"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-medium"
+          style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.18)", color: "#fbbf24" }}
         >
-          <img src={faviconProxyUrl(tok.url)} alt="" className="inline-block w-3 h-3 rounded-sm" />
-          {tok.content}
-        </a>
-      );
-    }
-    if (tok.type === "navlink") {
-      return (
-        <button
-          key={i}
-          onMouseDown={e => e.stopPropagation()}
-          onClick={() => navigate(tok.href)}
-          title={`Go to ${tok.href}`}
-          className="font-medium text-cyan-400 underline decoration-cyan-400/40 hover:text-cyan-300"
-        >
-          {tok.content}
-        </button>
-      );
-    }
-    return <span key={i}>{tok.content}</span>;
-  });
+          {s.done
+            ? <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+            : <Wrench className="w-2.5 h-2.5 animate-pulse" />
+          }
+          {TOOL_LABELS[s.tool] ?? s.tool}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 const DEFAULT_FOLLOWUPS = ["What needs attention?", "Show key risks", "Give recommendations"];
@@ -284,136 +197,6 @@ function UsageBar2D({ label, value, color }: UsageBarDatum) {
   );
 }
 
-// ── PDF export helpers ───────────────────────────────────────────────────────
-// jsPDF has no rich-text support, so bold/link tokens are flattened into
-// individually-styled "pieces" (one per word) and word-wrapped by hand.
-
-interface PdfPiece {
-  text: string;
-  bold: boolean;
-  url?: string;
-  iconFirst?: boolean; // true on the first word of a link, so the favicon is only drawn once
-}
-
-function tokensToPieces(tokens: InlineToken[]): PdfPiece[] {
-  const pieces: PdfPiece[] = [];
-  for (const tok of tokens) {
-    if (tok.type === "link") {
-      tok.content.split(" ").filter(Boolean).forEach((w, i) =>
-        pieces.push({ text: w, bold: false, url: tok.url, iconFirst: i === 0 }));
-    } else if (tok.type === "navlink") {
-      // Absolute so the link still works when the PDF is opened later/elsewhere.
-      const absoluteUrl = typeof window !== "undefined" ? `${window.location.origin}${tok.href}` : tok.href;
-      tok.content.split(" ").filter(Boolean).forEach(w =>
-        pieces.push({ text: w, bold: false, url: absoluteUrl }));
-    } else {
-      tok.content.split(" ").filter(Boolean).forEach(w =>
-        pieces.push({ text: w, bold: tok.type === "bold" }));
-    }
-  }
-  return pieces;
-}
-
-async function fetchFaviconDataUrl(pageUrl: string): Promise<string | null> {
-  try {
-    // cache: "no-store" avoids a Chromium quirk where a favicon already loaded via
-    // an <img> tag (no-cors, opaque) can shadow this cors fetch() to the same URL.
-    const res = await fetch(faviconProxyUrl(pageUrl), { cache: "no-store" });
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
-}
-
-function collectLinkUrls(messages: Message[]): string[] {
-  const urls = new Set<string>();
-  for (const m of messages) {
-    for (const tok of parseInlineTokens(m.content)) {
-      if (tok.type === "link") urls.add(tok.url);
-    }
-    (m.sources ?? []).forEach(s => urls.add(s.url));
-  }
-  return [...urls];
-}
-
-const PDF_MARGIN = 14;
-const PDF_BOTTOM = 282;
-const PDF_LINE_H = 5;
-
-interface PdfCursor { y: number; }
-
-function pdfNewPageIfNeeded(doc: jsPDF, cursor: PdfCursor, need = PDF_LINE_H) {
-  if (cursor.y + need > PDF_BOTTOM) {
-    doc.addPage();
-    cursor.y = 20;
-  }
-}
-
-// Word-wraps `text` (with **bold** / [link](url) tokens already resolved) onto the
-// page, drawing real bold glyphs and real clickable+favicon-tagged links instead of
-// literal markdown syntax.
-function drawRichParagraph(
-  doc: jsPDF,
-  text: string,
-  x: number,
-  maxWidth: number,
-  cursor: PdfCursor,
-  faviconMap: Map<string, string>,
-) {
-  const iconSize = 3.2;
-  for (const rawPara of text.split("\n")) {
-    const para = rawPara.trim();
-    if (!para) { cursor.y += PDF_LINE_H * 0.6; continue; }
-
-    const bulletMatch = para.match(/^[-•]\s+(.*)$/);
-    const paraX   = bulletMatch ? x + 4 : x;
-    const paraW   = bulletMatch ? maxWidth - 4 : maxWidth;
-    const pieces  = tokensToPieces(parseInlineTokens(bulletMatch ? `•  ${bulletMatch[1]}` : para));
-
-    let cx = paraX;
-    let firstOnLine = true;
-    pdfNewPageIfNeeded(doc, cursor);
-
-    for (const p of pieces) {
-      doc.setFont("helvetica", p.bold ? "bold" : "normal");
-      if (p.url) doc.setTextColor(37, 130, 210);
-      else       doc.setTextColor(60, 60, 60);
-
-      const hasIcon = !!(p.iconFirst && p.url && faviconMap.get(p.url));
-      const iconW   = hasIcon ? iconSize + 1 : 0;
-      const sepW    = firstOnLine ? 0 : doc.getTextWidth(" ");
-      const textW   = doc.getTextWidth(p.text);
-
-      if (!firstOnLine && cx + sepW + iconW + textW > paraX + paraW) {
-        cursor.y += PDF_LINE_H;
-        pdfNewPageIfNeeded(doc, cursor);
-        cx = paraX;
-        firstOnLine = true;
-      }
-
-      let drawX = cx + (firstOnLine ? 0 : sepW);
-      if (hasIcon) {
-        try { doc.addImage(faviconMap.get(p.url!)!, "PNG", drawX, cursor.y - iconSize + 0.9, iconSize, iconSize); } catch { /* skip malformed icon */ }
-        drawX += iconW;
-      }
-
-      doc.text(p.text, drawX, cursor.y);
-      if (p.url) doc.link(drawX, cursor.y - 3.3, textW, 4, { url: p.url });
-
-      cx = drawX + textW;
-      firstOnLine = false;
-    }
-    cursor.y += PDF_LINE_H;
-  }
-}
-
 export default function ModuleChat({
   context,
   placeholder,
@@ -424,6 +207,7 @@ export default function ModuleChat({
     messages, setMessages,
     webSearch, setWebSearch,
     sessionId, sessionLabel,
+    hydrated, hydrateFromServer,
     startNewSession, loadSession,
   } = useChatWidgetStore();
 
@@ -456,9 +240,6 @@ export default function ModuleChat({
 
   const bottomRef      = useRef<HTMLDivElement>(null);
   const inputRef       = useRef<HTMLInputElement>(null);
-  const recorderRef    = useRef<MediaRecorder | null>(null);
-  const chunksRef       = useRef<Blob[]>([]);
-  const streamRef       = useRef<MediaStream | null>(null);
   const audioRef        = useRef<HTMLAudioElement | null>(null);
   const speechRateRef   = useRef(1);
   const voiceChoiceRef  = useRef<VoiceChoice>({ engine: "groq", name: "autumn" });
@@ -519,12 +300,8 @@ export default function ModuleChat({
   // ── TTS voice (persisted) — browser (Google/Microsoft) voices + Groq AI voices ──
   useEffect(() => {
     (async () => {
-      try {
-        const res  = await fetch(`${API}/api/v1/voice/voices`);
-        const data = await res.json();
-        const list: string[] = data.voices ?? [];
-        if (list.length) setGroqVoices(list);
-      } catch { /* keep DEFAULT_VOICES fallback */ }
+      const list = await fetchGroqVoices();
+      if (list.length) setGroqVoices(list);
     })();
 
     try {
@@ -596,32 +373,28 @@ export default function ModuleChat({
   };
 
   // ── Chat helpers ─────────────────────────────────────────────────
+  // On first open, try to resume the shared session's server history (the same
+  // history the Copilot page loads) before falling back to the welcome message.
   useEffect(() => {
-    if (open && messages.length === 0) {
-      setMessages([{
-        role: "assistant",
-        content: `I'm your CivilAI assistant for ${context}. Ask me anything or tap "Summarize Page" to get an AI summary!`,
-      }]);
-    }
+    if (!open || messages.length > 0 || hydrated) return;
+    (async () => {
+      const history = await fetchSessionHistory(sessionId);
+      if (history.length > 0) {
+        hydrateFromServer(history);
+      } else {
+        hydrateFromServer([{
+          role: "assistant",
+          content: `I'm your CivilAI assistant for ${context}. Ask me anything or tap "Summarize Page" to get an AI summary!`,
+        }]);
+      }
+    })();
   }, [open]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  // Stop any in-progress recording/playback when the panel is closed or unmounted
-  useEffect(() => {
-    if (open) return;
-    if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
-    audioRef.current?.pause();
-    if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
-    setMaximized(false);
-    setShowVoicePicker(false);
-    setShowUsage(false);
-  }, [open]);
-
   useEffect(() => () => {
-    streamRef.current?.getTracks().forEach(t => t.stop());
     audioRef.current?.pause();
     if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
   }, []);
@@ -632,11 +405,7 @@ export default function ModuleChat({
     if (messages.length <= 1) return;
     const timer = setTimeout(() => {
       const firstUser = messages.find(m => m.role === "user");
-      axios.post(`${API}/api/v1/copilot/sessions`, {
-        id:       sessionId,
-        label:    (firstUser?.content ?? context).slice(0, 80),
-        messages,
-      }).catch(() => {});
+      upsertSession(sessionId, (firstUser?.content ?? context).slice(0, 80), messages);
     }, 1000);
     return () => clearTimeout(timer);
   }, [messages, sessionId, context]);
@@ -648,14 +417,8 @@ export default function ModuleChat({
   // ── Sessions: new chat / history list ──────────────────────────────
   const fetchSessions = async () => {
     setSessionsLoading(true);
-    try {
-      const res = await axios.get(`${API}/api/v1/copilot/sessions`);
-      setSessions(res.data.sessions ?? []);
-    } catch {
-      setSessions([]);
-    } finally {
-      setSessionsLoading(false);
-    }
+    setSessions(await listSessions());
+    setSessionsLoading(false);
   };
 
   const openHistory = () => {
@@ -688,7 +451,7 @@ export default function ModuleChat({
 
   const handleDeleteSession = async (id: string) => {
     setSessions(prev => prev.filter(s => s.id !== id));
-    try { await axios.delete(`${API}/api/v1/copilot/sessions/${id}`); } catch {}
+    await deleteSession(id);
   };
 
   const handleNewChat = () => {
@@ -701,104 +464,12 @@ export default function ModuleChat({
     if (messages.length <= 1 || pdfState === "saving") return;
     setPdfState("saving");
     try {
-      // Preload every referenced favicon as a data URL up front — jsPDF.addImage
-      // needs actual pixel data in hand, it can't fetch asynchronously mid-draw.
-      const urls = collectLinkUrls(messages);
-      const faviconMap = new Map<string, string>();
-      await Promise.all(urls.map(async u => {
-        const dataUrl = await fetchFaviconDataUrl(u);
-        if (dataUrl) faviconMap.set(u, dataUrl);
-      }));
-
-      const doc = new jsPDF();
-      const pw    = doc.internal.pageSize.getWidth();
-      const bodyW = pw - PDF_MARGIN * 2;
-      const cursor: PdfCursor = { y: 20 };
-
-      // ── Cover header ──
-      doc.setFontSize(18); doc.setTextColor(20, 20, 20);
-      doc.setFont("helvetica", "bold");
-      doc.text("CivilAI Assistant Conversation", pw / 2, cursor.y, { align: "center" });
-      cursor.y += 7;
-      doc.setFontSize(9); doc.setTextColor(120, 120, 120);
-      doc.setFont("helvetica", "normal");
-      doc.text(`${context} · ${new Date().toLocaleString()}`, pw / 2, cursor.y, { align: "center" });
-      cursor.y += 5;
-      doc.setDrawColor(0, 180, 220);
-      doc.setLineWidth(0.6);
-      doc.line(PDF_MARGIN, cursor.y, pw - PDF_MARGIN, cursor.y);
-      cursor.y += 10;
-
-      for (const m of messages) {
-        pdfNewPageIfNeeded(doc, cursor, 12);
-
-        // Role tag — small colored pill
-        const isUser = m.role === "user";
-        const tag    = isUser ? "You" : "CivilAI Assistant";
-        doc.setFontSize(9);
-        doc.setFont("helvetica", "bold");
-        const tagW = doc.getTextWidth(tag) + 6;
-        doc.setFillColor(isUser ? 230 : 210, isUser ? 240 : 235, isUser ? 250 : 255);
-        doc.roundedRect(PDF_MARGIN, cursor.y - 4, tagW, 6, 1.5, 1.5, "F");
-        doc.setTextColor(isUser ? 30 : 20, isUser ? 100 : 110, isUser ? 180 : 190);
-        doc.text(tag, PDF_MARGIN + 3, cursor.y);
-        cursor.y += 7;
-
-        // Body text — real bold, real clickable+favicon links, bullet indents
-        doc.setFontSize(10);
-        drawRichParagraph(doc, m.content, PDF_MARGIN, bodyW, cursor, faviconMap);
-
-        // Sources mini-list (web-search citations), mirrors the chat UI's chips
-        if (m.sources && m.sources.length > 0) {
-          cursor.y += 1;
-          pdfNewPageIfNeeded(doc, cursor, 6);
-          doc.setFontSize(8); doc.setFont("helvetica", "bold"); doc.setTextColor(140, 140, 140);
-          doc.text("SOURCES", PDF_MARGIN, cursor.y);
-          cursor.y += 4.5;
-          for (const s of m.sources) {
-            pdfNewPageIfNeeded(doc, cursor, 5);
-            const icon = faviconMap.get(s.url);
-            let sx = PDF_MARGIN;
-            if (icon) {
-              try { doc.addImage(icon, "PNG", sx, cursor.y - 3, 3.2, 3.2); } catch { /* skip */ }
-              sx += 4.2;
-            }
-            doc.setFontSize(8.5); doc.setFont("helvetica", "normal"); doc.setTextColor(37, 130, 210);
-            const label = doc.splitTextToSize(s.title, pw - PDF_MARGIN - sx)[0] as string;
-            doc.text(label, sx, cursor.y);
-            doc.link(sx, cursor.y - 3, doc.getTextWidth(label), 4, { url: s.url });
-            cursor.y += 4.5;
-          }
-        }
-
-        // Divider between turns
-        cursor.y += 3;
-        pdfNewPageIfNeeded(doc, cursor, 4);
-        doc.setDrawColor(230, 230, 230);
-        doc.setLineWidth(0.2);
-        doc.line(PDF_MARGIN, cursor.y - 2, pw - PDF_MARGIN, cursor.y - 2);
-        cursor.y += 4;
-      }
-
-      // Page numbers
-      const pageCount = doc.internal.pages.length - 1;
-      for (let p = 1; p <= pageCount; p++) {
-        doc.setPage(p);
-        doc.setFontSize(8); doc.setTextColor(160, 160, 160); doc.setFont("helvetica", "normal");
-        doc.text(`Page ${p} of ${pageCount}`, pw / 2, 292, { align: "center" });
-      }
-
+      const doc = await buildChatPdf(messages, { context });
       const filename = `civilai-chat-${new Date().toISOString().slice(0, 10)}.pdf`;
       doc.save(filename);
 
       const pdfBlob = new Blob([doc.output("arraybuffer")], { type: "application/pdf" });
-      const form = new FormData();
-      form.append("pdf", pdfBlob, filename);
-      form.append("messages", JSON.stringify(messages));
-      form.append("label", sessionLabel || context);
-      await fetch(`${API}/api/v1/copilot/transcripts/save`, {
-        method: "POST", body: form, headers: await authHeaders(),
-      });
+      await saveTranscript(pdfBlob, filename, messages, sessionLabel || context);
 
       setPdfState("saved");
       setTimeout(() => setPdfState("idle"), 1500);
@@ -812,54 +483,36 @@ export default function ModuleChat({
   // can share this — the only difference between them is what history they pass in).
   const streamAssistantReply = async (question: string, historyForRequest: Message[]) => {
     setLoading(true);
-    setMessages(prev => [...prev, { role: "assistant" as const, content: "" }]);
+    setMessages(prev => [...prev, { role: "assistant" as const, content: "", toolSteps: [] }]);
     try {
-      const res = await fetch(`${API}/api/v1/copilot/chat/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-        body: JSON.stringify({
-          message: `[Context: ${context}] ${question}`,
-          chat_history: historyForRequest,
-          web_search: webSearch,
+      const result = await streamChat(
+        { message: `[Context: ${context}] ${question}`, sessionId, chatHistory: historyForRequest, webSearch },
+        (delta) => setMessages(prev => {
+          const copy = [...prev];
+          const last = copy[copy.length - 1];
+          copy[copy.length - 1] = { ...last, content: last.content + delta };
+          return copy;
         }),
-      });
-      if (!res.ok || !res.body) throw new Error("Stream request failed");
-
-      const reader  = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        let nl;
-        while ((nl = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, nl).trim();
-          buffer = buffer.slice(nl + 1);
-          if (!line) continue;
-
-          let evt: { delta?: string; done?: boolean; blocked?: boolean; response?: string; final?: string; sources?: Source[] };
-          try { evt = JSON.parse(line); } catch { continue; }
-
-          if (evt.delta) {
-            setMessages(prev => {
-              const copy = [...prev];
-              const last = copy[copy.length - 1];
-              copy[copy.length - 1] = { ...last, content: last.content + evt.delta };
-              return copy;
-            });
-          } else if (evt.done) {
-            const finalText = evt.blocked ? (evt.response ?? "") : (evt.final ?? "");
-            setMessages(prev => {
-              const copy = [...prev];
-              copy[copy.length - 1] = { role: "assistant", content: finalText, sources: evt.sources };
-              return copy;
-            });
+        (toolEvent: ToolEvent) => setMessages(prev => {
+          const copy = [...prev];
+          const last = copy[copy.length - 1];
+          const steps = last.toolSteps ?? [];
+          if (toolEvent.phase === "start") {
+            copy[copy.length - 1] = { ...last, toolSteps: [...steps, { tool: toolEvent.tool, input: toolEvent.input ?? {}, output: null, done: false }] };
+          } else {
+            copy[copy.length - 1] = {
+              ...last,
+              toolSteps: steps.map(s => (s.tool === toolEvent.tool && !s.done) ? { ...s, output: toolEvent.output ?? "", done: true } : s),
+            };
           }
-        }
-      }
+          return copy;
+        }),
+      );
+      setMessages(prev => {
+        const copy = [...prev];
+        copy[copy.length - 1] = { role: "assistant", content: result.text, sources: result.sources, toolSteps: result.toolSteps };
+        return copy;
+      });
     } catch {
       setMessages(prev => {
         const copy = [...prev];
@@ -913,16 +566,11 @@ export default function ModuleChat({
     setMessages(newMessages);
     setLoading(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("message", question);
-      form.append("session_id", sessionId);
-      form.append("web_search", String(webSearch));
-      const response = await axios.post(`${API}/api/v1/copilot/upload`, form);
+      const response = await uploadFileChat(file, question, sessionId, webSearch);
       setMessages([...newMessages, {
         role: "assistant",
-        content: response.data.response,
-        sources: response.data.sources,
+        content: response.response,
+        sources: response.sources,
       }]);
     } catch (err) {
       const detail = axios.isAxiosError(err) ? (err.response?.data?.detail as string | undefined) : undefined;
@@ -966,53 +614,19 @@ export default function ModuleChat({
   };
 
   const stopSpeaking = useCallback(() => {
-    audioRef.current?.pause();
-    if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
-    setVoiceState("idle");
-    setSpeakingKey(null);
+    stopSpeakingPlayback(audioRef, () => { setVoiceState("idle"); setSpeakingKey(null); });
   }, []);
 
   const speak = useCallback((text: string, key: string | null = null) => {
-    audioRef.current?.pause();
-    if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
-
-    const choice = voiceChoiceRef.current;
     setVoiceState("speaking");
     setSpeakingKey(key);
-
-    if (choice.engine === "browser") {
-      if (typeof window === "undefined" || !window.speechSynthesis) { setVoiceState("idle"); setSpeakingKey(null); return; }
-      const voices = window.speechSynthesis.getVoices();
-      const match  = voices.find(v => v.voiceURI === choice.voiceURI) ?? voices.find(v => v.name === choice.name);
-      const utter  = new SpeechSynthesisUtterance(text.slice(0, 1000));
-      if (match) utter.voice = match;
-      utter.rate = speechRateRef.current;
-      utter.onend   = () => { setVoiceState("idle"); setSpeakingKey(null); };
-      utter.onerror = () => { setVoiceState("idle"); setSpeakingKey(null); };
-      window.speechSynthesis.speak(utter);
-      return;
-    }
-
-    (async () => {
-      try {
-        const form = new FormData();
-        form.append("text", text.slice(0, 1000));
-        form.append("voice", choice.name);
-        const res = await fetch(`${API}/api/v1/voice/speak`, { method: "POST", body: form, headers: await authHeaders() });
-        if (!res.ok) throw new Error("TTS failed");
-        const blob  = await res.blob();
-        const url   = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audio.playbackRate = speechRateRef.current;
-        audioRef.current = audio;
-        audio.onended = () => { URL.revokeObjectURL(url); setVoiceState("idle"); setSpeakingKey(null); };
-        audio.onerror = () => { URL.revokeObjectURL(url); setVoiceState("idle"); setSpeakingKey(null); };
-        await audio.play();
-      } catch {
-        setVoiceState("idle");
-        setSpeakingKey(null);
-      }
-    })();
+    speakText({
+      text,
+      voiceChoice: voiceChoiceRef.current,
+      speechRate: speechRateRef.current,
+      audioRef,
+      onEnd: () => { setVoiceState("idle"); setSpeakingKey(null); },
+    });
   }, []);
 
   // Speaker button on a message bubble — click to read it aloud, click again to stop.
@@ -1027,14 +641,7 @@ export default function ModuleChat({
   const sendVoiceAudio = useCallback(async (blob: Blob) => {
     setVoiceState("processing");
     try {
-      const form = new FormData();
-      form.append("audio", blob, "recording.webm");
-      form.append("chat_history", JSON.stringify(messages));
-      form.append("web_search", String(webSearch));
-      const res  = await fetch(`${API}/api/v1/voice/voice-chat`, { method: "POST", body: form, headers: await authHeaders() });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail ?? "Voice chat failed");
-      const { transcript, response, sources } = data as { transcript: string; response: string; sources?: Source[] };
+      const { transcript, response, sources } = await sendVoiceChat(blob, { sessionId, chatHistory: messages, webSearch });
       setMessages(prev => [
         ...prev,
         { role: "user", content: transcript },
@@ -1046,34 +653,21 @@ export default function ModuleChat({
       setVoiceState("idle");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, webSearch, speak]);
+  }, [messages, webSearch, sessionId, speak]);
 
-  const startRecording = useCallback(async () => {
+  const { state: recorderState, start: startVoiceRecorder, stop: stopRecording } = useVoiceRecorder(sendVoiceAudio);
+
+  // Mirror the recorder's own idle/recording state into the wider idle/recording/
+  // processing/speaking machine — the transitions into "processing"/"speaking"
+  // are driven by sendVoiceAudio/speak above, not by the recorder itself.
+  useEffect(() => {
+    if (recorderState === "recording") setVoiceState("recording");
+  }, [recorderState]);
+
+  const startRecording = () => {
     audioRef.current?.pause();
     if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
-    try {
-      const stream   = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      chunksRef.current = [];
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus" : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      recorderRef.current = recorder;
-      recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      recorder.onstop = () => {
-        streamRef.current?.getTracks().forEach(t => t.stop());
-        streamRef.current = null;
-        sendVoiceAudio(new Blob(chunksRef.current, { type: mimeType }));
-      };
-      recorder.start(250);
-      setVoiceState("recording");
-    } catch {
-      alert("Microphone access denied — please allow microphone access in your browser settings.");
-    }
-  }, [sendVoiceAudio]);
-
-  const stopRecording = () => {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
+    startVoiceRecorder();
   };
 
   const toggleVoice = () => {
@@ -1081,6 +675,17 @@ export default function ModuleChat({
     if (voiceState === "recording") return stopRecording();
     if (voiceState === "speaking")  stopSpeaking();
   };
+
+  // Stop any in-progress recording/playback when the panel is closed
+  useEffect(() => {
+    if (open) return;
+    if (recorderState === "recording") stopRecording();
+    audioRef.current?.pause();
+    if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
+    setMaximized(false);
+    setShowVoicePicker(false);
+    setShowUsage(false);
+  }, [open]);
 
   // ── Drag — mouse ─────────────────────────────────────────────────
   const beginDrag = useCallback((clientX: number, clientY: number) => {
@@ -1530,6 +1135,9 @@ export default function ModuleChat({
               {messages.map((m, i) => (
                 <div key={i} className={`flex gap-2 min-w-0 ${m.role === "user" ? "flex-row-reverse" : ""}`}>
                   <div className="max-w-[84%] min-w-0 flex flex-col gap-1.5">
+                    {m.role === "assistant" && m.toolSteps && m.toolSteps.length > 0 && (
+                      <ToolStepChips steps={m.toolSteps} />
+                    )}
                     <div
                       className="px-3 py-2 rounded-xl text-[12px] leading-relaxed text-white/85 whitespace-pre-wrap wrap-break-word"
                       style={m.role === "user" ? {
@@ -1542,7 +1150,7 @@ export default function ModuleChat({
                         borderTopLeftRadius: "4px",
                       }}
                     >
-                      {renderContent(m.content, router.push)}
+                      <ChatText text={m.content} onNavigate={router.push} />
                     </div>
 
                     <div className={`flex items-center gap-1.5 flex-wrap ${m.role === "user" ? "justify-end" : ""}`}>

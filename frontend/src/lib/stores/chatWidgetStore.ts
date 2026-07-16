@@ -5,16 +5,47 @@ export interface ChatSource {
   url: string;
 }
 
+export interface ChatToolStep {
+  tool: string;
+  input: Record<string, unknown>;
+  output: string | null;
+  done: boolean;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   sources?: ChatSource[];
+  toolSteps?: ChatToolStep[];
 }
+
+// Shared with the AI Copilot page (frontend/src/app/(dashboard)/copilot/page.tsx),
+// which already read/wrote this exact key — reusing it is what makes the widget
+// and the Copilot page converge on the same backend session/history, whichever
+// mounts first.
+const SESSION_STORAGE_KEY = "civilai_copilot_session";
 
 function newSessionId(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function loadOrCreateSessionId(): string {
+  if (typeof window === "undefined") return newSessionId();
+  try {
+    const saved = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (saved) return saved;
+    const fresh = newSessionId();
+    window.localStorage.setItem(SESSION_STORAGE_KEY, fresh);
+    return fresh;
+  } catch {
+    return newSessionId();
+  }
+}
+
+function persistSessionId(id: string): void {
+  try { window.localStorage.setItem(SESSION_STORAGE_KEY, id); } catch {}
 }
 
 type Updater<T> = T | ((prev: T) => T);
@@ -36,6 +67,11 @@ interface ChatWidgetStore {
   webSearch: boolean;
   setWebSearch: (v: Updater<boolean>) => void;
 
+  /** Whether this session's history has already been loaded from the server once this page load. */
+  hydrated: boolean;
+  /** Populates `messages` from server history exactly once — see ModuleChat's mount effect. */
+  hydrateFromServer: (messages: ChatMessage[]) => void;
+
   /** Clears the current conversation and starts a fresh session id (used by "New Chat"). */
   startNewSession: () => void;
 
@@ -53,12 +89,22 @@ export const useChatWidgetStore = create<ChatWidgetStore>()((set) => ({
   messages: [],
   setMessages: (v) => set((s) => ({ messages: resolveUpdate(v, s.messages) })),
 
-  sessionId: newSessionId(),
+  sessionId: loadOrCreateSessionId(),
   sessionLabel: "",
 
   webSearch: false,
   setWebSearch: (v) => set((s) => ({ webSearch: resolveUpdate(v, s.webSearch) })),
 
-  startNewSession: () => set({ messages: [], sessionId: newSessionId(), sessionLabel: "" }),
-  loadSession: (id, messages, label) => set({ sessionId: id, messages, sessionLabel: label }),
+  hydrated: false,
+  hydrateFromServer: (messages) => set((s) => (s.hydrated ? s : { hydrated: true, messages })),
+
+  startNewSession: () => {
+    const fresh = newSessionId();
+    persistSessionId(fresh);
+    set({ messages: [], sessionId: fresh, sessionLabel: "", hydrated: true });
+  },
+  loadSession: (id, messages, label) => {
+    persistSessionId(id);
+    set({ sessionId: id, messages, sessionLabel: label, hydrated: true });
+  },
 }));

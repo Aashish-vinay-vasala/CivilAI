@@ -327,6 +327,66 @@ def analyze_contract_data(project_id: str, extra_context: str = "") -> str:
 
 
 @tool
+def analyze_contract_terms(project_id: str, extra_context: str = "") -> str:
+    """
+    Fetch LIVE contract records from the database and analyse financial and risk terms —
+    contract value, retention percentage, payment terms, risk level/score, and status.
+    Pulls the contracts table for the project. Complements analyze_contract_data, which
+    covers RFIs/submittals/permits rather than the contracts themselves.
+
+    Args:
+        project_id: The project UUID. Pass "" to use the most recent project.
+        extra_context: Any specific contractor, clause, or concern to focus on.
+    """
+    try:
+        from app.ai.live_data import resolve_project
+        from app.services.db_service import supabase
+        from app.ai.groq_client import analyze_document
+        import json
+
+        proj = resolve_project(project_id)
+        if not proj:
+            return "No project found. Call list_projects() first."
+        pid = proj["id"]
+
+        contracts = (
+            supabase.table("contracts")
+            .select("title,contract_type,contractor,value,status,risk_level,risk_score,"
+                    "start_date,end_date,payment_terms,retention_percent,notes")
+            .eq("project_id", pid).execute().data or []
+        )
+        if not contracts:
+            return f"No contracts found for project '{proj.get('name', pid)}'."
+
+        ctx = (
+            f"Project: {proj.get('name')}\n\n"
+            f"Contracts ({len(contracts)}):\n{json.dumps(contracts, indent=2, default=str)}"
+        )
+        if extra_context:
+            ctx += f"\n\nAdditional Context: {extra_context}"
+
+        analysis = analyze_document(
+            ctx,
+            "You are a construction contracts manager. Based on this live contract data, provide:\n"
+            "1. Total contract value under management, broken down by contractor\n"
+            "2. Retention held (%) and estimated $ amount per contract\n"
+            "3. Payment terms summary and any unusual or risky terms\n"
+            "4. High risk_level or high risk_score contracts flagged first, with why\n"
+            "5. Contracts nearing end_date that need renewal or closeout attention\n"
+            "Reference FIDIC or NEC4 clause types where relevant.",
+        )
+        total_value = sum(float(c.get("value") or 0) for c in contracts)
+        high_risk = [c for c in contracts if str(c.get("risk_level", "")).lower() == "high"]
+        return (
+            f"Project: {proj.get('name')} | Contracts: {len(contracts)} | "
+            f"Total Value: ${total_value:,.0f} | High Risk: {len(high_risk)}\n\n"
+            f"Analysis:\n{analysis}"
+        )
+    except Exception as exc:
+        return f"Contract terms analysis failed: {exc}"
+
+
+@tool
 def calculate_evm_metrics(planned_value: float, earned_value: float, actual_cost: float) -> str:
     """
     Calculate Earned Value Management (EVM) metrics from explicitly provided PV, EV, and AC values.
@@ -488,6 +548,60 @@ def analyze_vendor_data(vendor_text: str) -> str:
 
 
 @tool
+def extract_material_prices_from_text(price_text: str) -> str:
+    """
+    Extract structured material unit prices from pasted supplier quotes, price lists,
+    or vendor correspondence. Returns material name, unit price, unit of measure, the
+    as-of date, and any supplier/region notes for each priced item found.
+    """
+    try:
+        from app.ai.material_price_analyzer import extract_material_prices
+        items = extract_material_prices(price_text)
+        if not items:
+            return "No material prices could be extracted from this text."
+        lines = [f"Extracted {len(items)} material price(s):\n"]
+        for i in items:
+            line = f"• {i.get('material')}: ${i.get('price', 0):,.2f} / {i.get('unit', 'unit')}"
+            if i.get("as_of_date"):
+                line += f" (as of {i['as_of_date']})"
+            if i.get("notes"):
+                line += f" — {i['notes']}"
+            lines.append(line)
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Material price extraction failed: {exc}"
+
+
+@tool
+def extract_budget_items_from_text(budget_text: str) -> str:
+    """
+    Extract structured budget line items from a pasted budget document, cost breakdown,
+    or schedule of values. Returns CSI division, original/revised budget, committed and
+    direct costs per line item, auto-computing revised/projected totals where missing.
+    """
+    try:
+        from app.ai.financial_budget_analyzer import extract_budget_items
+        items = extract_budget_items(budget_text)
+        if not items:
+            return "No budget line items could be extracted from this text."
+        total_original = sum(i.get("original_budget", 0) for i in items)
+        total_revised = sum(i.get("revised_budget", 0) for i in items)
+        lines = [
+            f"Extracted {len(items)} budget line item(s) | "
+            f"Total Original: ${total_original:,.2f} | Total Revised: ${total_revised:,.2f}\n"
+        ]
+        for i in items:
+            lines.append(
+                f"• [{i.get('code')}] {i.get('description')} (Div {i.get('div_code')} — {i.get('div_name')}): "
+                f"Original ${i.get('original_budget', 0):,.2f} → Revised ${i.get('revised_budget', 0):,.2f} | "
+                f"Committed ${i.get('committed_costs', 0):,.2f} | Direct ${i.get('direct_costs', 0):,.2f}"
+            )
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Budget item extraction failed: {exc}"
+
+
+@tool
 def analyze_payment_data(project_id: str, extra_context: str = "") -> str:
     """
     Fetch LIVE invoices and payment data from the database and analyse cash flow risks,
@@ -529,6 +643,62 @@ def analyze_payment_data(project_id: str, extra_context: str = "") -> str:
         )
     except Exception as exc:
         return f"Payment analysis failed: {exc}"
+
+
+@tool
+def get_accounting_reconciliation(project_id: str) -> str:
+    """
+    Fetch a LIVE cross-module financial summary and reconciliation for the project —
+    invoices, budget, contracts, cost entries, purchase orders, and the latest EVM
+    snapshot all aggregated, plus reconciliation flags: invoices billed by a
+    contractor with no contract on file, duplicate amounts, and budget overruns.
+    Use this for financial audit, AP control, or "does our spending reconcile"
+    questions — more thorough than analyze_cost_data or analyze_payment_data alone.
+
+    Args:
+        project_id: The project UUID. Pass "" to use the most recent project.
+    """
+    try:
+        from app.ai.live_data import resolve_project
+        from app.ai.accounting_extractor import build_project_accounting_summary, reconcile_project_invoices
+        from app.ai.groq_client import analyze_document
+        import json
+
+        proj = resolve_project(project_id)
+        if not proj:
+            return "No project found. Call list_projects() first."
+        pid = proj["id"]
+
+        summary = build_project_accounting_summary(pid)
+        reconciliation = reconcile_project_invoices(pid)
+
+        ctx = (
+            f"Project: {proj.get('name')}\n\n"
+            f"Financial Summary:\n{json.dumps(summary, indent=2, default=str)}\n\n"
+            f"Reconciliation Flags:\n{json.dumps(reconciliation, indent=2, default=str)}"
+        )
+
+        analysis = analyze_document(
+            ctx,
+            "You are a construction project controls auditor. Based on this cross-module "
+            "financial summary and reconciliation, provide:\n"
+            "1. Overall financial health (budget utilization, spend vs invoiced)\n"
+            "2. Reconciliation issues — unmatched invoices, duplicate amounts, overpayments\n"
+            "3. Budget line items at risk of overrun\n"
+            "4. Prioritised follow-up actions for the finance/AP team\n"
+            "Be specific with dollar amounts and contractor/vendor names.",
+        )
+        fh = summary.get("financial_health", {})
+        return (
+            f"Project: {proj.get('name')} | Budget: ${fh.get('original_budget', 0):,.0f} | "
+            f"Spent: ${fh.get('total_spent', 0):,.0f} | "
+            f"Utilization: {fh.get('budget_utilization', 'N/A')}%\n"
+            f"Unmatched Invoices: {len(reconciliation.get('unmatched_invoices', []))} | "
+            f"Duplicate Amounts: {len(reconciliation.get('duplicate_amounts', []))}\n\n"
+            f"Analysis:\n{analysis}"
+        )
+    except Exception as exc:
+        return f"Accounting reconciliation failed: {exc}"
 
 
 @tool
@@ -638,8 +808,7 @@ def assess_green_metrics(project_id: str, extra_context: str = "") -> str:
     """
     try:
         from app.ai.live_data import fetch_anomalies, fetch_daily_reports, resolve_project
-        from app.ai.groq_client import analyze_document
-        import json
+        from app.ai.green_analyzer import analyze_waste, calculate_carbon_footprint
 
         proj = resolve_project(project_id)
         if not proj:
@@ -649,26 +818,157 @@ def assess_green_metrics(project_id: str, extra_context: str = "") -> str:
         anomalies = fetch_anomalies(pid)
         reports   = fetch_daily_reports(pid, limit=7)
 
+        data = {
+            "project": proj.get("name"),
+            "location": proj.get("location"),
+            "anomalies": anomalies,
+            "daily_reports": reports,
+        }
+        if extra_context:
+            data["additional_context"] = extra_context
+
+        waste_analysis = analyze_waste(data)
+        carbon_analysis = calculate_carbon_footprint(data)
+        return (
+            f"Project: {proj.get('name')} | Anomalies: {len(anomalies)} | Reports reviewed: {len(reports)}\n\n"
+            f"**Waste & ESG Analysis**\n{waste_analysis}\n\n"
+            f"**Carbon Footprint**\n{carbon_analysis}"
+        )
+    except Exception as exc:
+        return f"Green metrics failed: {exc}"
+
+
+@tool
+def analyze_punch_list_data(project_id: str, extra_context: str = "") -> str:
+    """
+    Fetch LIVE punch list items from the database and analyse open defects, overdue items,
+    responsible-party bottlenecks, and closure risk ahead of substantial completion.
+    Pulls the punch_list table for the specified project.
+
+    Args:
+        project_id: The project UUID. Pass "" to use the most recent project.
+        extra_context: Any additional context (e.g. target closeout date, walk-through notes).
+    """
+    try:
+        from app.ai.live_data import fetch_punch_list, resolve_project
+        from app.ai.groq_client import analyze_document
+        import json
+
+        proj = resolve_project(project_id)
+        if not proj:
+            return "No project found. Call list_projects() first."
+        pid = proj["id"]
+
+        items = fetch_punch_list(pid)
+        if not items:
+            return f"No punch list items found for project '{proj.get('name', pid)}'."
+
         ctx = (
-            f"Project: {proj.get('name')} | Location: {proj.get('location')}\n\n"
-            f"Anomaly History ({len(anomalies)}):\n{json.dumps(anomalies, indent=2, default=str)}\n\n"
-            f"Daily Reports — last 7 days:\n{json.dumps(reports, indent=2, default=str)}"
+            f"Project: {proj.get('name')} | Status: {proj.get('status')}\n\n"
+            f"Punch List Items ({len(items)}):\n{json.dumps(items, indent=2, default=str)}"
         )
         if extra_context:
             ctx += f"\n\nAdditional Context: {extra_context}"
 
-        return analyze_document(
+        open_items = [i for i in items if str(i.get("status", "")).lower() not in ("closed", "complete", "verified")]
+        analysis = analyze_document(
             ctx,
-            "You are a construction sustainability expert. Based on this live project data, provide:\n"
-            "1. Carbon footprint estimate (scope 1/2/3 in tCO2e) based on equipment and materials used\n"
-            "2. Waste generation and diversion rate from daily reports\n"
-            "3. ESG compliance score (0-10) with breakdown\n"
-            "4. Gaps to LEED, BREEAM, or Green Star certification\n"
-            "5. Top 5 actionable sustainability improvements\n"
-            "Reference ISO 14064 and GHG Protocol. Be specific with numbers.",
+            "You are a construction closeout manager. Based on this live punch list data, provide:\n"
+            "1. Open vs closed item counts, broken down by category and priority\n"
+            "2. Overdue items (past due_date) and who owns them\n"
+            "3. Bottleneck responsible parties (assigned_to with the most open/overdue items)\n"
+            "4. Closure risk — is the project on track for substantial completion? Why or why not\n"
+            "5. Prioritised action list to accelerate closeout\n"
+            "Be specific with item names and locations.",
+        )
+        return (
+            f"Project: {proj.get('name')} | Total Items: {len(items)} | Open: {len(open_items)}\n\n"
+            f"Analysis:\n{analysis}"
         )
     except Exception as exc:
-        return f"Green metrics failed: {exc}"
+        return f"Punch list analysis failed: {exc}"
+
+
+@tool
+def summarize_meetings(project_id: str, extra_context: str = "") -> str:
+    """
+    Fetch LIVE meeting minutes from the database and summarise recent decisions, action items,
+    owners, deadlines, and follow-up items. Pulls the meeting_minutes table for the project.
+
+    Args:
+        project_id: The project UUID. Pass "" to use the most recent project.
+        extra_context: Any specific meeting date, type, or topic to focus on.
+    """
+    try:
+        from app.ai.live_data import fetch_meeting_minutes, resolve_project
+        from app.ai.report_generator import generate_meeting_summary
+        import json
+
+        proj = resolve_project(project_id)
+        if not proj:
+            return "No project found. Call list_projects() first."
+        pid = proj["id"]
+
+        meetings = fetch_meeting_minutes(pid, limit=5)
+        if not meetings:
+            return f"No meeting minutes found for project '{proj.get('name', pid)}'."
+
+        transcript = (
+            f"Project: {proj.get('name')}\n\n"
+            f"Recent Meetings ({len(meetings)}):\n{json.dumps(meetings, indent=2, default=str)}"
+        )
+        if extra_context:
+            transcript += f"\n\nAdditional Context: {extra_context}"
+
+        summary = generate_meeting_summary(transcript)
+        return f"Project: {proj.get('name')} | Meetings reviewed: {len(meetings)}\n\n{summary}"
+    except Exception as exc:
+        return f"Meeting minutes summary failed: {exc}"
+
+
+@tool
+def get_evm_history(project_id: str) -> str:
+    """
+    Fetch LIVE historical EVM snapshots from the database and analyse CPI/SPI trend over time
+    — is cost/schedule performance improving, stable, or deteriorating? Pulls the evm_snapshots
+    table (up to the last 6 recorded snapshots). For a one-off manual calculation from specific
+    PV/EV/AC values instead, use calculate_evm_metrics.
+
+    Args:
+        project_id: The project UUID. Pass "" to use the most recent project.
+    """
+    try:
+        from app.ai.live_data import fetch_evm_snapshots, resolve_project
+        from app.ai.groq_client import analyze_document
+        import json
+
+        proj = resolve_project(project_id)
+        if not proj:
+            return "No project found. Call list_projects() first."
+        pid = proj["id"]
+
+        snapshots = fetch_evm_snapshots(pid)
+        if not snapshots:
+            return f"No EVM snapshot history found for project '{proj.get('name', pid)}'. Use calculate_evm_metrics for a one-off calculation instead."
+
+        ctx = (
+            f"Project: {proj.get('name')} | Budget: ${proj.get('budget', 0):,.0f}\n\n"
+            f"EVM Snapshots, most recent first ({len(snapshots)}):\n{json.dumps(snapshots, indent=2, default=str)}"
+        )
+
+        analysis = analyze_document(
+            ctx,
+            "You are a construction project controls expert. Based on this EVM snapshot history:\n"
+            "1. CPI and SPI trend — improving, stable, or deteriorating over the recorded period\n"
+            "2. Identify the inflection point, if any, and what likely caused it\n"
+            "3. Forecast where CPI/SPI are headed if the trend continues\n"
+            "4. Compare latest EAC to BAC and flag if VAC is worsening\n"
+            "5. Recommended corrective actions if the trend is negative\n"
+            "Be specific with numbers from each snapshot.",
+        )
+        return f"Project: {proj.get('name')} | Snapshots: {len(snapshots)}\n\nAnalysis:\n{analysis}"
+    except Exception as exc:
+        return f"EVM history analysis failed: {exc}"
 
 
 @tool
@@ -803,21 +1103,27 @@ def generate_advanced_report(report_type: str, project_id: str = "", extra_conte
 def generate_document(document_type: str, project_id: str = "", context: str = "") -> str:
     """
     Generate a professional construction document, optionally pulling live project data as context.
-    Supported types: rfi, incident_report, change_order, weekly_report, payment_reminder, permit_application.
+    Supported types: rfi, incident_report, change_order, weekly_report, payment_reminder,
+    permit_application, letter, email, notice, variation_order, dispute_letter.
 
     Args:
-        document_type: rfi / incident_report / change_order / weekly_report / payment_reminder / permit_application
+        document_type: rfi / incident_report / change_order / weekly_report / payment_reminder /
+                        permit_application / letter / email / notice / variation_order / dispute_letter
         project_id: The project UUID to pull live data for context. Pass "" to skip.
-        context: Additional details — parties, dates, issue description, amounts, etc.
+        context: Additional details — parties, dates, subject, issue description, amounts, etc.
+                 Put everything you know about the recipient, sender, and content here; it is
+                 used as the body/description for letter, email, notice, and dispute_letter types.
     """
     doc_type = document_type.lower().replace(" ", "_").replace("-", "_")
 
     live_ctx = ""
+    proj_name = ""
     if project_id:
         try:
             from app.ai.live_data import resolve_project, fetch_rfis, fetch_safety, fetch_payments
             proj = resolve_project(project_id)
             if proj:
+                proj_name = proj.get("name") or ""
                 live_ctx = f"Project: {proj.get('name')} | Client: {proj.get('client')} | Location: {proj.get('location')}\n"
         except Exception:
             pass
@@ -843,6 +1149,54 @@ def generate_document(document_type: str, project_id: str = "", context: str = "
         elif doc_type == "permit_application":
             from app.ai.compliance_analyzer import generate_permit_application
             return generate_permit_application({"context": full_context})
+        elif doc_type in ("letter", "construction_letter"):
+            from app.ai.writing_assistant import generate_letter
+            return generate_letter({
+                "letter_type": "Construction Correspondence",
+                "from_name": "Project Team", "from_company": proj_name,
+                "to_name": "Recipient", "to_company": "",
+                "project_name": proj_name,
+                "subject": (context[:100] if context else "Project Correspondence"),
+                "key_points": full_context,
+                "tone": "Professional",
+            })
+        elif doc_type == "email":
+            from app.ai.writing_assistant import generate_email
+            return generate_email({
+                "email_type": "Project Update",
+                "from_name": "Project Team", "to_name": "Recipient",
+                "project_name": proj_name,
+                "subject": (context[:100] if context else "Project Update"),
+                "key_points": full_context,
+                "tone": "Professional",
+            })
+        elif doc_type == "notice":
+            from app.ai.writing_assistant import generate_notice
+            return generate_notice({
+                "notice_type": "Formal Notice",
+                "project_name": proj_name,
+                "issued_by": "Project Team", "issued_to": "Recipient",
+                "details": full_context,
+            })
+        elif doc_type in ("variation_order", "vo"):
+            from app.ai.writing_assistant import generate_variation_order
+            return generate_variation_order({
+                "project_name": proj_name,
+                "vo_number": "TBD",
+                "requested_by": "Project Team",
+                "description": full_context,
+                "cost_impact": "See description",
+                "time_impact": "See description",
+            })
+        elif doc_type in ("dispute_letter", "dispute"):
+            from app.ai.writing_assistant import generate_dispute_letter
+            return generate_dispute_letter({
+                "project_name": proj_name,
+                "dispute_type": "General Dispute",
+                "our_position": full_context,
+                "evidence": "See attached context",
+                "amount": "TBD",
+            })
         else:
             from app.ai.groq_client import analyze_document
             return analyze_document(
@@ -864,12 +1218,17 @@ _TOOLS = [
     analyze_safety_data,
     analyze_cost_data,
     analyze_contract_data,
+    analyze_contract_terms,
     assess_compliance_data,
     analyze_equipment_data,
     analyze_payment_data,
+    get_accounting_reconciliation,
     analyze_workforce_data,
     analyze_procurement_data,
     assess_green_metrics,
+    analyze_punch_list_data,
+    summarize_meetings,
+    get_evm_history,
     run_what_if_scenario,
     generate_advanced_report,
     # EVM + documents
@@ -878,6 +1237,8 @@ _TOOLS = [
     # Text-only (no DB table)
     analyze_vendor_data,
     analyze_bim_data,
+    extract_material_prices_from_text,
+    extract_budget_items_from_text,
 ]
 
 _llm = ChatGroq(
@@ -892,8 +1253,27 @@ _agent = create_react_agent(_llm, tools=_TOOLS)
 
 # ── Public helpers ─────────────────────────────────────────────────────────────
 
-def _build_messages(user_message: str, history: list[dict]) -> list:
+def _build_messages(
+    user_message: str,
+    history: list[dict],
+    extra_context: str = "",
+    web_context: str = "",
+) -> list:
     msgs = [SystemMessage(content=SYSTEM_PROMPT)]
+
+    if extra_context:
+        msgs.append(SystemMessage(
+            content=f"Live project data already retrieved for this query:\n{extra_context}"
+        ))
+    if web_context:
+        msgs.append(SystemMessage(
+            content=(
+                "Live public web search results for this query (from the internet, may be more "
+                "current than your training data). Only use a result if it is genuinely relevant; "
+                "cite it inline as a markdown link, e.g. [Title](URL):\n" + web_context
+            )
+        ))
+
     for h in history:
         role = h.get("role", "user")
         content = h.get("content", "")
@@ -933,18 +1313,54 @@ def _extract_result(result: dict) -> tuple[str, list[dict]]:
     return final_response, tool_steps
 
 
+def _is_groq_rate_limited(exc: Exception) -> bool:
+    err = str(exc)
+    return "429" in err or "rate_limit_exceeded" in err
+
+
+def _gemini_fallback_reply(msgs: list) -> str:
+    """
+    Last-resort tier when the Groq-backed ReAct agent itself is rate-limited —
+    routes the same conversation through Gemini as a plain completion (no
+    tool-calling, since Gemini isn't wired into this agent's tool loop) so the
+    user still gets a grounded answer instead of an error. Mirrors
+    groq_client._gemini_fallback, which already covers this for the individual
+    analyze_document() calls inside most tools — this closes the same gap for
+    the top-level orchestration LLM, which has no fallback of its own.
+    """
+    from app.ai.gemini_client import text_completion
+
+    system = "\n\n".join(str(m.content) for m in msgs if isinstance(m, SystemMessage))
+    convo = "\n\n".join(
+        f"{'User' if isinstance(m, HumanMessage) else 'Assistant'}: {m.content}"
+        for m in msgs if isinstance(m, (HumanMessage, AIMessage)) and m.content
+    )
+    return text_completion(convo, system=system or None)
+
+
 @traceable(name="agent-chat", run_type="chain")
-def run_agent(user_message: str, history: list[dict] | None = None) -> dict:
+def run_agent(
+    user_message: str,
+    history: list[dict] | None = None,
+    extra_context: str = "",
+    web_context: str = "",
+) -> dict:
     """
     Synchronous agent run. Returns {reply, tool_steps}.
     Prefer run_agent_stream for long-running requests.
     """
-    msgs = _build_messages(user_message, history or [])
+    msgs = _build_messages(user_message, history or [], extra_context, web_context)
     try:
         result = _agent.invoke({"messages": msgs})
         reply, steps = _extract_result(result)
         return {"reply": reply or "I was unable to generate a response. Please try again.", "tool_steps": steps}
     except Exception as exc:
+        if _is_groq_rate_limited(exc):
+            logger.warning("Agent LLM rate-limited — falling back to Gemini (no tool-calling this turn): %s", exc)
+            try:
+                return {"reply": _gemini_fallback_reply(msgs), "tool_steps": []}
+            except Exception as gem_exc:
+                logger.error("Gemini fallback also failed: %s", gem_exc)
         logger.error("Agent run failed: %s", exc)
         raise RuntimeError(f"Agent error: {exc}") from exc
 
@@ -952,6 +1368,8 @@ def run_agent(user_message: str, history: list[dict] | None = None) -> dict:
 async def run_agent_stream(
     user_message: str,
     history: list[dict] | None = None,
+    extra_context: str = "",
+    web_context: str = "",
 ) -> AsyncIterator[dict]:
     """
     Async generator that yields SSE-ready event dicts as the agent runs.
@@ -962,7 +1380,8 @@ async def run_agent_stream(
       {"type": "tool_end",   "tool": "...", "output": ""}— tool finished
       {"type": "done"}                                    — stream complete
     """
-    msgs = _build_messages(user_message, history or [])
+    msgs = _build_messages(user_message, history or [], extra_context, web_context)
+    emitted_any = False
     try:
         async for event in _agent.astream_events({"messages": msgs}, version="v2"):
             kind = event.get("event", "")
@@ -972,9 +1391,11 @@ async def run_agent_stream(
                 if chunk and chunk.content:
                     content = chunk.content if isinstance(chunk.content, str) else ""
                     if content:
+                        emitted_any = True
                         yield {"type": "token", "content": content}
 
             elif kind == "on_tool_start":
+                emitted_any = True
                 yield {
                     "type":  "tool_start",
                     "tool":  event.get("name", ""),
@@ -982,6 +1403,7 @@ async def run_agent_stream(
                 }
 
             elif kind == "on_tool_end":
+                emitted_any = True
                 output = event["data"].get("output", "")
                 yield {
                     "type":   "tool_end",
@@ -992,6 +1414,19 @@ async def run_agent_stream(
         yield {"type": "done"}
 
     except Exception as exc:
+        # Only fall back if nothing has streamed yet — a failure mid-stream (after
+        # partial output already reached the client) just ends the generator early,
+        # same as before; retrying would duplicate/conflict with what's already shown.
+        if not emitted_any and _is_groq_rate_limited(exc):
+            logger.warning("Agent stream rate-limited before any output — falling back to Gemini: %s", exc)
+            try:
+                reply = _gemini_fallback_reply(msgs)
+                for i, word in enumerate(reply.split(" ")):
+                    yield {"type": "token", "content": word if i == 0 else " " + word}
+                yield {"type": "done"}
+                return
+            except Exception as gem_exc:
+                logger.error("Gemini fallback also failed: %s", gem_exc)
         logger.error("Agent stream error: %s", exc)
         yield {"type": "error", "content": str(exc)}
         yield {"type": "done"}

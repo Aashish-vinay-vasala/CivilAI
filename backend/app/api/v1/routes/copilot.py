@@ -8,7 +8,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File, Form
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, field_validator
-from app.ai.copilot import get_copilot_response, get_copilot_response_stream
+from app.ai.copilot import get_copilot_response
+from app.ai.agent_copilot import run_agent, run_agent_stream
 from app.ai.chatbot_memory import get_history, add_message, clear_session
 from app.ai.memory_mem0 import mem0_context, mem0_add
 from app.ai.memory_zep import zep_context, zep_add_messages
@@ -48,12 +49,19 @@ class Source(BaseModel):
     url: str
 
 
+class ToolStep(BaseModel):
+    tool: str
+    input: dict = {}
+    output: str | None = None
+
+
 class ChatResponse(BaseModel):
     response: str
     session_id: str = ""
     status: str = "success"
     warnings: list[str] = []
     sources: list[Source] = []
+    tool_steps: list[ToolStep] = []
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -127,8 +135,15 @@ async def chat_with_copilot(
                     for i, r in enumerate(web_results)
                 )
 
-        # ── Layer 4: main LLM call ───────────────────────────────────────────
-        response = get_copilot_response(effective_msg, history, extra_context=module_ctx, web_context=web_ctx)
+        # ── Layer 4: main LLM call — LangGraph tool-calling agent ────────────
+        try:
+            agent_result = await asyncio.to_thread(
+                run_agent, effective_msg, history, module_ctx, web_ctx,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"CivilAI Copilot is temporarily unavailable: {exc}") from exc
+        response = agent_result["reply"]
+        tool_steps = agent_result["tool_steps"]
 
         # ── Layer 5: LlamaGuard — screen assistant output ───────────────────
         output_safe, output_violation = check_output(clean_message, response)
@@ -157,7 +172,10 @@ async def chat_with_copilot(
         asyncio.create_task(zep_add_messages(session_id, turn_messages))
 
         sources = filter_cited_sources(safe_response, web_results)
-        return ChatResponse(response=safe_response, session_id=session_id, warnings=warnings, sources=sources)
+        return ChatResponse(
+            response=safe_response, session_id=session_id, warnings=warnings,
+            sources=sources, tool_steps=[ToolStep(**s) for s in tool_steps],
+        )
 
     except HTTPException:
         raise
@@ -252,10 +270,20 @@ async def chat_with_copilot_stream(
 
     async def event_stream():
         full_text = ""
+        tool_steps: list[dict] = []
         try:
-            for delta in get_copilot_response_stream(effective_msg, history, extra_context=module_ctx, web_context=web_ctx):
-                full_text += delta
-                yield _ndjson({"delta": delta})
+            async for event in run_agent_stream(effective_msg, history, module_ctx, web_ctx):
+                etype = event.get("type")
+                if etype == "token":
+                    full_text += event["content"]
+                    yield _ndjson({"delta": event["content"]})
+                elif etype == "tool_start":
+                    yield _ndjson({"tool_start": True, "tool": event.get("tool", ""), "input": event.get("input", {})})
+                elif etype == "tool_end":
+                    tool_steps.append({"tool": event.get("tool", ""), "input": {}, "output": event.get("output", "")})
+                    yield _ndjson({"tool_end": True, "tool": event.get("tool", ""), "output": event.get("output", "")})
+                elif etype == "error":
+                    raise RuntimeError(event.get("content", "Agent error"))
         except Exception as exc:
             err_str = str(exc)
             if "429" in err_str or "rate_limit_exceeded" in err_str or "temporarily unavailable" in err_str:
@@ -293,6 +321,7 @@ async def chat_with_copilot_stream(
             "final": safe_response,
             "session_id": session_id,
             "sources": sources,
+            "tool_steps": tool_steps,
         })
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")

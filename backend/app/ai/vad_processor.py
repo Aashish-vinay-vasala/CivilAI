@@ -265,8 +265,12 @@ def _load_pyannote():
     try:
         import warnings
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message=".*torchcodec.*")
-            warnings.filterwarnings("ignore", message=".*libtorchcodec.*")
+            # (?s) = DOTALL — the warning text starts with a literal "\n" before
+            # "torchcodec", and filterwarnings anchors with re.match() at the
+            # start of the string, so without DOTALL "." never crosses that
+            # newline and the filter silently never matches.
+            warnings.filterwarnings("ignore", message="(?s).*torchcodec.*")
+            warnings.filterwarnings("ignore", message="(?s).*libtorchcodec.*")
             from pyannote.audio import Pipeline  # type: ignore[import-untyped]
         _pyannote_pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
