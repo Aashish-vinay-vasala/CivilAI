@@ -34,6 +34,45 @@ _SAFETY_DISCLAIMER = (
     "and consult qualified safety professionals before acting on this information.*"
 )
 
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]")
+
+# PII patterns to mask before persisting free text to any long-term store
+# (chat history, mem0/Zep memory). Deliberately conservative — false positives
+# just mask a few extra digits, false negatives leak real PII, so patterns
+# lean broad.
+_PII_PATTERNS = [
+    (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[SSN]"),                              # SSN: 123-45-6789
+    (re.compile(r"\b(?:\d[ -]*?){13,16}\b"), "[CARD]"),                            # credit card, 13-16 digits
+    (re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b"), "[PHONE]"),  # US phone
+    (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"), "[EMAIL]"),                      # email
+]
+
+
+def clean_field(text: str, max_length: int = 500) -> str:
+    """
+    Lightweight guard for structured tool/API arguments (not conversational
+    prompts) — strips control characters and caps length. Unlike
+    sanitize_prompt(), this does NOT run the injection-pattern block, since
+    legitimate field values (incident descriptions, punch-list items, etc.)
+    can contain words like "override" or "system" without being an attack.
+    """
+    if not text:
+        return text
+    cleaned = _CONTROL_CHARS_RE.sub("", text).strip()
+    return cleaned[:max_length]
+
+
+def redact_pii(text: str) -> str:
+    """Mask SSNs, credit-card-like numbers, phone numbers, and emails in text
+    before it's written to any persistent store (chat history, long-term
+    memory). Does not affect what's sent to the LLM in the current turn."""
+    if not text:
+        return text
+    redacted = text
+    for pattern, placeholder in _PII_PATTERNS:
+        redacted = pattern.sub(placeholder, redacted)
+    return redacted
+
 
 def sanitize_prompt(text: str, max_length: int = MAX_PROMPT_LENGTH) -> tuple[str, list[str]]:
     """

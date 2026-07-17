@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "supabase": {
+      "command": "npx",
+      "args": ["-y", "@supabase/mcp-server-supabase@latest", "--read-only"],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "${SUPABASE_ACCESS_TOKEN}"
+      }
+    },
+    "civilai": {
+      "command": "K:\\Projects\\CivilAI\\backend\\venv\\Scripts\\python.exe",
+      "args": ["K:\\Projects\\CivilAI\\backend\\app\\mcp\\server.py"]
+    }
+  }
+}

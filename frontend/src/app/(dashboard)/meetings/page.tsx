@@ -60,15 +60,16 @@ export default function MeetingsPage() {
     setGenerating(true);
     try {
       const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/copilot/chat`, {
-        message: `Generate a professional meeting minutes summary for the following meeting:
+        message: `Generate a professional meeting minutes summary using ONLY the information given below — do not invent attendees, decisions, or action items that aren't stated. If a section has no relevant input, write "Not discussed" instead of making something up.
+
 Title: ${form.title}
 Date: ${form.date}
-Attendees: ${form.attendees}
-Agenda: ${form.agenda}
-Discussion: ${form.discussion}
-Action Items: ${form.action_items}
+Attendees: ${form.attendees || "(none listed)"}
+Agenda: ${form.agenda || "(none provided)"}
+Discussion: ${form.discussion || "(none provided)"}
+Action Items: ${form.action_items || "(none provided)"}
 
-Format with: Executive Summary, Key Decisions, Action Items (with owner and due date if mentioned), Next Steps.`,
+Format with: Executive Summary, Key Decisions, Action Items (with owner and due date only if mentioned), Next Steps.`,
         context: "Meeting Minutes",
       });
       const summary = res.data?.response || res.data?.message || "";
@@ -140,9 +141,9 @@ Format with: Executive Summary, Key Decisions, Action Items (with owner and due 
                 <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }}
                   className="overflow-hidden border-t border-border">
                   <div className="p-5 space-y-4">
-                    {m.agenda && <div><p className="text-xs text-muted-foreground mb-1">Agenda</p><p className="text-sm text-foreground whitespace-pre-wrap">{m.agenda}</p></div>}
-                    {m.discussion && <div><p className="text-xs text-muted-foreground mb-1">Discussion</p><p className="text-sm text-foreground whitespace-pre-wrap">{m.discussion}</p></div>}
-                    {m.action_items && <div><p className="text-xs text-muted-foreground mb-1">Action Items</p><p className="text-sm text-foreground whitespace-pre-wrap">{m.action_items}</p></div>}
+                    {m.agenda && <div><p className="text-xs text-muted-foreground mb-1">Agenda</p><MarkdownText text={m.agenda} className="text-sm text-foreground" /></div>}
+                    {m.discussion && <div><p className="text-xs text-muted-foreground mb-1">Discussion</p><MarkdownText text={m.discussion} className="text-sm text-foreground" /></div>}
+                    {m.action_items && <div><p className="text-xs text-muted-foreground mb-1">Action Items</p><MarkdownText text={m.action_items} className="text-sm text-foreground" /></div>}
                     {m.ai_summary && (
                       <div className="p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-xl">
                         <div className="flex items-center gap-2 mb-2"><Sparkles className="w-3.5 h-3.5 text-cyan-400" /><p className="text-xs text-cyan-400 font-medium">AI Summary</p></div>

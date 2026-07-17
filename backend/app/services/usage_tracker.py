@@ -70,3 +70,13 @@ def get_usage(key_pool_size: int = 1) -> dict:
             "audio":      {"used": _state["audio_calls"],      "limit": GROQ_DAILY_AUDIO_LIMIT},
             "web_search": {"used": _state["web_search_calls"], "limit": WEB_SEARCH_DAILY_LIMIT},
         }
+
+
+def is_over_budget(key_pool_size: int = 1) -> bool:
+    """Hard daily token cap check — unlike get_usage(), which is display-only,
+    callers should refuse new LLM work when this returns True instead of just
+    showing the number to the user."""
+    with _lock:
+        _ensure_fresh()
+        token_limit = GROQ_DAILY_TOKEN_LIMIT_PER_KEY * max(1, key_pool_size)
+        return _state["llm_tokens"] >= token_limit

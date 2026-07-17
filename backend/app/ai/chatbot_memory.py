@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.services.db_service import supabase
+from app.core.guardrails import redact_pii
 
 logger   = logging.getLogger("civilai.chatbot_memory")
 _TABLE   = "chatbot_sessions"
@@ -62,14 +63,16 @@ def add_message(
     channel: str = "web",
     metadata: Optional[dict] = None,
 ) -> None:
-    """Append one message to the session log."""
+    """Append one message to the session log. Content is PII-redacted before
+    persisting — this only affects the stored copy, not the current turn's
+    LLM context, which already received the raw text."""
     if not session_id:
         return
     try:
         supabase.table(_TABLE).insert({
             "session_id": session_id,
             "role":       role,
-            "content":    content,
+            "content":    redact_pii(content),
             "channel":    channel,
             "metadata":   metadata or {},
             "created_at": datetime.now(timezone.utc).isoformat(),

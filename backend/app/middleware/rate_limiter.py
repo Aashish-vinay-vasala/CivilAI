@@ -20,6 +20,9 @@ _AI_PREFIXES = (
     "/api/v1/contracts/analyze",
     "/api/v1/safety/analyze",
     "/api/v1/transcribe",
+    "/api/v1/agent/chat",
+    "/api/v1/agent/stream",
+    "/api/v1/agent/upload",
 )
 
 _AI_LIMIT = 10

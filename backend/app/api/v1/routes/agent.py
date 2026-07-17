@@ -15,13 +15,16 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
 from app.ai.agent_copilot import run_agent, run_agent_stream
 from app.ai.dialogue_manager import classify_dialogue
 from app.ai.chatbot_memory import get_history, add_message
+from app.core.guardrails import sanitize_prompt, validate_output
+from app.core.llama_guard import check_input, check_output
+from app.core.nemo_rails import check_message
 
 _AUDIO_EXTS = {"mp3", "wav", "webm", "m4a", "ogg", "flac", "mp4"}
 _MAX_CONTENT_CHARS = 12_000
@@ -62,21 +65,46 @@ class AgentResponse(BaseModel):
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @router.post("/chat", response_model=AgentResponse)
-async def agent_chat(body: AgentMessage):
+async def agent_chat(request: Request, body: AgentMessage):
     """
     Run the LangGraph agent for one turn. Returns the full reply plus every tool call
     the agent made (tool name, input args, output summary) for display in the UI.
+
+    Runs the same guardrail chain as /api/v1/copilot/chat (sanitize -> LlamaGuard
+    input -> jailbreak classifier -> agent -> LlamaGuard output -> validate) since
+    this route reaches the same write-capable tools.
     """
+    ip = request.client.host if request.client else "unknown"
     session_id = body.session_id.strip() or f"agent_{int(time.time() * 1000)}"
-    history    = get_history(session_id)
+
+    try:
+        clean_message, _warnings = sanitize_prompt(body.message)
+    except ValueError as e:
+        return AgentResponse(reply=str(e), session_id=session_id, status="input_blocked")
+
+    input_safe, input_violation = check_input(clean_message)
+    if not input_safe:
+        logger.warning("Agent LlamaGuard INPUT blocked | ip=%s | violation=%s", ip, input_violation)
+        return AgentResponse(
+            reply=f"I'm unable to respond to that message. It was flagged for: {input_violation}. Please rephrase and try again.",
+            session_id=session_id,
+            status="input_blocked",
+        )
+
+    nemo_passed, nemo_refusal = await check_message(clean_message)
+    if not nemo_passed:
+        logger.warning("Agent jailbreak classifier blocked | ip=%s | refusal=%.60s", ip, nemo_refusal)
+        return AgentResponse(reply=nemo_refusal, session_id=session_id, status="guardrail_triggered")
+
+    history = get_history(session_id)
 
     # Prepend project_id context so the agent knows which project to query
-    agent_message = body.message
+    agent_message = clean_message
     if body.project_id.strip():
-        agent_message = f"[project_id: {body.project_id.strip()}]\n{body.message}"
+        agent_message = f"[project_id: {body.project_id.strip()}]\n{clean_message}"
 
     # Classify intent for the response metadata
-    dialogue   = classify_dialogue(body.message, history[-4:] if history else [])
+    dialogue = classify_dialogue(clean_message, history[-4:] if history else [])
 
     try:
         result = run_agent(agent_message, history)
@@ -87,11 +115,22 @@ async def agent_chat(body: AgentMessage):
     reply = result["reply"]
     steps = [ToolStep(**s) for s in result["tool_steps"]]
 
+    output_safe, output_violation = check_output(clean_message, reply)
+    if not output_safe:
+        logger.warning("Agent LlamaGuard OUTPUT blocked | ip=%s | violation=%s", ip, output_violation)
+        return AgentResponse(
+            reply="I generated a response that couldn't be delivered due to content policy. Please rephrase your question.",
+            session_id=session_id,
+            status="output_blocked",
+        )
+
+    safe_reply, _ = validate_output(reply, context=clean_message)
+
     add_message(session_id, "user",      body.message, channel="agent")
-    add_message(session_id, "assistant", reply,        channel="agent")
+    add_message(session_id, "assistant", safe_reply,   channel="agent")
 
     return AgentResponse(
-        reply=reply,
+        reply=safe_reply,
         session_id=session_id,
         tool_steps=steps,
         intent=dialogue.intent,
@@ -99,7 +138,7 @@ async def agent_chat(body: AgentMessage):
 
 
 @router.post("/stream")
-async def agent_stream(body: AgentMessage):
+async def agent_stream(request: Request, body: AgentMessage):
     """
     Server-Sent Events stream of the agent's reasoning.
 
@@ -110,15 +149,46 @@ async def agent_stream(body: AgentMessage):
       {"type": "tool_end",    "tool": "...", "output": "..."}
       {"type": "done"}
       {"type": "error",       "content": "..."}
+      {"type": "blocked",     "content": "...", "status": "..."}  — guardrail refusal
+
+    Runs the same pre/post guardrail chain as /chat, adapted for streaming: input
+    checks run before the stream starts, output LlamaGuard runs on the fully
+    assembled text once streaming finishes.
     """
+    ip = request.client.host if request.client else "unknown"
     session_id = body.session_id.strip() or f"agent_{int(time.time() * 1000)}"
+
+    async def blocked_stream(msg: str, status: str = "input_blocked"):
+        yield f"data: {json.dumps({'type': 'blocked', 'content': msg, 'status': status, 'session_id': session_id})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    try:
+        clean_message, _warnings = sanitize_prompt(body.message)
+    except ValueError as e:
+        return StreamingResponse(blocked_stream(str(e)), media_type="text/event-stream")
+
+    input_safe, input_violation = check_input(clean_message)
+    if not input_safe:
+        logger.warning("Agent stream LlamaGuard INPUT blocked | ip=%s | violation=%s", ip, input_violation)
+        return StreamingResponse(
+            blocked_stream(f"I'm unable to respond to that message. It was flagged for: {input_violation}. Please rephrase and try again."),
+            media_type="text/event-stream",
+        )
+
+    nemo_passed, nemo_refusal = await check_message(clean_message)
+    if not nemo_passed:
+        logger.warning("Agent stream jailbreak classifier blocked | ip=%s | refusal=%.60s", ip, nemo_refusal)
+        return StreamingResponse(
+            blocked_stream(nemo_refusal, status="guardrail_triggered"), media_type="text/event-stream",
+        )
+
     history    = get_history(session_id)
-    dialogue   = classify_dialogue(body.message, history[-4:] if history else [])
+    dialogue   = classify_dialogue(clean_message, history[-4:] if history else [])
 
     # Inject project_id into message so tools know which project to query
-    agent_message = body.message
+    agent_message = clean_message
     if body.project_id.strip():
-        agent_message = f"[project_id: {body.project_id.strip()}]\n{body.message}"
+        agent_message = f"[project_id: {body.project_id.strip()}]\n{clean_message}"
 
     full_reply_parts: list[str] = []
 
@@ -131,18 +201,38 @@ async def agent_stream(body: AgentMessage):
         async for event in run_agent_stream(agent_message, history):
             if event["type"] == "token":
                 full_reply_parts.append(event["content"])
+                yield f"data: {json.dumps(event)}\n\n"
             elif event["type"] == "tool_end":
                 tool_steps_for_session.append({
                     "tool":   event.get("tool", ""),
                     "output": event.get("output", "")[:500],
                 })
-            yield f"data: {json.dumps(event)}\n\n"
+                yield f"data: {json.dumps(event)}\n\n"
+            elif event["type"] == "done":
+                continue  # our own "done" (after the output safety check) replaces this
+            else:
+                yield f"data: {json.dumps(event)}\n\n"
+
+        # ── Output safety screen on the fully-assembled text ─────────────────
+        final_reply = "".join(full_reply_parts)
+        output_safe, output_violation = check_output(clean_message, final_reply) if final_reply else (True, "")
+        if not output_safe:
+            logger.warning("Agent stream LlamaGuard OUTPUT blocked | ip=%s | violation=%s", ip, output_violation)
+            yield f"data: {json.dumps({'type': 'token', 'content': 'I generated a response that could not be delivered due to content policy. Please rephrase your question.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            return
+
+        safe_reply, _ = validate_output(final_reply, context=clean_message) if final_reply else ("", True)
+        # Tokens already reached the client live, so only an *appended* disclaimer
+        # (not a truncation, which shortens the text) can be sent as a trailing delta.
+        if safe_reply.startswith(final_reply) and len(safe_reply) > len(final_reply):
+            yield f"data: {json.dumps({'type': 'token', 'content': safe_reply[len(final_reply):]})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
         # Persist to memory and Supabase after streaming completes
-        final_reply = "".join(full_reply_parts)
-        if final_reply:
+        if safe_reply:
             add_message(session_id, "user",      body.message, channel="agent")
-            add_message(session_id, "assistant", final_reply,  channel="agent")
+            add_message(session_id, "assistant", safe_reply,   channel="agent")
 
             try:
                 from app.config import settings
@@ -151,7 +241,7 @@ async def agent_stream(body: AgentMessage):
                 _sb.table("agent_sessions").upsert({
                     "session_id":  session_id,
                     "last_message": body.message[:500],
-                    "last_reply":   final_reply[:1000],
+                    "last_reply":   safe_reply[:1000],
                     "intent":       dialogue.intent,
                     "tool_steps":   tool_steps_for_session,
                     "updated_at":   "now()",
@@ -187,6 +277,7 @@ async def classify_intent(body: AgentMessage):
 
 @router.post("/upload", response_model=AgentResponse)
 async def agent_upload(
+    request:    Request,
     file:       UploadFile = File(...),
     message:    str        = Form(default=""),
     session_id: str        = Form(default=""),
@@ -201,6 +292,7 @@ async def agent_upload(
       - Contract PDF → analyze_contract_data
       etc.
     """
+    ip = request.client.host if request.client else "unknown"
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(400, "Empty file")
@@ -234,14 +326,29 @@ async def agent_upload(
         file_content = file_content[:_MAX_CONTENT_CHARS]
 
     # ── Build agent message ───────────────────────────────────────────────────
-    user_question = message.strip() or "Analyze this file and provide a detailed assessment."
+    raw_question = message.strip() or "Analyze this file and provide a detailed assessment."
+    sid = session_id.strip() or f"agent_{int(time.time()*1000)}"
+
+    try:
+        user_question, _warnings = sanitize_prompt(raw_question)
+    except ValueError as e:
+        return AgentResponse(reply=str(e), session_id=sid, status="input_blocked")
+
+    input_safe, input_violation = check_input(user_question)
+    if not input_safe:
+        logger.warning("Agent upload LlamaGuard INPUT blocked | ip=%s | violation=%s", ip, input_violation)
+        return AgentResponse(
+            reply=f"I'm unable to respond to that question. It was flagged for: {input_violation}. Please rephrase and try again.",
+            session_id=sid,
+            status="input_blocked",
+        )
+
     agent_msg = (
         f"[{content_label} from: {filename}]\n\n"
         f"{file_content}\n\n"
         f"{user_question}"
     )
 
-    sid     = session_id.strip() or f"agent_{int(time.time()*1000)}"
     history = get_history(sid)
     dialogue = classify_dialogue(user_question, history[-4:] if history else [])
 
@@ -254,12 +361,23 @@ async def agent_upload(
     reply = result["reply"]
     steps = [ToolStep(**s) for s in result["tool_steps"]]
 
+    output_safe, output_violation = check_output(user_question, reply)
+    if not output_safe:
+        logger.warning("Agent upload LlamaGuard OUTPUT blocked | ip=%s | violation=%s", ip, output_violation)
+        return AgentResponse(
+            reply="I generated a response that couldn't be delivered due to content policy. Please rephrase your question.",
+            session_id=sid,
+            status="output_blocked",
+        )
+
+    safe_reply, _ = validate_output(reply, context=user_question)
+
     display_user = f"📎 {filename}\n{user_question}"
     add_message(sid, "user",      display_user, channel="agent")
-    add_message(sid, "assistant", reply,        channel="agent")
+    add_message(sid, "assistant", safe_reply,   channel="agent")
 
     return AgentResponse(
-        reply=reply,
+        reply=safe_reply,
         session_id=sid,
         tool_steps=steps,
         intent=dialogue.intent,

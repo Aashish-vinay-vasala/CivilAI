@@ -1,0 +1,54 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - navigation [ref=e3]:
+      - generic [ref=e4]: CivilAI
+      - button "Start Demo" [ref=e11]
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - generic [ref=e14]: AI-Powered Construction Management
+        - heading "Build Smarter with CivilAI" [level=1] [ref=e18]: Build Smarterwith CivilAI
+        - paragraph [ref=e19]: The only construction management platform powered by AI. Predict delays, prevent overruns, and manage everything in one place.
+        - button "Start Demo" [ref=e21]
+        - paragraph [ref=e22]: Full access, no sign-up required
+      - generic [ref=e23]:
+        - generic [ref=e24]:
+          - paragraph [ref=e25]: 20+
+          - paragraph [ref=e26]: AI Modules
+        - generic [ref=e27]:
+          - paragraph [ref=e28]: 86%+
+          - paragraph [ref=e29]: ML Accuracy
+        - generic [ref=e30]:
+          - paragraph [ref=e31]: "6"
+          - paragraph [ref=e32]: ML Models
+        - generic [ref=e33]:
+          - paragraph [ref=e34]: $0
+          - paragraph [ref=e35]: To Start
+    - generic [ref=e36]:
+      - generic [ref=e37]:
+        - heading "Everything you need" [level=2] [ref=e38]
+        - paragraph [ref=e39]: 20+ AI modules covering every aspect of construction management
+      - generic [ref=e40]:
+        - generic [ref=e41]:
+          - heading "Cost Intelligence" [level=3] [ref=e45]
+          - paragraph [ref=e46]: AI predicts overruns before they happen
+        - generic [ref=e47]:
+          - heading "Delay Prediction" [level=3] [ref=e51]
+          - paragraph [ref=e52]: Smart scheduling with ML models
+        - generic [ref=e53]:
+          - heading "Safety Monitor" [level=3] [ref=e57]
+          - paragraph [ref=e58]: Real-time risk scoring & OSHA reporting
+        - generic [ref=e59]:
+          - heading "Document AI" [level=3] [ref=e64]
+          - paragraph [ref=e65]: OCR + VLM for any document format
+        - generic [ref=e66]:
+          - heading "Workforce Engine" [level=3] [ref=e73]
+          - paragraph [ref=e74]: Skills matching & turnover prediction
+        - generic [ref=e75]:
+          - heading "AI Copilot" [level=3] [ref=e80]
+          - paragraph [ref=e81]: Chat with your project data live
+    - generic [ref=e83]:
+      - heading "Ready to transform your projects?" [level=2] [ref=e84]
+      - paragraph [ref=e85]: Join construction companies using AI to build better
+      - button "Start Demo" [ref=e86]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e92] [cursor=pointer]
