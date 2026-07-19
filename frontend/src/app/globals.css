@@ -158,7 +158,7 @@ body {
 }
 
 .gradient-text {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #00d4ff 0%, #3b82f6 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -191,6 +191,10 @@ body {
   box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
 }
 
+.glow-cyan {
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+}
+
 .animate-float {
   animation: float 3s ease-in-out infinite;
 }
@@ -203,6 +207,23 @@ body {
 .animate-pulse-slow {
   animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* Slow ambient drift for the landing page's background glow blobs. */
+@keyframes glow-drift-a {
+  0%, 100% { transform: translate(-50%, 0) scale(1); }
+  50%      { transform: translate(-50%, 40px) scale(1.15); }
+}
+@keyframes glow-drift-b {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(30px, -25px) scale(1.1); }
+}
+@keyframes glow-drift-c {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(-25px, 30px) scale(1.12); }
+}
+.animate-glow-drift-a { animation: glow-drift-a 22s ease-in-out infinite; }
+.animate-glow-drift-b { animation: glow-drift-b 18s ease-in-out infinite; }
+.animate-glow-drift-c { animation: glow-drift-c 26s ease-in-out infinite; }
 
 select {
   color-scheme: dark;

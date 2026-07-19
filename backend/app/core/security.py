@@ -3,7 +3,7 @@ import time
 import requests
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config import settings
 from app.services.db_service import supabase
@@ -75,17 +75,24 @@ def _resolve_user(token: str) -> dict | None:
 
     user_id = payload.get("sub")
     email = payload.get("email", "")
-    role = "contractor"
+    role = "viewer"  # least-privilege fallback
     full_name = ""
+    account_type = "real"
+    otp_verified = True
 
     # One retry on transient network failures (e.g. httpx socket errors) — without
     # this, a single dropped connection to Supabase silently downgrades a real
-    # admin/project_director to the "contractor" default and gets them RBAC-denied,
+    # admin/project_manager to the "viewer" default and gets them RBAC-denied,
     # which looks identical to an actual permissions problem from the caller's side.
     response = None
     for attempt in range(2):
         try:
-            response = supabase.table("profiles").select("role,full_name").eq("id", user_id).execute()
+            response = (
+                supabase.table("profiles")
+                .select("role,full_name,account_type,otp_verified")
+                .eq("id", user_id)
+                .execute()
+            )
             break
         except Exception:
             if attempt == 0:
@@ -95,12 +102,22 @@ def _resolve_user(token: str) -> dict | None:
 
     if response is not None:
         if response.data:
-            role = response.data[0].get("role", role)
-            full_name = response.data[0].get("full_name", "")
+            row = response.data[0]
+            role = row.get("role", role)
+            full_name = row.get("full_name", "")
+            account_type = row.get("account_type", account_type)
+            otp_verified = row.get("otp_verified", otp_verified)
         else:
             logger.warning("No profile row for authenticated user %s — defaulting role to '%s'", user_id, role)
 
-    return {"id": user_id, "email": email, "role": role, "full_name": full_name}
+    return {
+        "id": user_id,
+        "email": email,
+        "role": role,
+        "full_name": full_name,
+        "account_type": account_type,
+        "otp_verified": otp_verified,
+    }
 
 
 def get_current_user(
@@ -180,6 +197,7 @@ def protect_route(*roles: str):
                 detail="Invalid or expired token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        _assert_otp_verified(user)
         user_role = user.get("role", "")
         if user_role not in roles:
             logger.warning("RBAC denied | role=%s | required=%s", user_role, roles)
@@ -191,19 +209,43 @@ def protect_route(*roles: str):
     return _dependency
 
 
+def _assert_otp_verified(user: dict) -> None:
+    """Google-OAuth signups start with profiles.otp_verified=false until the
+    emailed OTP is confirmed — block everything else until then. Password
+    signups and demo accounts are always otp_verified=true."""
+    if not user.get("otp_verified", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required — please confirm the OTP sent to your email",
+        )
+
+
+def _action_for(request: Request) -> str:
+    if request.method == "DELETE":
+        return "delete"
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return "read"
+    return "write"
+
+
 def require_module_access(module: str):
     """
-    Dependency factory for coarse, module-level RBAC (backend/app/core/guardrails.ROLE_PERMISSIONS).
+    Dependency factory for module + action level RBAC
+    (backend/app/core/guardrails.ROLE_PERMISSIONS).
 
     Attach at router-include time (see main.py) rather than per-endpoint — this
-    gates the whole module (e.g. every /api/v1/financials/* route) by role, on
-    top of any finer-grained protect_route()/require_role() checks individual
-    endpoints already apply.
+    gates the whole module (e.g. every /api/v1/financials/* route) by role and
+    HTTP-method-derived action (GET/HEAD/OPTIONS->read, DELETE->delete, else
+    write), on top of any finer-grained protect_route()/require_role() checks
+    individual endpoints already apply. A POST endpoint that's actually a read
+    (search/filter-by-body) needs an explicit override — this heuristic covers
+    the common REST case, not every endpoint.
 
     Follows the same AUTH_REQUIRED-conditional pattern as protect_route(): a
     no-op (logs only) in demo mode so the frontend keeps working without JWTs.
     """
     def _dependency(
+        request: Request,
         credentials: HTTPAuthorizationCredentials = Depends(_bearer),
     ) -> dict | None:
         if not settings.AUTH_REQUIRED:
@@ -225,11 +267,13 @@ def require_module_access(module: str):
                 detail="Invalid or expired token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        if not has_permission(user.get("role", ""), module):
-            logger.warning("Module access denied | role=%s | module=%s", user.get("role"), module)
+        _assert_otp_verified(user)
+        action = _action_for(request)
+        if not has_permission(user.get("role", ""), module, action):
+            logger.warning("Module access denied | role=%s | module=%s | action=%s", user.get("role"), module, action)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Role '{user.get('role')}' does not have access to the '{module}' module",
+                detail=f"Role '{user.get('role')}' does not have '{action}' access to the '{module}' module",
             )
         return user
     return _dependency

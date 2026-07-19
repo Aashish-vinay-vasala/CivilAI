@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import dynamic from "next/dynamic";
-const AISphere3D = dynamic(() => import("@/components/three/AISphere3D"), { ssr: false });
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bot, User, Loader2, Sparkles, Wrench,
@@ -10,11 +8,13 @@ import {
   AlertTriangle, CheckCircle2, Send, FileText,
   Image as ImageIcon, AudioLines, X, Download,
   History, MessageSquare, Trash2, ListChecks,
-  ShieldAlert, Clock, Zap, TrendingUp,
+  ShieldAlert, Clock, Zap, TrendingUp, Scale, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import VoiceButton from "@/components/shared/VoiceButton";
+import { authHeaders } from "@/lib/apiAuth";
+import { scoreOutput, type JudgeVerdict } from "@/lib/judgeClient";
 
 const API          = process.env.NEXT_PUBLIC_API_URL ?? "";
 const SESSION_KEY  = "civilai_agent_session";
@@ -238,12 +238,58 @@ function ActionItems({ items }: { items: string[] }) {
   );
 }
 
+// Inline verdict from the LLM Judge (backend/app/api/v1/routes/judge.py,
+// agent_copilot_reply rubric — checks tool-use appropriateness and grounding
+// against what the tools actually returned, not just prose quality).
+function AgentJudgePanel({ verdict, expanded, onToggle }: { verdict: JudgeVerdict; expanded: boolean; onToggle: () => void }) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,212,255,0.12)" }}>
+      <button onClick={onToggle} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left">
+        <div className="flex items-center gap-2 min-w-0">
+          {verdict.degraded ? (
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          ) : verdict.passed ? (
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          ) : (
+            <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+          )}
+          <span className="text-xs text-white/60">
+            {verdict.degraded ? "Judge unavailable" : `Judge score: ${verdict.overall_score.toFixed(1)}/10`}
+          </span>
+        </div>
+        {expanded ? <ChevronDown className="w-3.5 h-3.5 text-white/30 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-white/30 shrink-0" />}
+      </button>
+      {expanded && (
+        <div className="px-3 pb-3 space-y-2 border-t border-white/[0.06] pt-2">
+          <p className="text-[11px] text-white/50 leading-relaxed">{verdict.summary}</p>
+          {verdict.criteria.map((c) => (
+            <div key={c.name} className="flex items-center justify-between gap-2 text-[10px]">
+              <span className="text-white/40">{c.name}</span>
+              <span className="text-white/30">{c.score.toFixed(1)}/10</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AgentBubble({
   msg,
   onExtractActions,
+  onJudge,
+  judging,
+  verdict,
+  judgePanelOpen,
+  onToggleJudgePanel,
 }: {
   msg: Message;
   onExtractActions: (id: string, content: string) => void;
+  onJudge?: () => void;
+  judging?: boolean;
+  verdict?: JudgeVerdict;
+  judgePanelOpen?: boolean;
+  onToggleJudgePanel?: () => void;
 }) {
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-2">
@@ -289,6 +335,12 @@ function AgentBubble({
             </div>
           )}
 
+          {verdict && (
+            <div className="max-w-[88%]">
+              <AgentJudgePanel verdict={verdict} expanded={!!judgePanelOpen} onToggle={() => onToggleJudgePanel?.()} />
+            </div>
+          )}
+
           <div className="flex items-center gap-3 pl-1">
             <p className="text-[10px] text-white/25">{msg.timestamp}</p>
             {!msg.streaming && msg.content && !msg.actionItems && (
@@ -298,6 +350,16 @@ function AgentBubble({
               >
                 <ListChecks className="w-3 h-3" />
                 Extract Actions
+              </button>
+            )}
+            {!msg.streaming && msg.content && !verdict && (
+              <button
+                onClick={() => onJudge?.()}
+                disabled={judging}
+                className="flex items-center gap-1 text-[10px] text-white/25 hover:text-cyan-400/70 transition-colors disabled:opacity-40"
+              >
+                {judging ? <Loader2 className="w-3 h-3 animate-spin" /> : <Scale className="w-3 h-3" />}
+                Judge this
               </button>
             )}
           </div>
@@ -359,7 +421,7 @@ function HistoryPanel({
   const fetchSessions = useCallback(async () => {
     setFetching(true);
     try {
-      const res = await fetch(`${API}/api/v1/agent/sessions`);
+      const res = await fetch(`${API}/api/v1/agent/sessions`, { headers: await authHeaders() });
       const data = await res.json();
       setSessions(data.sessions ?? []);
     } catch {
@@ -374,7 +436,7 @@ function HistoryPanel({
   const deleteSession = async (sid: string) => {
     setDeleting(sid);
     try {
-      await fetch(`${API}/api/v1/agent/sessions/${sid}`, { method: "DELETE" });
+      await fetch(`${API}/api/v1/agent/sessions/${sid}`, { method: "DELETE", headers: await authHeaders() });
       setSessions((prev) => prev.filter((s) => s.session_id !== sid));
     } catch {}
     setDeleting(null);
@@ -498,6 +560,9 @@ export default function AgentPage() {
   const [projects,      setProjects]      = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projectOpen,   setProjectOpen]   = useState(false);
+  const [judgeResults,   setJudgeResults]   = useState<Record<string, JudgeVerdict>>({});
+  const [judgingIds,     setJudgingIds]     = useState<Set<string>>(new Set());
+  const [judgePanelOpen, setJudgePanelOpen] = useState<Set<string>>(new Set());
 
   const bottomRef    = useRef<HTMLDivElement>(null);
   const inputRef     = useRef<HTMLTextAreaElement>(null);
@@ -604,7 +669,7 @@ export default function AgentPage() {
         form.append("session_id", sessionId);
         if (selectedProject) form.append("project_id", selectedProject.id);
 
-        const res  = await fetch(`${API}/api/v1/agent/upload`, { method: "POST", body: form });
+        const res  = await fetch(`${API}/api/v1/agent/upload`, { method: "POST", body: form, headers: await authHeaders() });
         const data = await res.json();
         setUploading(false);
 
@@ -626,7 +691,7 @@ export default function AgentPage() {
         // SSE streaming for text-only
         const res = await fetch(`${API}/api/v1/agent/stream`, {
           method:  "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...(await authHeaders()) },
           body:    JSON.stringify({ message: msg, session_id: sessionId, project_id: selectedProject?.id ?? "" }),
         });
 
@@ -712,6 +777,31 @@ export default function AgentPage() {
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [input, loading, sessionId, attachedFiles]);
+
+  // Scores an agent reply against the agent_copilot_reply rubric via the LLM
+  // Judge (backend/app/api/v1/routes/judge.py) — checks whether tools were
+  // used appropriately and the reply is consistent with tool output, not
+  // just prose quality. `context` is the preceding user turn.
+  const judgeMessage = async (id: string, content: string, context?: string) => {
+    setJudgingIds((prev) => new Set(prev).add(id));
+    try {
+      const verdict = await scoreOutput("agent_copilot_reply", content, context);
+      setJudgeResults((prev) => ({ ...prev, [id]: verdict }));
+      setJudgePanelOpen((prev) => new Set(prev).add(id));
+    } catch {
+      // Review aid, not core chat functionality — fail silently, button stays for retry.
+    } finally {
+      setJudgingIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    }
+  };
+
+  const toggleJudgePanel = (id: string) => {
+    setJudgePanelOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   const extractActionItems = async (msgId: string, content: string) => {
     try {
@@ -839,12 +929,11 @@ export default function AgentPage() {
             <Wand2 className="w-5 h-5 text-cyan-400" />
           </div>
           <div>
-            <h1 className="text-4xl font-bold text-white">AI Agent</h1>
-            <p className="text-xs text-muted-foreground">LangGraph ReAct · 18 live-data tools · SSE streaming</p>
+            <h1 className="text-4xl font-bold text-white tracking-tight">AI Agent</h1>
+            <p className="text-white/35 text-[13px] mt-1">LangGraph ReAct · 18 live-data tools · SSE streaming</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <AISphere3D color="#06b6d4" size={72} active={chatReady} />
           {chatReady && (
             <Button variant="ghost" size="icon" onClick={exportPDF} title="Export PDF"
               className="text-muted-foreground hover:text-cyan-400 w-8 h-8">
@@ -938,11 +1027,22 @@ export default function AgentPage() {
       {tab === "chat" && (
         <>
           <div className="flex-1 overflow-y-auto space-y-5 pr-1 mb-4">
-            {messages.map((msg) =>
-              msg.role === "user"
-                ? <UserBubble  key={msg.id} msg={msg} />
-                : <AgentBubble key={msg.id} msg={msg} onExtractActions={extractActionItems} />
-            )}
+            {messages.map((msg, idx) => {
+              if (msg.role === "user") return <UserBubble key={msg.id} msg={msg} />;
+              const precedingUser = idx > 0 && messages[idx - 1].role === "user" ? messages[idx - 1].content : undefined;
+              return (
+                <AgentBubble
+                  key={msg.id}
+                  msg={msg}
+                  onExtractActions={extractActionItems}
+                  onJudge={() => judgeMessage(msg.id, msg.content, precedingUser)}
+                  judging={judgingIds.has(msg.id)}
+                  verdict={judgeResults[msg.id]}
+                  judgePanelOpen={judgePanelOpen.has(msg.id)}
+                  onToggleJudgePanel={() => toggleJudgePanel(msg.id)}
+                />
+              );
+            })}
 
             {messages.length === 1 && !loading && (
               <div className="pt-2 ml-11">

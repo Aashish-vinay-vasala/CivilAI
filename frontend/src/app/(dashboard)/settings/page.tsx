@@ -19,7 +19,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import ModuleChat from "@/components/shared/ModuleChat";
 import ActivityLog from "@/components/activity/ActivityLog";
-import { useRoleStore, ROLE_LABELS, ROLE_COLORS, UserRole, ROLE_PERMISSIONS } from "@/lib/stores/roleStore";
+import { useRoleStore, ROLE_LABELS, ROLE_COLORS, UserRole } from "@/lib/stores/roleStore";
 import { useActivityStore } from "@/lib/stores/activityStore";
 import dynamic from "next/dynamic";
 
@@ -63,13 +63,21 @@ const ghostBtn =
   "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-white/50 hover:text-white/80 transition-colors";
 const ghostBtnStyle = { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" };
 
-const ALL_ROLES: UserRole[] = ["admin", "pm", "engineer", "viewer"];
+const ALL_ROLES: UserRole[] = ["admin", "project_manager", "site_engineer", "procurement_manager", "viewer"];
+
+const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
+  admin: "Full create/read/update/delete access across every module.",
+  project_manager: "Read/write on projects, cost, schedule, and field operations; read-only on accounting and review.",
+  site_engineer: "Read/write on field modules (safety, workforce, equipment); read-only elsewhere.",
+  procurement_manager: "Read/write on contracts, vendors, procurement, and payments; read-only elsewhere.",
+  viewer: "Read-only access, no write or delete permissions.",
+};
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("profile");
   const [saving, setSaving] = useState(false);
   const { theme, setTheme } = useTheme();
-  const { role, setRole } = useRoleStore();
+  const { role } = useRoleStore();
   const logActivity = useActivityStore((s) => s.log);
   const [profile, setProfile] = useState({
     name: "CivilAI Admin",
@@ -166,14 +174,15 @@ export default function SettingsPage() {
             <div className="glass-card p-6 space-y-6">
               <div>
                 <h2 className="font-semibold text-white">User Role</h2>
-                <p className="text-sm text-white/35 mt-1">Select your role to configure permissions</p>
+                <p className="text-sm text-white/35 mt-1">
+                  Your role is assigned at signup and enforced by the backend — it can&apos;t be changed here.
+                </p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {ALL_ROLES.map((r) => (
-                  <button
+                  <div
                     key={r}
-                    onClick={() => { setRole(r); toast.success(`Role changed to ${ROLE_LABELS[r]}`); }}
-                    className={`p-4 rounded-xl border text-left transition-all ${role === r ? "" : "hover:bg-white/5"}`}
+                    className="p-4 rounded-xl border text-left"
                     style={role === r
                       ? { borderColor: "rgba(0,212,255,0.4)", background: "rgba(0,212,255,0.06)" }
                       : { borderColor: "rgba(255,255,255,0.08)" }}
@@ -184,17 +193,8 @@ export default function SettingsPage() {
                       </span>
                       {role === r && <CheckCircle className="w-4 h-4 text-cyan-400" />}
                     </div>
-                    <div className="mt-2 space-y-1">
-                      {Object.entries(ROLE_PERMISSIONS[r]).map(([k, v]) => (
-                        <div key={k} className="flex items-center gap-2">
-                          <div className={`w-1.5 h-1.5 rounded-full ${v ? "bg-emerald-400" : "bg-white/15"}`} />
-                          <span className="text-xs text-white/35 capitalize">
-                            {k.replace(/([A-Z])/g, " $1").replace("can ", "")}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </button>
+                    <p className="text-xs text-white/35 mt-2">{ROLE_DESCRIPTIONS[r]}</p>
+                  </div>
                 ))}
               </div>
             </div>

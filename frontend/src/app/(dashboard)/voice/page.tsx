@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { useWebSpeechSTT } from "@/hooks/useWebSpeechSTT";
 import { supabase } from "@/lib/supabase";
 import { speak as speakText, stopSpeaking as stopSpeakingPlayback, fetchGroqVoices, type VoiceChoice } from "@/lib/ttsPlayback";
+import { authHeaders } from "@/lib/apiAuth";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "";
 const VOICE_KEY = "civilai_voicepage_voice";
@@ -152,7 +153,7 @@ function UploadPanel({
     if (!file) return;
     setLoading(true); setError(""); setResult(null);
     try {
-      const res  = await fetch(`${API}${endpoint}`, { method: "POST", body: buildForm(file) });
+      const res  = await fetch(`${API}${endpoint}`, { method: "POST", body: buildForm(file), headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? res.statusText);
       setResult(data);
@@ -255,7 +256,7 @@ function DiarizePanel() {
       const fd = new FormData();
       fd.append("audio", file, file.name);
       fd.append("include_transcript", "true");
-      const res  = await fetch(`${API}/api/v1/voice/diarize`, { method: "POST", body: fd });
+      const res  = await fetch(`${API}/api/v1/voice/diarize`, { method: "POST", body: fd, headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? res.statusText);
       setResult(data as DiarizeData);
@@ -345,7 +346,7 @@ function DiarizePanel() {
       fd.append("num_speakers", String(result.num_speakers ?? 0));
       fd.append("segments",     JSON.stringify(result.segments ?? []));
 
-      const res  = await fetch(`${API}/api/v1/voice/meetings/save`, { method: "POST", body: fd });
+      const res  = await fetch(`${API}/api/v1/voice/meetings/save`, { method: "POST", body: fd, headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? res.statusText);
 
@@ -363,7 +364,7 @@ function DiarizePanel() {
     try {
       const fd = new FormData();
       fd.append("dialogue", JSON.stringify(result.dialogue));
-      const res  = await fetch(`${API}/api/v1/voice/meeting-summary`, { method: "POST", body: fd });
+      const res  = await fetch(`${API}/api/v1/voice/meeting-summary`, { method: "POST", body: fd, headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? res.statusText);
       setSummary(data.summary);
@@ -571,7 +572,7 @@ function VadPanel({ engine }: { engine: "webrtc" | "silero" }) {
       const fd = new FormData();
       fd.append("audio", file, file.name);
       fd.append("engine", isWebRTC ? "webrtc" : "silero");
-      const res  = await fetch(`${API}/api/v1/voice/vad`, { method: "POST", body: fd });
+      const res  = await fetch(`${API}/api/v1/voice/vad`, { method: "POST", body: fd, headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? res.statusText);
       setResult(data);
@@ -682,7 +683,7 @@ function VadPanel({ engine }: { engine: "webrtc" | "silero" }) {
       fd.append("num_segments", String(speechSegs.length));
       fd.append("segments",     JSON.stringify(speechSegs));
 
-      const res  = await fetch(`${API}/api/v1/voice/vad/save`, { method: "POST", body: fd });
+      const res  = await fetch(`${API}/api/v1/voice/vad/save`, { method: "POST", body: fd, headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? res.statusText);
       setSavedId((data.record as { id: string }).id);
@@ -912,7 +913,7 @@ Transcript:\n${text}`,
     try {
       const fd  = new FormData();
       fd.append("file", file);
-      const res  = await fetch(`${API}/api/v1/transcribe`, { method: "POST", body: fd });
+      const res  = await fetch(`${API}/api/v1/transcribe`, { method: "POST", body: fd, headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? res.statusText);
       const text = data.transcript ?? data.text ?? "";
@@ -966,7 +967,7 @@ Transcript:\n${text}`,
       fd.append("minutes",    minutes);
       fd.append("filename",   file?.name ?? "recording");
 
-      const res  = await fetch(`${API}/api/v1/voice/transcriptions/save`, { method: "POST", body: fd });
+      const res  = await fetch(`${API}/api/v1/voice/transcriptions/save`, { method: "POST", body: fd, headers: await authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? res.statusText);
       setSavedId((data.record as { id: string }).id);
@@ -1194,7 +1195,7 @@ function HistoryPanel() {
   useEffect(() => { load(); }, [load]);
 
   const deleteSession = async (id: string) => {
-    try { await fetch(`${API}/api/v1/voice/sessions/${id}`, { method: "DELETE" }); } catch {}
+    try { await fetch(`${API}/api/v1/voice/sessions/${id}`, { method: "DELETE", headers: await authHeaders() }); } catch {}
     setSessions(p => p.filter(s => s.id !== id));
   };
 
@@ -1713,7 +1714,7 @@ export default function VoicePage() {
       try {
         await fetch(`${API}/api/v1/voice/sessions`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...(await authHeaders()) },
           body: JSON.stringify({
             id:    sessionIdRef.current,
             label: turns[0].transcript.slice(0, 80),
@@ -1745,7 +1746,7 @@ export default function VoicePage() {
       form.append("audio",        blob, "recording.webm");
       form.append("chat_history", JSON.stringify(buildHistory()));
 
-      const res  = await fetch(`${API}/api/v1/voice/voice-chat`, { method: "POST", body: form });
+      const res  = await fetch(`${API}/api/v1/voice/voice-chat`, { method: "POST", body: form, headers: await authHeaders() });
       const data = await res.json();
 
       if (!res.ok) throw new Error(data.detail ?? res.statusText);

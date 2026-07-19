@@ -82,7 +82,7 @@ export function pickDefaultVoiceChoice(): VoiceChoice {
 
 export async function fetchGroqVoices(): Promise<string[]> {
   try {
-    const res  = await fetch(`${API}/api/v1/voice/voices`);
+    const res  = await fetch(`${API}/api/v1/voice/voices`, { headers: await authHeaders() });
     const data = await res.json();
     return data.voices ?? [];
   } catch {

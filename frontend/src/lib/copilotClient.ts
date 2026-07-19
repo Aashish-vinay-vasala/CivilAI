@@ -65,6 +65,7 @@ export async function streamChat(
   params: { message: string; sessionId: string; chatHistory: Message[]; webSearch: boolean },
   onDelta: (delta: string) => void,
   onTool?: (event: ToolEvent) => void,
+  signal?: AbortSignal,
 ): Promise<StreamChatResult> {
   const res = await fetch(`${API}/api/v1/copilot/chat/stream`, {
     method: "POST",
@@ -75,6 +76,7 @@ export async function streamChat(
       chat_history: params.chatHistory,
       web_search: params.webSearch,
     }),
+    signal,
   });
   if (!res.ok || !res.body) throw new Error("Stream request failed");
 

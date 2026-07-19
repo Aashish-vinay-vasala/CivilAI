@@ -417,7 +417,7 @@ export default function SupportPage() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [aiTyping, setAiTyping]         = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const { can } = useRoleStore();
+  const { role } = useRoleStore();
 
   async function loadTickets() {
     setLoadingTickets(true);
@@ -525,7 +525,7 @@ export default function SupportPage() {
               >
                 <RefreshCw className="w-3.5 h-3.5" />
               </button>
-              {can("canManageUsers") && (
+              {role === "admin" && (
                 <button
                   onClick={() => setShowStats(true)}
                   className="p-1.5 rounded-lg text-white/30 hover:text-white/70 transition-colors"

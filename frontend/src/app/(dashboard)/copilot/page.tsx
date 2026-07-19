@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Send, Bot, User, Loader2, RefreshCw, Hash, X, FileText, Image, AudioLines, Sparkles,
   Globe, History as HistoryIcon, Download, Mic, MicOff, Volume2, Trash2, Wrench, CheckCircle2,
+  Scale, XCircle, AlertTriangle, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -24,6 +25,7 @@ import {
   useChatWidgetStore,
   type ChatMessage, type ChatSource as Source, type ChatToolStep as ToolStep,
 } from "@/lib/stores/chatWidgetStore";
+import { scoreOutput, type JudgeVerdict } from "@/lib/judgeClient";
 
 const WritingPage = dynamic(() => import("../writing/page"), {
   ssr: false,
@@ -114,8 +116,72 @@ function ToolStepChips({ steps }: { steps: ToolStep[] }) {
   );
 }
 
-function Bubble({ msg, onFollowUp, onNavigate }: { msg: Message; onFollowUp?: (text: string) => void; onNavigate: (href: string) => void }) {
+function MiniScoreBar({ score, max = 10 }: { score: number; max?: number }) {
+  const pct = Math.max(0, Math.min(100, (score / max) * 100));
+  const color = pct >= 70 ? "#34d399" : pct >= 40 ? "#fbbf24" : "#f87171";
+  return (
+    <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
+      <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
+    </div>
+  );
+}
+
+// Inline verdict panel from the LLM Judge (see /judge and backend/app/api/v1/routes/judge.py)
+// scored against the copilot_chat rubric — lets a reviewer sanity-check a Copilot
+// reply without leaving the chat.
+function JudgePanel({ verdict, expanded, onToggle }: { verdict: JudgeVerdict; expanded: boolean; onToggle: () => void }) {
+  return (
+    <div className="mt-1 rounded-xl overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,212,255,0.12)" }}>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {verdict.degraded ? (
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          ) : verdict.passed ? (
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          ) : (
+            <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+          )}
+          <span className="text-white/70">
+            {verdict.degraded ? "Judge unavailable" : `Judge score: ${verdict.overall_score.toFixed(1)}/10`}
+          </span>
+        </div>
+        {expanded ? <ChevronUp className="w-3.5 h-3.5 text-white/30 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-white/30 shrink-0" />}
+      </button>
+      {expanded && (
+        <div className="px-3 pb-3 space-y-2 border-t border-white/[0.06] pt-2">
+          <p className="text-xs text-white/60">{verdict.summary}</p>
+          {verdict.criteria.map((c) => (
+            <div key={c.name} className="space-y-0.5">
+              <div className="flex items-center justify-between text-[10px]">
+                <span className="text-white/50">{c.name}</span>
+                <span className="text-white/40">{c.score.toFixed(1)}/10</span>
+              </div>
+              <MiniScoreBar score={c.score} />
+              <p className="text-[10px] text-white/35">{c.reasoning}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface BubbleProps {
+  msg: Message;
+  onFollowUp?: (text: string) => void;
+  onNavigate: (href: string) => void;
+  onJudge?: () => void;
+  judging?: boolean;
+  verdict?: JudgeVerdict;
+}
+
+function Bubble({ msg, onFollowUp, onNavigate, onJudge, judging, verdict }: BubbleProps) {
   const isUser = msg.role === "user";
+  const [panelOpen, setPanelOpen] = useState(false);
+  const canJudge = !isUser && msg.id !== "welcome" && msg.content.trim() !== "";
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -183,6 +249,17 @@ function Bubble({ msg, onFollowUp, onNavigate }: { msg: Message; onFollowUp?: (t
             → {msg.followUp}
           </button>
         )}
+        {canJudge && !verdict && (
+          <button
+            onClick={onJudge}
+            disabled={judging}
+            className="ml-1 flex items-center gap-1 text-[10px] text-white/30 hover:text-cyan-400 disabled:opacity-50 transition-colors"
+          >
+            {judging ? <Loader2 className="w-3 h-3 animate-spin" /> : <Scale className="w-3 h-3" />}
+            {judging ? "Judging…" : "Judge this"}
+          </button>
+        )}
+        {verdict && <JudgePanel verdict={verdict} expanded={panelOpen} onToggle={() => setPanelOpen((v) => !v)} />}
         <p className={cn("text-[10px] text-white/25", isUser ? "text-right pr-1" : "pl-1")}>
           {msg.timestamp}
         </p>
@@ -241,6 +318,8 @@ export default function CopilotPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [sessions,    setSessions]    = useState<SavedSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [judgeResults, setJudgeResults] = useState<Record<string, JudgeVerdict>>({});
+  const [judgingIds,   setJudgingIds]   = useState<Set<string>>(new Set());
 
   const bottomRef    = useRef<HTMLDivElement>(null);
   const inputRef     = useRef<HTMLTextAreaElement>(null);
@@ -306,6 +385,28 @@ export default function CopilotPage() {
     }, 1000);
     return () => clearTimeout(timer);
   }, [messages, sessionId]);
+
+  // Scores a Copilot reply against the copilot_chat rubric via the LLM Judge
+  // (backend/app/api/v1/routes/judge.py) — the preceding user turn is passed
+  // as light grounding context (the judge doesn't see the live DB data the
+  // backend injected server-side, so it can only check consistency with what
+  // was asked, not full factual grounding against the database).
+  const judgeMessage = useCallback(async (id: string, content: string, context?: string) => {
+    setJudgingIds((prev) => new Set(prev).add(id));
+    try {
+      const verdict = await scoreOutput("copilot_chat", content, context);
+      setJudgeResults((prev) => ({ ...prev, [id]: verdict }));
+    } catch {
+      // Judge is a review aid, not core chat functionality — fail silently
+      // and let the user retry via the button (still visible since no verdict was set).
+    } finally {
+      setJudgingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }, []);
 
   const send = useCallback(async (text?: string) => {
     const msg = (text ?? input).trim();
@@ -636,9 +737,20 @@ export default function CopilotPage() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2">
-        {messages.map((msg) => (
-          <Bubble key={msg.id} msg={msg} onFollowUp={(text) => { setInput(text); inputRef.current?.focus(); }} onNavigate={router.push} />
-        ))}
+        {messages.map((msg, idx) => {
+          const precedingUser = idx > 0 && messages[idx - 1].role === "user" ? messages[idx - 1].content : undefined;
+          return (
+            <Bubble
+              key={msg.id}
+              msg={msg}
+              onFollowUp={(text) => { setInput(text); inputRef.current?.focus(); }}
+              onNavigate={router.push}
+              onJudge={() => judgeMessage(msg.id, msg.content, precedingUser)}
+              judging={judgingIds.has(msg.id)}
+              verdict={judgeResults[msg.id]}
+            />
+          );
+        })}
 
         {loading && <TypingDots />}
 

@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from typing import Optional
+import httpx
 from supabase import create_client
+from supabase.lib.client_options import SyncClientOptions
 from app.config import settings
 from app.ai.groq_client import analyze_document
 from app.ai.construction_analyzer import (
@@ -16,7 +18,13 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SECRET_KEY)
+# max_keepalive_connections=0 avoids a Windows socket race under concurrent
+# requests sharing a pooled keep-alive connection — see db_service.py.
+supabase = create_client(
+    settings.SUPABASE_URL,
+    settings.SUPABASE_SECRET_KEY,
+    SyncClientOptions(httpx_client=httpx.Client(limits=httpx.Limits(max_keepalive_connections=0))),
+)
 
 # ─── PUNCH LIST ───────────────────────────────────────────
 class PunchListCreate(BaseModel):

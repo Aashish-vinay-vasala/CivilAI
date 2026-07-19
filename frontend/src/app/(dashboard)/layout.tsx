@@ -15,7 +15,7 @@ import CommandPalette, { useCommandPalette } from "@/components/command/CommandP
 import ErrorBoundary from "@/components/layout/ErrorBoundary";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const router = useRouter();
   const { setTheme, theme } = useTheme();
 
@@ -40,8 +40,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (loading) return;
     if (!user) {
       router.replace("/");
+      return;
     }
-  }, [user, loading, router]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Google-OAuth signups start otp_verified=false (migration 041) until
+    // the emailed code is confirmed — hold them on the verify screen.
+    if (profile && profile.otp_verified === false) {
+      router.replace("/signup/verify-otp");
+    }
+  }, [user, profile, loading, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const spinner = (
     <div className="min-h-screen bg-background flex items-center justify-center">

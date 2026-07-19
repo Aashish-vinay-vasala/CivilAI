@@ -132,42 +132,75 @@ def validate_output(response: str, context: str = "") -> tuple[str, bool]:
 
 
 # ---------------------------------------------------------------------------
-# RBAC — role-to-module permission map
+# RBAC — role x module x action permission matrix
+#
+# Actions are "read" | "write" | "delete" (write implies create/update).
+# Admin gets every action on every module. The four other roles are built
+# from module categories below rather than spelled out module-by-module —
+# simplification note: delete is admin-only everywhere except
+# notifications, where every role may delete their own notification.
 # ---------------------------------------------------------------------------
 
-ROLE_PERMISSIONS: dict[str, set[str]] = {
-    "project_director": {
-        "copilot", "documents", "contracts", "safety", "cost", "schedule",
-        "workforce", "procurement", "compliance", "equipment", "reports",
-        "ml", "projects", "writing", "green", "vendors", "payments",
-        "bim", "construction", "transcribe", "email", "preconstruction", "financials",
-        "chatbot", "voice", "agent", "support", "review", "evaluation", "accounting",
-        "notifications", "tenders",
-    },
-    "admin": {
-        "copilot", "documents", "contracts", "safety", "cost", "schedule",
-        "workforce", "procurement", "compliance", "equipment", "reports",
-        "ml", "projects", "writing", "green", "vendors", "payments",
-        "bim", "construction", "transcribe", "email", "preconstruction", "financials",
-        "chatbot", "voice", "agent", "support", "review", "evaluation", "accounting",
-        "notifications", "tenders",
-    },
-    "engineer": {
-        "copilot", "documents", "safety", "schedule", "equipment", "reports",
-        "ml", "projects", "bim", "construction", "compliance", "writing", "transcribe",
-        "chatbot", "voice", "agent", "support", "notifications", "tenders", "workforce",
-    },
-    "contractor": {
-        "copilot", "documents", "safety", "schedule", "equipment",
-        "projects", "construction", "compliance", "writing",
-        "chatbot", "voice", "agent", "support", "notifications", "tenders", "workforce", "ml",
-    },
+_ALL_MODULES = [
+    "copilot", "chatbot", "construction", "payments", "projects", "vendors",
+    "green", "ml", "documents", "writing", "contracts", "safety", "cost",
+    "schedule", "workforce", "procurement", "compliance", "equipment",
+    "reports", "bim", "transcribe", "email", "preconstruction", "financials",
+    "review", "voice", "agent", "evaluation", "accounting", "notifications",
+    "tenders", "support",
+]
+
+_CORE = {"projects", "cost", "schedule", "financials"}
+_FIELD = {"safety", "workforce", "equipment", "compliance", "construction", "bim", "documents", "preconstruction"}
+_COMMERCIAL = {"contracts", "vendors", "procurement", "payments", "ml"}
+_PLANNING = {"reports", "green", "tenders"}
+_FINANCE_REVIEW = {"accounting", "review", "evaluation"}
+_AI_TOOLS = {"copilot", "chatbot", "agent", "voice", "writing", "transcribe"}
+_COMMS = {"email"}
+_ALWAYS_RWD = {"notifications"}  # own-notification delete for every role
+_ALWAYS_RW = {"support"}
+
+
+def _rw(modules: set[str]) -> dict[str, set[str]]:
+    return {m: {"read", "write"} for m in modules}
+
+
+def _r(modules: set[str]) -> dict[str, set[str]]:
+    return {m: {"read"} for m in modules}
+
+
+def _build_role(rw: set[str], r: set[str]) -> dict[str, set[str]]:
+    perms = {m: {"read", "write", "delete"} for m in _ALWAYS_RWD}
+    perms.update(_rw(_ALWAYS_RW))
+    perms.update(_rw(rw))
+    perms.update({m: perms.get(m, set()) | {"read"} for m in r})
+    return perms
+
+
+ROLE_PERMISSIONS: dict[str, dict[str, set[str]]] = {
+    "admin": {m: {"read", "write", "delete"} for m in _ALL_MODULES},
+    "project_manager": _build_role(
+        rw=_CORE | _FIELD | _COMMERCIAL | _PLANNING | _AI_TOOLS | _COMMS,
+        r=_FINANCE_REVIEW,
+    ),
+    "site_engineer": _build_role(
+        rw=_FIELD | _AI_TOOLS,
+        r=_CORE | _COMMERCIAL | _PLANNING,
+    ),
+    "procurement_manager": _build_role(
+        rw=_COMMERCIAL | _AI_TOOLS | _COMMS,
+        r=_CORE | _FIELD | _PLANNING | _FINANCE_REVIEW,
+    ),
+    "viewer": _build_role(
+        rw=set(),
+        r=_CORE | _FIELD | _COMMERCIAL | _PLANNING | {"copilot", "chatbot"},
+    ),
 }
 
 
-def has_permission(role: str, module: str) -> bool:
-    """Return True if the given role may access the named module."""
-    return module in ROLE_PERMISSIONS.get(role.lower(), set())
+def has_permission(role: str, module: str, action: str = "read") -> bool:
+    """Return True if the given role may perform `action` on `module`."""
+    return action in ROLE_PERMISSIONS.get(role.lower(), {}).get(module, set())
 
 
 def guard_text(

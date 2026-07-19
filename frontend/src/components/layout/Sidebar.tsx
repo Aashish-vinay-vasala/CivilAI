@@ -12,7 +12,7 @@ import {
   Zap, HeadphonesIcon, Mic, Wand2, ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useRoleStore, ROLE_LABELS, RolePermissions } from "@/lib/stores/roleStore";
+import { useRoleStore, ROLE_LABELS } from "@/lib/stores/roleStore";
 import { useAuth } from "@/lib/auth";
 import { usePinnedStore } from "@/lib/stores/pinnedStore";
 
@@ -21,7 +21,9 @@ interface NavItem {
   icon: React.ElementType;
   label: string;
   badge?: string;
-  requires?: keyof RolePermissions;
+  /** module key in backend/app/core/guardrails.ROLE_PERMISSIONS; item is
+   * hidden unless the caller has "read" access to it. */
+  requiresModule?: string;
 }
 interface NavGroup { label: string; items: NavItem[] }
 
@@ -53,7 +55,7 @@ const navGroups: NavGroup[] = [
   {
     label: "System",
     items: [
-      { href: "/review",   icon: ShieldCheck,    label: "Review Queue", requires: "canApproveContracts" },
+      { href: "/review",   icon: ShieldCheck,    label: "Review Queue", requiresModule: "review" },
       { href: "/support",  icon: HeadphonesIcon, label: "Support" },
       { href: "/settings", icon: Settings,        label: "Settings" },
     ],
@@ -236,7 +238,7 @@ function SidebarContent({
   const { pinned, pin, unpin, isPinned } = usePinnedStore();
   const [hoveredHref, setHoveredHref] = useState<string | null>(null);
 
-  const visible = (i: NavItem) => !i.requires || can(i.requires);
+  const visible = (i: NavItem) => !i.requiresModule || can(i.requiresModule, "read");
   const pinnedItems = allNavItems.filter((i) => pinned.includes(i.href) && visible(i));
   const displayName = user?.user_metadata?.full_name ?? "CivilAI Admin";
   const initials = displayName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();

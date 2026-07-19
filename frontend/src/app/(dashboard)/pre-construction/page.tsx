@@ -14,6 +14,7 @@ import { useAuth } from "@/lib/auth";
 import { useTenderStore, Tender } from "@/lib/stores/tenderStore";
 import { exportGapCheckPDF } from "@/lib/exportTenderPDF";
 import toast from "react-hot-toast";
+import { authHeaders } from "@/lib/apiAuth";
 
 const API = process.env.NEXT_PUBLIC_API_URL || `${process.env.NEXT_PUBLIC_API_URL}`;
 
@@ -74,9 +75,10 @@ async function streamPost(
   url: string, body: FormData | string, isJson: boolean,
   onToken: (t: string) => void,
 ): Promise<void> {
+  const auth = await authHeaders();
   const res = await fetch(url, {
     method: "POST",
-    headers: isJson ? { "Content-Type": "application/json" } : undefined,
+    headers: isJson ? { "Content-Type": "application/json", ...auth } : auth,
     body,
   });
   if (!res.ok) throw new Error(await res.text());

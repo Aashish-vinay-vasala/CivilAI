@@ -1,10 +1,15 @@
 """
-One-off, idempotent seed script for the 4 demo accounts shown on the login page.
+One-off, idempotent seed script for the 5 demo accounts (one per role) shown
+on the login page's demo role picker.
 
 Creates each account as a real Supabase Auth user (email-confirmed, real
-password) and sets its profiles.role so backend RBAC (protect_route) works
-for the demo. Safe to re-run: existing accounts are left untouched aside
-from making sure their profile role is correct.
+password) and sets its profiles row (role, account_type='demo',
+otp_verified=true) so backend RBAC and POST /api/v1/auth/demo-login both
+work. Safe to re-run: existing accounts are left untouched aside from
+making sure their profile row is correct.
+
+Credentials live in app/core/demo_accounts.py — the single source of truth
+also used by the demo-login endpoint.
 
 Usage:
     python backend/scripts/seed_demo_users.py
@@ -15,13 +20,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.db_service import supabase  # service-role client
-
-DEMO_USERS = [
-    {"email": "director@civilai.com",   "password": "Director@2024",   "full_name": "Sarah Chen",   "role": "project_director"},
-    {"email": "admin@civilai.com",      "password": "Admin@2024",      "full_name": "James Wilson", "role": "admin"},
-    {"email": "engineer@civilai.com",   "password": "Engineer@2024",   "full_name": "Priya Patel",  "role": "engineer"},
-    {"email": "contractor@civilai.com", "password": "Contractor@2024", "full_name": "Mike Torres",  "role": "contractor"},
-]
+from app.core.demo_accounts import DEMO_ACCOUNTS
 
 
 def find_existing_user(email: str):
@@ -40,7 +39,8 @@ def find_existing_user(email: str):
 
 
 def main():
-    for account in DEMO_USERS:
+    failures = []
+    for account in DEMO_ACCOUNTS:
         existing = find_existing_user(account["email"])
         if existing:
             user_id = existing.id
@@ -55,13 +55,26 @@ def main():
             user_id = created.user.id
             print(f"[created] {account['email']} ({user_id})")
 
-        supabase.table("profiles").upsert({
+        response = supabase.table("profiles").upsert({
             "id": user_id,
             "email": account["email"],
             "full_name": account["full_name"],
             "role": account["role"],
+            "account_type": "demo",
+            "otp_verified": True,
         }).execute()
-        print(f"         -> role set to '{account['role']}'")
+
+        # The previous version of this script never checked the response —
+        # a silent upsert failure left 4 auth.users rows with no matching
+        # profiles row at all, and nobody noticed until a live query caught it.
+        if not response.data:
+            failures.append(account["email"])
+            print(f"         -> FAILED to upsert profile for {account['email']}")
+        else:
+            print(f"         -> role set to '{account['role']}'")
+
+    if failures:
+        raise RuntimeError(f"Failed to seed profiles for: {', '.join(failures)}")
 
 
 if __name__ == "__main__":

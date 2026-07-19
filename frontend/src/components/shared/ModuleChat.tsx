@@ -8,6 +8,7 @@ import {
   Bot, Send, X, Loader2, Sparkles, Mic, MicOff, Volume2, Gauge, Globe, Copy, Check,
   Maximize2, Minimize2, Plus, History as HistoryIcon, Download, ChevronLeft, Trash2, ChevronDown,
   Image as ImageIcon, FileAudio, FileText, RefreshCw, Search, Activity, Wrench, CheckCircle2,
+  Scale, XCircle, AlertTriangle, ChevronUp, Square,
 } from "lucide-react";
 import axios from "axios";
 import ChatText from "@/components/shared/ChatText";
@@ -25,18 +26,28 @@ import {
   type ChatMessage as Message,
 } from "@/lib/stores/chatWidgetStore";
 import type { ToolEvent } from "@/lib/copilotClient";
+import { scoreOutput, type JudgeVerdict } from "@/lib/judgeClient";
 
 const POSITION_KEY    = "civilai_widget_pos";
 const SPEECH_RATE_KEY = "civilai_widget_speech_rate";
 const SPEECH_RATES    = [0.75, 1, 1.25, 1.5, 1.75, 2];
 const VOICE_KEY       = "civilai_widget_voice";
+const AUTO_SPEAK_KEY  = "civilai_widget_autospeak";
 const DEFAULT_VOICES  = ["autumn", "diana", "hannah", "austin", "daniel", "troy"];
 const BUTTON_SIZE     = 48;
-const PANEL_W         = 340;
-const PANEL_H         = 440;
-const MAX_PANEL_W     = 640;
-const MAX_PANEL_H     = 720;
 const DRAG_THRESHOLD  = 5;
+const SCALE_KEY       = "civilai_widget_scale";
+
+// Sizes for the "open" scales — the bubble itself (closed/`open === false`) is
+// the widget's minimized state. Clicking the scale icon cycles mid → large →
+// fullscreen → mid. Fullscreen has no fixed w/h — it fills the viewport.
+const PANEL_SIZES = {
+  mid:   { w: 340, h: 440 },
+  large: { w: 640, h: 760 },
+} as const;
+type PanelScale = "mid" | "large" | "fullscreen";
+const SCALE_ORDER: PanelScale[] = ["mid", "large", "fullscreen"];
+const SCALE_LABELS: Record<PanelScale, string> = { mid: "Mid", large: "Large", fullscreen: "Full Screen" };
 const API             = process.env.NEXT_PUBLIC_API_URL ?? "";
 const UPLOAD_IMAGE_ACCEPT = ".png,.jpg,.jpeg,.webp";
 const UPLOAD_AUDIO_ACCEPT = ".mp3,.wav,.webm,.m4a,.ogg,.flac";
@@ -112,6 +123,42 @@ function ToolStepChips({ steps }: { steps: NonNullable<Message["toolSteps"]> }) 
           {TOOL_LABELS[s.tool] ?? s.tool}
         </span>
       ))}
+    </div>
+  );
+}
+
+// Compact inline verdict from the LLM Judge (backend/app/api/v1/routes/judge.py,
+// copilot_chat rubric) — mirrors the Copilot page's JudgePanel but scaled down
+// for the narrow floating-widget panel width.
+function MiniJudgePanel({ verdict, expanded, onToggle }: { verdict: JudgeVerdict; expanded: boolean; onToggle: () => void }) {
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(0,212,255,0.12)" }}>
+      <button onMouseDown={e => e.stopPropagation()} onClick={onToggle} className="w-full flex items-center justify-between gap-1.5 px-2 py-1.5 text-[10px]">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {verdict.degraded ? (
+            <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" />
+          ) : verdict.passed ? (
+            <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+          ) : (
+            <XCircle className="w-3 h-3 text-red-400 shrink-0" />
+          )}
+          <span className="text-white/60 truncate">
+            {verdict.degraded ? "Judge unavailable" : `Score: ${verdict.overall_score.toFixed(1)}/10`}
+          </span>
+        </div>
+        {expanded ? <ChevronUp className="w-3 h-3 text-white/25 shrink-0" /> : <ChevronDown className="w-3 h-3 text-white/25 shrink-0" />}
+      </button>
+      {expanded && (
+        <div className="px-2 pb-2 space-y-1.5 border-t border-white/[0.06] pt-1.5">
+          <p className="text-[10px] text-white/50 leading-relaxed">{verdict.summary}</p>
+          {verdict.criteria.map(c => (
+            <div key={c.name} className="flex items-center justify-between gap-2 text-[9px]">
+              <span className="text-white/40 truncate">{c.name}</span>
+              <span className="text-white/30 shrink-0">{c.score.toFixed(1)}/10</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -215,6 +262,8 @@ export default function ModuleChat({
 
   const [input,          setInput]          = useState("");
   const [loading,        setLoading]        = useState(false);
+  const [streaming,      setStreaming]      = useState(false);
+  const [autoSpeak,      setAutoSpeak]      = useState(false);
   const [summarizing,    setSummarizing]    = useState(false);
   const [voiceState,     setVoiceState]     = useState<VoiceState>("idle");
   const [speechRate,     setSpeechRate]     = useState(1);
@@ -225,7 +274,7 @@ export default function ModuleChat({
   const [voiceMenuPos,   setVoiceMenuPos]   = useState<{ top: number; left: number } | null>(null);
   const [copiedKey,      setCopiedKey]      = useState<string | null>(null);
   const [speakingKey,    setSpeakingKey]    = useState<string | null>(null);
-  const [maximized,      setMaximized]      = useState(false);
+  const [scale,          setScale]          = useState<PanelScale>("mid");
   const [pos,            setPos]            = useState<{ x: number; y: number } | null>(null);
   const [dragging,       setDragging]       = useState(false);
   const [showHistory,    setShowHistory]    = useState(false);
@@ -237,6 +286,9 @@ export default function ModuleChat({
   const [usageLoading,   setUsageLoading]   = useState(false);
   const [pdfState,       setPdfState]       = useState<"idle" | "saving" | "saved">("idle");
   const [uploadStatus,   setUploadStatus]   = useState<string | null>(null);
+  const [judgeResults,   setJudgeResults]   = useState<Record<number, JudgeVerdict>>({});
+  const [judgingIdx,     setJudgingIdx]     = useState<Set<number>>(new Set());
+  const [judgePanelOpen, setJudgePanelOpen] = useState<Set<number>>(new Set());
 
   const bottomRef      = useRef<HTMLDivElement>(null);
   const inputRef       = useRef<HTMLInputElement>(null);
@@ -251,6 +303,7 @@ export default function ModuleChat({
   const dragOffset      = useRef({ x: 0, y: 0 });
   const startMouse      = useRef({ x: 0, y: 0 });
   const hasDragged      = useRef(false);
+  const abortRef        = useRef<AbortController | null>(null);
 
   // ── Position init ────────────────────────────────────────────────
   useEffect(() => {
@@ -282,6 +335,20 @@ export default function ModuleChat({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // ── Panel scale (persisted) — mid / large / fullscreen ──────────────
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(SCALE_KEY);
+      if (saved === "mid" || saved === "large" || saved === "fullscreen") setScale(saved);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(SCALE_KEY, scale); } catch {}
+  }, [scale]);
+
+  const cycleScale = () => setScale(s => SCALE_ORDER[(SCALE_ORDER.indexOf(s) + 1) % SCALE_ORDER.length]);
+
   // ── Speech rate (persisted) ────────────────────────────────────────
   useEffect(() => {
     const saved = Number(localStorage.getItem(SPEECH_RATE_KEY));
@@ -295,6 +362,19 @@ export default function ModuleChat({
     speechRateRef.current = next;
     try { localStorage.setItem(SPEECH_RATE_KEY, String(next)); } catch {}
     if (audioRef.current) audioRef.current.playbackRate = next;
+  };
+
+  // ── Auto-speak (persisted) — read every assistant reply aloud automatically ──
+  useEffect(() => {
+    try { setAutoSpeak(localStorage.getItem(AUTO_SPEAK_KEY) === "1"); } catch {}
+  }, []);
+
+  const toggleAutoSpeak = () => {
+    setAutoSpeak(v => {
+      const next = !v;
+      try { localStorage.setItem(AUTO_SPEAK_KEY, next ? "1" : "0"); } catch {}
+      return next;
+    });
   };
 
   // ── TTS voice (persisted) — browser (Google/Microsoft) voices + Groq AI voices ──
@@ -370,6 +450,30 @@ export default function ModuleChat({
       setCopiedKey(key);
       setTimeout(() => setCopiedKey(prev => (prev === key ? null : prev)), 1500);
     } catch {}
+  };
+
+  // Scores an assistant reply against the copilot_chat rubric via the LLM
+  // Judge (backend/app/api/v1/routes/judge.py) — same rubric the full
+  // Copilot page's chat tab uses. `context` is the preceding user turn.
+  const judgeMessage = async (idx: number, content: string, context?: string) => {
+    setJudgingIdx(prev => new Set(prev).add(idx));
+    try {
+      const verdict = await scoreOutput("copilot_chat", content, context);
+      setJudgeResults(prev => ({ ...prev, [idx]: verdict }));
+      setJudgePanelOpen(prev => new Set(prev).add(idx));
+    } catch {
+      // Review aid, not core chat functionality — fail silently, button stays for retry.
+    } finally {
+      setJudgingIdx(prev => { const next = new Set(prev); next.delete(idx); return next; });
+    }
+  };
+
+  const toggleJudgePanel = (idx: number) => {
+    setJudgePanelOpen(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      return next;
+    });
   };
 
   // ── Chat helpers ─────────────────────────────────────────────────
@@ -483,7 +587,10 @@ export default function ModuleChat({
   // can share this — the only difference between them is what history they pass in).
   const streamAssistantReply = async (question: string, historyForRequest: Message[]) => {
     setLoading(true);
+    setStreaming(true);
     setMessages(prev => [...prev, { role: "assistant" as const, content: "", toolSteps: [] }]);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const result = await streamChat(
         { message: `[Context: ${context}] ${question}`, sessionId, chatHistory: historyForRequest, webSearch },
@@ -507,21 +614,40 @@ export default function ModuleChat({
           }
           return copy;
         }),
+        controller.signal,
       );
       setMessages(prev => {
         const copy = [...prev];
         copy[copy.length - 1] = { role: "assistant", content: result.text, sources: result.sources, toolSteps: result.toolSteps };
         return copy;
       });
-    } catch {
-      setMessages(prev => {
-        const copy = [...prev];
-        copy[copy.length - 1] = { role: "assistant", content: "Error. Please try again." };
-        return copy;
-      });
+      if (autoSpeak && result.text) speak(result.text, `msg-${historyForRequest.length}`);
+    } catch (err) {
+      if ((err as { name?: string } | undefined)?.name === "AbortError") {
+        // User stopped generation — keep the partial text that already streamed in,
+        // just finalize any tool steps still mid-flight so they stop pulsing.
+        setMessages(prev => {
+          const copy = [...prev];
+          const last = copy[copy.length - 1];
+          copy[copy.length - 1] = { ...last, toolSteps: (last.toolSteps ?? []).map(s => ({ ...s, done: true })) };
+          return copy;
+        });
+      } else {
+        setMessages(prev => {
+          const copy = [...prev];
+          copy[copy.length - 1] = { role: "assistant", content: "Error. Please try again." };
+          return copy;
+        });
+      }
     } finally {
       setLoading(false);
+      setStreaming(false);
+      abortRef.current = null;
     }
+  };
+
+  const stopGeneration = () => {
+    abortRef.current?.abort();
   };
 
   const send = async (text?: string) => {
@@ -572,6 +698,7 @@ export default function ModuleChat({
         content: response.response,
         sources: response.sources,
       }]);
+      if (autoSpeak && response.response) speak(response.response, `msg-${newMessages.length}`);
     } catch (err) {
       const detail = axios.isAxiosError(err) ? (err.response?.data?.detail as string | undefined) : undefined;
       setMessages([...newMessages, { role: "assistant", content: detail ?? "Sorry, I couldn't process that file." }]);
@@ -605,6 +732,7 @@ export default function ModuleChat({
         { message: summaryPrompt, chat_history: [] }
       );
       setMessages([...newMessages, { role: "assistant", content: response.data.response }]);
+      if (autoSpeak && response.data.response) speak(response.data.response, `msg-${newMessages.length}`);
     } catch {
       setMessages([...newMessages, { role: "assistant", content: "Error summarizing page." }]);
     } finally {
@@ -676,13 +804,14 @@ export default function ModuleChat({
     if (voiceState === "speaking")  stopSpeaking();
   };
 
-  // Stop any in-progress recording/playback when the panel is closed
+  // Stop any in-progress recording/playback/generation when the panel is closed
   useEffect(() => {
     if (open) return;
     if (recorderState === "recording") stopRecording();
     audioRef.current?.pause();
     if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
-    setMaximized(false);
+    abortRef.current?.abort();
+    setScale(s => (s === "fullscreen" ? "mid" : s));
     setShowVoicePicker(false);
     setShowUsage(false);
   }, [open]);
@@ -757,10 +886,11 @@ export default function ModuleChat({
   }, [dragging]);
 
   // ── Panel placement ───────────────────────────────────────────────
-  const panelAbove = pos ? pos.y + BUTTON_SIZE + PANEL_H + 8 > window.innerHeight : false;
-  const panelLeft  = pos ? pos.x + PANEL_W > window.innerWidth : false;
-  const maxPanelW  = Math.min(MAX_PANEL_W, window.innerWidth  - 32);
-  const maxPanelH  = Math.min(MAX_PANEL_H, window.innerHeight - 32);
+  const fullscreen = scale === "fullscreen";
+  const panelW     = fullscreen ? window.innerWidth  : Math.min(PANEL_SIZES[scale].w, window.innerWidth  - 32);
+  const panelH     = fullscreen ? window.innerHeight : Math.min(PANEL_SIZES[scale].h, window.innerHeight - 32);
+  const panelAbove = pos && !fullscreen ? pos.y + BUTTON_SIZE + panelH + 8 > window.innerHeight : false;
+  const panelLeft  = pos && !fullscreen ? pos.x + panelW > window.innerWidth : false;
 
   if (!pos) return null;
 
@@ -781,23 +911,23 @@ export default function ModuleChat({
           <motion.div
             key="panel"
             layout
-            initial={{ opacity: 0, y: maximized ? 0 : (panelAbove ? 12 : -12), scale: 0.96 }}
+            initial={{ opacity: 0, y: fullscreen ? 0 : (panelAbove ? 12 : -12), scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{    opacity: 0, y: maximized ? 0 : (panelAbove ? 12 : -12), scale: 0.96 }}
+            exit={{    opacity: 0, y: fullscreen ? 0 : (panelAbove ? 12 : -12), scale: 0.96 }}
             transition={{ duration: 0.2, ease: "easeOut", layout: { duration: 0.3, ease: "easeOut" } }}
-            className={`flex flex-col rounded-2xl overflow-hidden shadow-2xl ${maximized ? "fixed" : "absolute"}`}
-            style={maximized ? {
-              width:          maxPanelW,
-              height:         maxPanelH,
-              top:            `calc(50vh - ${maxPanelH / 2}px)`,
-              left:           `calc(50vw - ${maxPanelW / 2}px)`,
+            className={`flex flex-col overflow-hidden shadow-2xl ${fullscreen ? "fixed rounded-none" : "absolute rounded-2xl"}`}
+            style={fullscreen ? {
+              width:          "100vw",
+              height:         "100vh",
+              top:            0,
+              left:           0,
               background:     "rgba(8,12,24,0.97)",
-              border:         "1px solid rgba(0,212,255,0.2)",
+              border:         "none",
               backdropFilter: "blur(24px)",
               zIndex:         60,
             } : {
-              width:          PANEL_W,
-              height:         PANEL_H,
+              width:          panelW,
+              height:         panelH,
               background:     "rgba(8,12,24,0.97)",
               border:         "1px solid rgba(0,212,255,0.2)",
               backdropFilter: "blur(24px)",
@@ -907,6 +1037,17 @@ export default function ModuleChat({
                 )}
                 <button
                   onMouseDown={e => e.stopPropagation()}
+                  onClick={toggleAutoSpeak}
+                  title={autoSpeak ? "Auto-speak on — replies are read aloud automatically" : "Auto-speak off — click to read every reply aloud"}
+                  className={`flex items-center gap-1 px-1.5 py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+                    autoSpeak ? "text-cyan-400 bg-cyan-500/10" : "text-white/40 hover:text-white/70 hover:bg-white/5"
+                  }`}
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                  Auto
+                </button>
+                <button
+                  onMouseDown={e => e.stopPropagation()}
                   onClick={cycleSpeechRate}
                   title="Speech speed — click to cycle"
                   className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-[10px] font-semibold text-white/40 hover:text-white/70 hover:bg-white/5 transition-colors"
@@ -916,11 +1057,11 @@ export default function ModuleChat({
                 </button>
                 <button
                   onMouseDown={e => e.stopPropagation()}
-                  onClick={() => setMaximized(v => !v)}
-                  title={maximized ? "Minimize" : "Maximize"}
+                  onClick={cycleScale}
+                  title={`${SCALE_LABELS[scale]} — click for ${SCALE_LABELS[SCALE_ORDER[(SCALE_ORDER.indexOf(scale) + 1) % SCALE_ORDER.length]]}`}
                   className="text-white/30 hover:text-white/70 transition-colors"
                 >
-                  {maximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  {fullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                 </button>
                 <button
                   onMouseDown={e => e.stopPropagation()}
@@ -1191,6 +1332,18 @@ export default function ModuleChat({
                         </button>
                       )}
 
+                      {m.role === "assistant" && i > 0 && !judgeResults[i] && (
+                        <button
+                          onMouseDown={e => e.stopPropagation()}
+                          onClick={() => judgeMessage(i, m.content, i > 0 ? messages[i - 1].content : undefined)}
+                          disabled={judgingIdx.has(i)}
+                          title="Judge this response"
+                          className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] text-white/25 hover:text-cyan-400 hover:bg-white/5 transition-colors disabled:opacity-30"
+                        >
+                          {judgingIdx.has(i) ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Scale className="w-2.5 h-2.5" />}
+                        </button>
+                      )}
+
                       {m.sources && m.sources.length > 0 && m.sources.map((s, si) => {
                         const linkKey = `src-${i}-${si}`;
                         return (
@@ -1226,6 +1379,14 @@ export default function ModuleChat({
                         );
                       })}
                     </div>
+
+                    {judgeResults[i] && (
+                      <MiniJudgePanel
+                        verdict={judgeResults[i]}
+                        expanded={judgePanelOpen.has(i)}
+                        onToggle={() => toggleJudgePanel(i)}
+                      />
+                    )}
                   </div>
                 </div>
               ))}
@@ -1382,15 +1543,18 @@ export default function ModuleChat({
               </button>
               <button
                 onMouseDown={e => e.stopPropagation()}
-                onClick={() => send()}
-                disabled={!input.trim() || loading}
+                onClick={streaming ? stopGeneration : () => send()}
+                disabled={!streaming && (!input.trim() || loading)}
+                title={streaming ? "Stop generating" : "Send"}
                 className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-all disabled:opacity-30"
                 style={{
                   background: "linear-gradient(135deg,rgba(0,212,255,0.25),rgba(29,78,216,0.25))",
                   border:     "1px solid rgba(0,212,255,0.25)",
                 }}
               >
-                {loading
+                {streaming
+                  ? <Square  className="w-3 h-3 text-cyan-400 fill-cyan-400" />
+                  : loading
                   ? <Loader2 className="w-3 h-3 text-cyan-400 animate-spin" />
                   : <Send    className="w-3 h-3 text-cyan-400" />
                 }

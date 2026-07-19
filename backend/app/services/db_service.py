@@ -1,25 +1,49 @@
 import logging
+import httpx
 from supabase import create_client, Client
+from supabase.lib.client_options import SyncClientOptions
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# max_keepalive_connections=0 forces a fresh connection per request instead of
+# reusing a pooled one. On Windows, concurrent requests (e.g. the Projects page's
+# Promise.all across workforce/contracts/permits/purchase-orders) checking a
+# shared keep-alive connection in/out of httpx's pool race on the underlying
+# socket and intermittently raise "[WinError 10035] A non-blocking socket
+# operation could not be completed immediately" — reproduced directly against
+# this client under concurrent load. Disabling reuse trades a little latency
+# for correctness under concurrency.
 supabase: Client = create_client(
     settings.SUPABASE_URL,
-    settings.SUPABASE_SECRET_KEY
+    settings.SUPABASE_SECRET_KEY,
+    SyncClientOptions(httpx_client=httpx.Client(limits=httpx.Limits(max_keepalive_connections=0))),
 )
 
-def get_projects():
+def get_projects(user: dict | None = None):
     try:
-        response = supabase.table("projects").select("*").execute()
+        from app.services.scoping import visible_project_ids
+
+        ids = visible_project_ids(user)  # None = no filtering (demo mode / AUTH_REQUIRED off)
+        query = supabase.table("projects").select("*")
+        if ids is not None:
+            if not ids:
+                return []
+            query = query.in_("id", ids)
+        response = query.execute()
         projects = response.data or []
 
         # Fetch all tasks, cost entries, and invoices in three bulk queries
         # to avoid N+1 queries per project
-        all_tasks  = supabase.table("schedule_tasks").select("project_id,actual_progress").execute().data or []
-        all_costs  = supabase.table("cost_entries").select("project_id,amount").execute().data or []
+        task_q = supabase.table("schedule_tasks").select("project_id,actual_progress")
+        cost_q = supabase.table("cost_entries").select("project_id,amount")
+        inv_q = supabase.table("invoices").select("project_id,amount,status")
+        if ids is not None:
+            task_q, cost_q, inv_q = task_q.in_("project_id", ids), cost_q.in_("project_id", ids), inv_q.in_("project_id", ids)
+        all_tasks  = task_q.execute().data or []
+        all_costs  = cost_q.execute().data or []
         try:
-            all_invs = supabase.table("invoices").select("project_id,amount,status").execute().data or []
+            all_invs = inv_q.execute().data or []
         except Exception:
             all_invs = []
 

@@ -12,6 +12,8 @@ modules = [
     "app.api.v1.routes.green",
     "app.api.v1.routes.vendors",
     "app.api.v1.routes.payments",
+    "app.api.v1.routes.evaluation",
+    "app.api.v1.routes.judge",
 ]
 
 for module in modules:

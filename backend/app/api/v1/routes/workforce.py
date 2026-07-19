@@ -9,12 +9,20 @@ from app.ai.workforce_analyzer import (
     generate_onboarding_plan
 )
 from app.ocr.document_processor import process_document
+import httpx
 from supabase import create_client
+from supabase.lib.client_options import SyncClientOptions
 from app.config import settings
 import uuid
 
 router = APIRouter()
-supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SECRET_KEY)
+# max_keepalive_connections=0 avoids a Windows socket race under concurrent
+# requests sharing a pooled keep-alive connection — see db_service.py.
+supabase = create_client(
+    settings.SUPABASE_URL,
+    settings.SUPABASE_SECRET_KEY,
+    SyncClientOptions(httpx_client=httpx.Client(limits=httpx.Limits(max_keepalive_connections=0))),
+)
 
 
 class WorkerCreate(BaseModel):

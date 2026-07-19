@@ -103,7 +103,7 @@ def mem0_search(query: str, user_id: str, limit: int = 5) -> list[str]:
     if m is None:
         return []
     try:
-        results = m.search(query, user_id=user_id, limit=limit)  # type: ignore[union-attr]
+        results = m.search(query, filters={"user_id": user_id}, top_k=limit)  # type: ignore[union-attr]
         if isinstance(results, dict):
             results = results.get("results", [])
         return [r.get("memory", "") for r in (results or []) if r.get("memory")]
@@ -118,7 +118,7 @@ def mem0_get_all(user_id: str) -> list[str]:
     if m is None:
         return []
     try:
-        results = m.get_all(user_id=user_id)  # type: ignore[union-attr]
+        results = m.get_all(filters={"user_id": user_id})  # type: ignore[union-attr]
         if isinstance(results, dict):
             results = results.get("results", [])
         return [r.get("memory", "") for r in (results or []) if r.get("memory")]

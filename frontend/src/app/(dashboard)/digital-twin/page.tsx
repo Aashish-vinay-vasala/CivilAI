@@ -29,6 +29,7 @@ import {
   fallbackDownloadUrl, projectModelDownloadUrl,
 } from "@/lib/bimFallback";
 import BimUploadHistory from "@/components/bim/BimUploadHistory";
+import { authHeaders } from "@/lib/apiAuth";
 
 const SITE_TABS = [
   { href: "/bim", label: "BIM & CAD" },
@@ -207,6 +208,7 @@ export default function DigitalTwinPage() {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/bim/project/${projectId}/model`, {
         method: "POST",
         body: formData,
+        headers: await authHeaders(),
       });
       const data = await res.json();
       if (data.success && data.meshes && data.meshes.length > 0) {

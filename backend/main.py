@@ -11,7 +11,7 @@ from app.config import settings
 from app.core.telemetry import setup_all
 from app.core.security import require_module_access
 from app.middleware.rate_limiter import RateLimiterMiddleware
-from app.api.v1.routes import copilot, chatbot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction, transcribe, email_notifications, preconstruction, financials, review, support, voice, agent, evaluation, accounting, notifications, tenders, material_prices
+from app.api.v1.routes import auth, copilot, chatbot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction, transcribe, email_notifications, preconstruction, financials, review, support, voice, agent, evaluation, judge, accounting, notifications, tenders, material_prices
 
 setup_all()   # boot LangSmith tracing + OTel before the app object is created
 
@@ -37,6 +37,13 @@ app.add_middleware(RateLimiterMiddleware)
 # have endpoints designed to work for anonymous/optional-auth users
 # (get_optional_user), and already apply their own finer-grained protect_route
 # checks internally where needed. A blanket module gate would break that.
+# auth is also ungated — it's the pre-auth/signup bootstrap surface itself.
+
+app.include_router(
+    auth.router,
+    prefix="/api/v1/auth",
+    tags=["Auth"],
+)
 
 app.include_router(
     copilot.router,
@@ -243,6 +250,13 @@ app.include_router(
     evaluation.router,
     prefix="/api/v1/evaluation",
     tags=["AI Evaluation"],
+    dependencies=[Depends(require_module_access("evaluation"))],
+)
+
+app.include_router(
+    judge.router,
+    prefix="/api/v1/judge",
+    tags=["LLM Judge"],
     dependencies=[Depends(require_module_access("evaluation"))],
 )
 

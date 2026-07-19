@@ -2,20 +2,25 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
+import axios from "axios";
 import { supabase } from "@/lib/supabase";
 import { installAxiosAuthInterceptor } from "@/lib/axiosAuthInterceptor";
-import { useRoleStore, BACKEND_ROLE_TO_FRONTEND } from "@/lib/stores/roleStore";
+import { useRoleStore } from "@/lib/stores/roleStore";
 
-// Single seeded Supabase account (admin role) that "Start Demo" signs into —
-// no signup/login form, no other accounts. Real JWT, real backend RBAC, just
-// no user-facing credential entry.
-const DEMO_EMAIL = "aashishvinayvasala@gmail.com";
-const DEMO_PASSWORD = "civilaidemo";
+const API = process.env.NEXT_PUBLIC_API_URL;
+
+export type DemoRole = "admin" | "project_manager" | "site_engineer" | "viewer" | "procurement_manager";
 
 export interface Profile {
   full_name: string;
   role: string;
   avatar_color: string;
+  account_type: "demo" | "real";
+  otp_verified: boolean;
+}
+
+interface AuthError {
+  message: string;
 }
 
 interface AuthContextType {
@@ -23,7 +28,9 @@ interface AuthContextType {
   profile: Profile | null;
   session: Session | null;
   loading: boolean;
-  startDemo: () => Promise<{ error: { message: string } | null }>;
+  demoLogin: (role: DemoRole) => Promise<{ error: AuthError | null }>;
+  signUpWithPassword: (email: string, password: string, fullName: string, role: DemoRole) => Promise<{ error: AuthError | null }>;
+  signUpWithGoogle: (role: DemoRole) => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -40,18 +47,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const setRole = useRoleStore((s) => s.setRole);
+  const setPermissions = useRoleStore((s) => s.setPermissions);
 
   const loadProfile = useCallback(async (userId: string) => {
     const { data } = await supabase
       .from("profiles")
-      .select("full_name,role,avatar_color")
+      .select("full_name,role,avatar_color,account_type,otp_verified")
       .eq("id", userId)
       .single();
     if (data) {
       setProfile(data as Profile);
-      setRole(BACKEND_ROLE_TO_FRONTEND[data.role] ?? "viewer");
+      setRole(data.role);
     }
-  }, [setRole]);
+    try {
+      const res = await axios.get(`${API}/api/v1/auth/permissions`);
+      setPermissions(res.data.modules ?? {});
+    } catch {
+      // AUTH_REQUIRED off, or the request raced session setup — roleStore
+      // keeps whatever permissions it already had (or the empty default).
+    }
+  }, [setRole, setPermissions]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -69,10 +84,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => listener.subscription.unsubscribe();
   }, [loadProfile]);
 
-  const startDemo = async () => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email: DEMO_EMAIL,
-      password: DEMO_PASSWORD,
+  const demoLogin = async (role: DemoRole) => {
+    try {
+      const res = await axios.post(`${API}/api/v1/auth/demo-login`, { role });
+      const { error } = await supabase.auth.setSession({
+        access_token: res.data.access_token,
+        refresh_token: res.data.refresh_token,
+      });
+      return { error: error ? { message: error.message } : null };
+    } catch (e) {
+      const message = axios.isAxiosError(e) ? e.response?.data?.detail ?? e.message : "Demo login failed";
+      return { error: { message } };
+    }
+  };
+
+  const signUpWithPassword = async (email: string, password: string, fullName: string, role: DemoRole) => {
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: fullName } },
+    });
+    if (error) return { error: { message: error.message } };
+    try {
+      await axios.post(`${API}/api/v1/auth/complete-signup`, { role });
+    } catch (e) {
+      const message = axios.isAxiosError(e) ? e.response?.data?.detail ?? e.message : "Could not set role";
+      return { error: { message } };
+    }
+    return { error: null };
+  };
+
+  const signUpWithGoogle = async (role: DemoRole) => {
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("civilai_signup_role", role);
+    }
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
     return { error: error ? { message: error.message } : null };
   };
@@ -89,7 +137,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         profile,
         session,
         loading,
-        startDemo,
+        demoLogin,
+        signUpWithPassword,
+        signUpWithGoogle,
         signOut,
       }}
     >

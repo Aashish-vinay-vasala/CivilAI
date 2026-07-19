@@ -24,6 +24,22 @@ import ModuleChat from "@/components/shared/ModuleChat";
 
 const ML_API = process.env.NEXT_PUBLIC_ML_API_URL || "http://localhost:8001";
 
+const tooltipStyle = {
+  backgroundColor: "rgba(4,11,25,0.95)",
+  border: "1px solid rgba(0,212,255,0.15)",
+  borderRadius: "12px",
+  color: "#e2e8f0",
+  fontSize: "12px",
+  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+};
+
+const primaryBtn =
+  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
+const primaryBtnStyle = {
+  background: "linear-gradient(135deg, rgba(0,212,255,0.25), rgba(0,100,160,0.2))",
+  border: "1px solid rgba(0,212,255,0.3)",
+};
+
 /* ─── PDF export ─────────────────────────────────────────────── */
 
 function exportToPDF(result: any, projectName: string) {
@@ -268,7 +284,7 @@ export default function GNNPage() {
             </select>
           )}
           <button onClick={runAnalysis} disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-blue text-white text-sm font-medium">
+            className={primaryBtn} style={primaryBtnStyle}>
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
             {loading ? "Analyzing…" : "Run GNN Analysis"}
           </button>
@@ -308,7 +324,8 @@ export default function GNNPage() {
             <p className="text-lg font-medium text-foreground mb-1">Ready to Analyze</p>
             <p className="text-sm text-muted-foreground mb-5">Select a project and run GNN Analysis to visualize live risk propagation in 3D</p>
             <button onClick={runAnalysis} disabled={loading}
-              className="px-6 py-3 rounded-xl gradient-blue text-white font-medium flex items-center gap-2 mx-auto">
+              className="px-6 py-3 rounded-xl text-white font-medium flex items-center gap-2 mx-auto transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100"
+              style={primaryBtnStyle}>
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
               {loading ? "Analyzing…" : "Run GNN Analysis"}
             </button>
@@ -566,10 +583,10 @@ export default function GNNPage() {
               </div>
               <ResponsiveContainer width="100%" height={200}>
                 <RadarChart data={radarData}>
-                  <PolarGrid stroke="#ffffff08" />
-                  <PolarAngleAxis dataKey="category" tick={{ fill: "#6b7280", fontSize: 11 }} />
+                  <PolarGrid stroke="rgba(255,255,255,0.04)" />
+                  <PolarAngleAxis dataKey="category" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} />
                   <Radar dataKey="risk" stroke="#ef4444" fill="#ef4444" fillOpacity={0.2} strokeWidth={2} />
-                  <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
+                  <Tooltip contentStyle={tooltipStyle} />
                 </RadarChart>
               </ResponsiveContainer>
               {result.critical_nodes?.length > 0 && (
@@ -600,10 +617,10 @@ export default function GNNPage() {
             </div>
             <ResponsiveContainer width="100%" height={250}>
               <BarChart data={propagatedBarData} barGap={4}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
-                <XAxis dataKey="name" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} unit="%" />
-                <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="name" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} unit="%" />
+                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(0,212,255,0.06)" }} />
                 <Bar dataKey="direct"     fill="#3b82f6" radius={[4, 4, 0, 0]} name="Direct Risk %" />
                 <Bar dataKey="propagated" fill="#ef4444" radius={[4, 4, 0, 0]} name="Propagated Risk %" />
               </BarChart>

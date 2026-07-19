@@ -283,9 +283,17 @@ _supabase_client = None
 def _get_supabase():
     global _supabase_client
     if _supabase_client is None:
+        import httpx
         from supabase import create_client
+        from supabase.lib.client_options import SyncClientOptions
         from app.config import settings
-        _supabase_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SECRET_KEY)
+        # max_keepalive_connections=0 avoids a Windows socket race under concurrent
+        # requests sharing a pooled keep-alive connection — see db_service.py.
+        _supabase_client = create_client(
+            settings.SUPABASE_URL,
+            settings.SUPABASE_SECRET_KEY,
+            SyncClientOptions(httpx_client=httpx.Client(limits=httpx.Limits(max_keepalive_connections=0))),
+        )
     return _supabase_client
 
 

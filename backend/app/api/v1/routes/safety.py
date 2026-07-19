@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional
 from app.core.guardrails import guard_text
@@ -12,12 +12,22 @@ from app.ai.safety_analyzer import (
 from app.ocr.document_processor import process_document
 from app.services.ml_service import get_safety_stats
 from app.services.db_service import create_safety_incident
+from app.core.security import get_optional_user
+from app.services.scoping import visible_project_ids, assert_project_access
+import httpx
 from supabase import create_client
+from supabase.lib.client_options import SyncClientOptions
 from app.config import settings
 import uuid
 
 router = APIRouter()
-supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SECRET_KEY)
+# max_keepalive_connections=0 avoids a Windows socket race under concurrent
+# requests sharing a pooled keep-alive connection — see db_service.py.
+supabase = create_client(
+    settings.SUPABASE_URL,
+    settings.SUPABASE_SECRET_KEY,
+    SyncClientOptions(httpx_client=httpx.Client(limits=httpx.Limits(max_keepalive_connections=0))),
+)
 
 VALID_SEVERITIES = {"low", "medium", "high"}
 VALID_STATUSES   = {"open", "investigating", "closed"}
@@ -67,17 +77,35 @@ class ZoneRiskRequest(BaseModel):
 
 # ── Incidents CRUD ─────────────────────────────────────────────────────────────
 
+def _assert_incident_access(incident_id: str, user: dict | None) -> None:
+    """An incident's own row doesn't carry an owner — access is inherited
+    from the project it belongs to. Incidents with no project_id at all
+    (legacy/global) are treated as part of the shared demo pool."""
+    if not user:
+        return
+    row = supabase.table("safety_incidents").select("project_id").eq("id", incident_id).execute().data
+    project_id = row[0].get("project_id") if row else None
+    if project_id:
+        assert_project_access(project_id, user)
+    elif user.get("account_type") != "demo":
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+
 @router.get("/incidents")
-def list_incidents():
+def list_incidents(user: dict | None = Depends(get_optional_user)):
     try:
-        res = supabase.table("safety_incidents").select("*").order("created_at", desc=True).execute()
+        ids = visible_project_ids(user)
+        query = supabase.table("safety_incidents").select("*")
+        if ids is not None:
+            query = query.in_("project_id", ids) if ids else query.eq("project_id", "__none__")
+        res = query.order("created_at", desc=True).execute()
         return {"status": "success", "incidents": res.data or []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/incidents")
-def create_incident(body: IncidentCreate):
+def create_incident(body: IncidentCreate, user: dict | None = Depends(get_optional_user)):
     from datetime import date as _date
     try:
         if body.description:
@@ -85,6 +113,8 @@ def create_incident(body: IncidentCreate):
                 body.description, _ = guard_text(body.description)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
+        if body.project_id:
+            assert_project_access(body.project_id, user)
 
         data = {
             "id":          str(uuid.uuid4()),
@@ -101,13 +131,16 @@ def create_incident(body: IncidentCreate):
             data["project_id"] = body.project_id
         inserted = create_safety_incident(data)
         return {"status": "success", "incident": inserted[0] if inserted else data}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/incidents/{incident_id}")
-def update_incident(incident_id: str, body: IncidentUpdate):
+def update_incident(incident_id: str, body: IncidentUpdate, user: dict | None = Depends(get_optional_user)):
     try:
+        _assert_incident_access(incident_id, user)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -124,10 +157,13 @@ def update_incident(incident_id: str, body: IncidentUpdate):
 
 
 @router.delete("/incidents/{incident_id}")
-def delete_incident(incident_id: str):
+def delete_incident(incident_id: str, user: dict | None = Depends(get_optional_user)):
     try:
+        _assert_incident_access(incident_id, user)
         supabase.table("safety_incidents").delete().eq("id", incident_id).execute()
         return {"status": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

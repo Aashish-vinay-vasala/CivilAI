@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     # Comma-separated allowed origins. Set to your actual frontend domain in production.
     # Example: "https://civilai.yourdomain.com"
-    ALLOWED_ORIGINS: str = "http://localhost:3000"
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     GROQ_API_KEY: str
     GROQ_API_KEY_2: Optional[str] = None  # fallback key when primary hits daily TPD limit
@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_SECRET_KEY: str
     HUGGINGFACE_TOKEN: str
+
+    # LLM-as-judge — model served via Hugging Face Inference Providers.
+    # Defaults to a different model family (Qwen) than the Groq generator
+    # (Llama) to avoid same-family self-preference bias. Override to try
+    # another judge model without a code change.
+    JUDGE_HF_MODEL: Optional[str] = None
 
     # Optional Redis URL for distributed rate limiting across multiple pods.
     # Falls back to in-memory rate limiting when not set.

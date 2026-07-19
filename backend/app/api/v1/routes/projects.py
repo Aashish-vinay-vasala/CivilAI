@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
@@ -17,7 +17,11 @@ from app.services.db_service import (
     get_permits,
     get_purchase_orders,
 )
+from app.core.security import get_optional_user
+from app.services.scoping import visible_project_ids, owner_id_for_new_row, assert_project_access
+import httpx
 from supabase import create_client
+from supabase.lib.client_options import SyncClientOptions
 from app.config import settings
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
@@ -37,7 +41,21 @@ from app.constants import (
 )
 
 router = APIRouter()
-supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SECRET_KEY)
+# max_keepalive_connections=0 avoids a Windows socket race under concurrent
+# requests sharing a pooled keep-alive connection — see db_service.py.
+supabase = create_client(
+    settings.SUPABASE_URL,
+    settings.SUPABASE_SECRET_KEY,
+    SyncClientOptions(httpx_client=httpx.Client(limits=httpx.Limits(max_keepalive_connections=0))),
+)
+
+
+def _project_dependency(project_id: str, user: dict | None = Depends(get_optional_user)) -> dict | None:
+    """Shared dependency for every /{project_id}/... route: 404s if the
+    caller can't see this project (wrong owner), no-ops when unauthenticated
+    (demo mode / AUTH_REQUIRED off)."""
+    assert_project_access(project_id, user)
+    return user
 
 class ProjectCreate(BaseModel):
     name: str
@@ -88,15 +106,15 @@ class TaskUpdate(BaseModel):
     budget: Optional[float] = None
 
 @router.get("/")
-def list_projects():
+def list_projects(user: dict | None = Depends(get_optional_user)):
     try:
-        projects = get_projects()
+        projects = get_projects(user)
         return {"status": "success", "projects": projects}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/")
-def create_project(body: ProjectCreate):
+def create_project(body: ProjectCreate, user: dict | None = Depends(get_optional_user)):
     try:
         data = {
             "id": str(uuid.uuid4()),
@@ -105,6 +123,7 @@ def create_project(body: ProjectCreate):
             "status": body.status or "active",
             "budget": body.budget or 0,
             "client": body.client,
+            "owner_id": owner_id_for_new_row(user),
         }
         if body.start_date:
             data["start_date"] = body.start_date
@@ -121,20 +140,30 @@ def create_project(body: ProjectCreate):
 
 @router.get("/kpis")
 @cached_response
-def get_dashboard_kpis():
+def get_dashboard_kpis(user: dict | None = Depends(get_optional_user)):
     try:
-        projects_res = supabase.table("projects").select("budget").execute()
+        ids = visible_project_ids(user)  # None = no filtering
+        is_demo = ids is None or (user is not None and user.get("account_type") == "demo")
+
+        def _scoped(table: str, select: str):
+            q = supabase.table(table).select(select)
+            return q.in_("project_id", ids) if ids is not None else q
+
+        projects_q = supabase.table("projects").select("budget")
+        if ids is not None:
+            projects_q = projects_q.in_("id", ids)
+        projects_res = projects_q.execute()
         total_budget = sum(float(p.get("budget", 0)) for p in (projects_res.data or []))
 
-        tasks_res = supabase.table("schedule_tasks").select("actual_progress").execute()
+        tasks_res = _scoped("schedule_tasks", "actual_progress").execute()
         tasks = tasks_res.data or []
         avg_progress = round(sum(t.get("actual_progress", 0) for t in tasks) / len(tasks)) if tasks else 0
 
-        workforce_res = supabase.table("workforce").select("id,status").execute()
+        workforce_res = _scoped("workforce", "id,status").execute()
         workforce = workforce_res.data or []
         active_workers = sum(1 for w in workforce if w.get("status") == "active") or len(workforce)
 
-        incidents_res = supabase.table("safety_incidents").select("id,severity").execute()
+        incidents_res = _scoped("safety_incidents", "id,severity").execute()
         incidents = incidents_res.data or []
         incident_count = len(incidents)
         high = sum(1 for i in incidents if str(i.get("severity") or "").lower() == "high")
@@ -142,14 +171,14 @@ def get_dashboard_kpis():
         low_c = incident_count - high - med
         safety_score = round(max(0, 100 - high * 10 - med * 5 - low_c * 2))
 
-        costs_res = supabase.table("cost_entries").select("amount").execute()
+        costs_res = _scoped("cost_entries", "amount").execute()
         spent_to_date = sum(float(c.get("amount", 0)) for c in (costs_res.data or []))
 
         # Committed = obligated but not yet paid (pending/overdue). Must match the same
         # filter used by db_service.get_projects(), /financials/live-actuals, and
         # /accounting/dashboard, or "committed spend" disagrees across pages.
         try:
-            invoices_res = supabase.table("invoices").select("amount,status").execute()
+            invoices_res = _scoped("invoices", "amount,status").execute()
             committed_amount = sum(
                 float(inv.get("amount", 0)) for inv in (invoices_res.data or [])
                 if inv.get("status") in ("pending", "overdue")
@@ -159,23 +188,24 @@ def get_dashboard_kpis():
 
         # Record today's values so /charts/kpi-trends can plot a real history
         # instead of reconstructing one from unrelated row timestamps. Upserted
-        # on snapshot_date, so repeated reads the same day just keep it current —
-        # only the day boundary freezes a value into history. Never let this
-        # break the KPI response itself.
-        try:
-            today = datetime.now().date().isoformat()
-            supabase.table("kpi_daily_snapshots").upsert({
-                "snapshot_date": today,
-                "total_budget": total_budget,
-                "spent_to_date": spent_to_date,
-                "committed_amount": committed_amount,
-                "avg_progress": avg_progress,
-                "active_workers": active_workers,
-                "safety_score": safety_score,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }, on_conflict="snapshot_date").execute()
-        except Exception:
-            logger.warning("Failed to record KPI snapshot", exc_info=True)
+        # on snapshot_date (one shared row per day, no owner column), so this
+        # only runs for the demo pool — a real user's private KPIs must never
+        # overwrite that shared row. Never let this break the KPI response itself.
+        if is_demo:
+            try:
+                today = datetime.now().date().isoformat()
+                supabase.table("kpi_daily_snapshots").upsert({
+                    "snapshot_date": today,
+                    "total_budget": total_budget,
+                    "spent_to_date": spent_to_date,
+                    "committed_amount": committed_amount,
+                    "avg_progress": avg_progress,
+                    "active_workers": active_workers,
+                    "safety_score": safety_score,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }, on_conflict="snapshot_date").execute()
+            except Exception:
+                logger.warning("Failed to record KPI snapshot", exc_info=True)
 
         return {
             "status": "success",
@@ -199,13 +229,19 @@ def get_progress_chart(
     end_date: Optional[str] = None,
     months: Optional[int] = None,
     project_id: Optional[str] = None,
+    user: dict | None = Depends(get_optional_user),
 ):
     try:
         query = supabase.table("schedule_tasks").select(
             "planned_progress,actual_progress,planned_start,budget"
         )
         if project_id and project_id != "all":
+            assert_project_access(project_id, user)
             query = query.eq("project_id", project_id)
+        else:
+            ids = visible_project_ids(user)
+            if ids is not None:
+                query = query.in_("project_id", ids) if ids else query.eq("project_id", "__none__")
         tasks_res = query.execute()
         tasks = tasks_res.data or []
 
@@ -285,7 +321,7 @@ def get_progress_chart(
 
 @router.get("/charts/kpi-trends")
 @cached_response
-def get_kpi_trends():
+def get_kpi_trends(user: dict | None = Depends(get_optional_user)):
     """Short (6-month) trend series for the Active Workers, Safety Score and
     Committed Spend KPIs, used to render dashboard sparklines. Budget/Schedule
     sparklines are derived client-side from the existing costs/progress chart series.
@@ -296,7 +332,14 @@ def get_kpi_trends():
     snapshot simply isn't emitted rather than being guessed at; once at least
     one snapshot exists, its value is carried forward (last-observation-
     carried-forward) into any later month that has no newer snapshot, since
-    these are point-in-time levels, not per-month flows."""
+    these are point-in-time levels, not per-month flows.
+
+    kpi_daily_snapshots is a single shared table (no owner column) that only
+    the demo pool writes to (see get_dashboard_kpis) — a real self-registered
+    user has no snapshot history yet, so they get empty trend series rather
+    than the demo pool's numbers."""
+    if user is not None and user.get("account_type") != "demo":
+        return {"status": "success", "workers": [], "safety": [], "committed": []}
     try:
         SPARK_MONTHS = 6
         now = datetime.now()
@@ -401,19 +444,27 @@ def get_cost_chart(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     project_id: Optional[str] = None,
+    user: dict | None = Depends(get_optional_user),
 ):
     try:
         pid = project_id if project_id and project_id != "all" else None
+        if pid:
+            assert_project_access(pid, user)
+        ids = visible_project_ids(user) if not pid else None
 
         projects_query = supabase.table("projects").select("id,budget,start_date,end_date")
         if pid:
             projects_query = projects_query.eq("id", pid)
+        elif ids is not None:
+            projects_query = projects_query.in_("id", ids) if ids else projects_query.eq("id", "__none__")
         projects_res = projects_query.execute()
         projects_data = projects_res.data or []
 
         task_query = supabase.table("schedule_tasks").select("project_id,budget,planned_start,planned_end")
         if pid:
             task_query = task_query.eq("project_id", pid)
+        elif ids is not None:
+            task_query = task_query.in_("project_id", ids) if ids else task_query.eq("project_id", "__none__")
         tasks_data = task_query.execute().data or []
         tasks_by_project: dict = defaultdict(list)
         for t in tasks_data:
@@ -494,6 +545,8 @@ def get_cost_chart(
         cost_query = supabase.table("cost_entries").select("amount,date,entry_date")
         if pid:
             cost_query = cost_query.eq("project_id", pid)
+        elif ids is not None:
+            cost_query = cost_query.in_("project_id", ids) if ids else cost_query.eq("project_id", "__none__")
         cost_res = cost_query.execute()
         month_actuals: dict = defaultdict(float)
         for c in (cost_res.data or []):
@@ -531,9 +584,14 @@ def get_cashflow_chart(
     months: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    user: dict | None = Depends(get_optional_user),
 ):
     try:
-        projects_res = supabase.table("projects").select("budget,start_date,end_date").execute()
+        ids = visible_project_ids(user)
+        projects_query = supabase.table("projects").select("budget,start_date,end_date")
+        if ids is not None:
+            projects_query = projects_query.in_("id", ids) if ids else projects_query.eq("id", "__none__")
+        projects_res = projects_query.execute()
         projects_data = projects_res.data or []
 
         total_budget = sum(float(p.get("budget", 0)) for p in projects_data)
@@ -557,7 +615,10 @@ def get_cashflow_chart(
         monthly_inflow_k = round(total_budget / avg_duration / 1000, 1) if avg_duration else 0
 
         # Actual outflows per (year, month) from cost_entries
-        cost_res = supabase.table("cost_entries").select("amount,created_at").execute()
+        cost_query = supabase.table("cost_entries").select("amount,created_at")
+        if ids is not None:
+            cost_query = cost_query.in_("project_id", ids) if ids else cost_query.eq("project_id", "__none__")
+        cost_res = cost_query.execute()
         costs = cost_res.data or []
         month_outflow: dict = defaultdict(float)
         for c in costs:
@@ -600,12 +661,19 @@ def get_cashflow_chart(
 
 
 @router.get("/alerts")
-def get_project_alerts():
+def get_project_alerts(user: dict | None = Depends(get_optional_user)):
     try:
         try:
-            logs_res = supabase.table("activity_log").select(
+            # activity_log has no project_id column (it's scoped by user_id,
+            # see migration 001) — filtering it like the core-4 project-scoped
+            # tables threw an "undefined column" error that was silently
+            # swallowed below, so alerts always came back empty for logged-in users.
+            logs_query = supabase.table("activity_log").select(
                 "id,action,module,detail,created_at"
-            ).order("created_at", desc=True).limit(ALERT_LIMIT).execute()
+            )
+            if user is not None:
+                logs_query = logs_query.eq("user_id", user["id"])
+            logs_res = logs_query.order("created_at", desc=True).limit(ALERT_LIMIT).execute()
             logs = logs_res.data or []
         except Exception:
             logs = []
@@ -646,7 +714,7 @@ def get_project_alerts():
 
 
 @router.patch("/{project_id}")
-def update_project(project_id: str, project: ProjectUpdate):
+def update_project(project_id: str, project: ProjectUpdate, _user: dict | None = Depends(_project_dependency)):
     try:
         update_data = {k: v for k, v in project.model_dump().items() if v is not None}
         response = supabase.table("projects").update(update_data).eq("id", project_id).execute()
@@ -655,7 +723,7 @@ def update_project(project_id: str, project: ProjectUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{project_id}")
-def delete_project(project_id: str):
+def delete_project(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         supabase.table("cost_entries").delete().eq("project_id", project_id).execute()
         supabase.table("schedule_tasks").delete().eq("project_id", project_id).execute()
@@ -672,7 +740,7 @@ def delete_project(project_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{project_id}")
-def get_project(project_id: str):
+def get_project(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         project = get_project_by_id(project_id)
     except Exception as e:
@@ -682,7 +750,7 @@ def get_project(project_id: str):
     return {"status": "success", "project": project}
 
 @router.get("/{project_id}/cost")
-def get_project_cost(project_id: str):
+def get_project_cost(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         data = get_cost_entries(project_id)
         return {"status": "success", "cost_entries": data}
@@ -690,7 +758,7 @@ def get_project_cost(project_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{project_id}/cost")
-def add_cost_entry(project_id: str, entry: CostEntryCreate):
+def add_cost_entry(project_id: str, entry: CostEntryCreate, _user: dict | None = Depends(_project_dependency)):
     try:
         data = {
             "id": str(uuid.uuid4()),
@@ -706,7 +774,7 @@ def add_cost_entry(project_id: str, entry: CostEntryCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{project_id}/cost/{entry_id}")
-def delete_cost_entry(project_id: str, entry_id: str):
+def delete_cost_entry(project_id: str, entry_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         supabase.table("cost_entries").delete().eq("id", entry_id).eq("project_id", project_id).execute()
         return {"status": "success", "message": "Cost entry deleted"}
@@ -714,7 +782,7 @@ def delete_cost_entry(project_id: str, entry_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{project_id}/schedule")
-def get_project_schedule(project_id: str):
+def get_project_schedule(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         data = get_schedule_tasks(project_id)
         return {"status": "success", "tasks": data}
@@ -723,7 +791,7 @@ def get_project_schedule(project_id: str):
         return {"status": "error", "tasks": [], "error": str(e)}
 
 @router.post("/{project_id}/schedule")
-def add_task(project_id: str, task: TaskCreate):
+def add_task(project_id: str, task: TaskCreate, _user: dict | None = Depends(_project_dependency)):
     try:
         data = {
             "id": str(uuid.uuid4()),
@@ -746,7 +814,7 @@ def add_task(project_id: str, task: TaskCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.patch("/{project_id}/schedule/{task_id}")
-def update_task(project_id: str, task_id: str, task: TaskUpdate):
+def update_task(project_id: str, task_id: str, task: TaskUpdate, _user: dict | None = Depends(_project_dependency)):
     try:
         update_data = {k: v for k, v in task.model_dump().items() if v is not None}
         response = supabase.table("schedule_tasks").update(update_data).eq("id", task_id).execute()
@@ -755,7 +823,7 @@ def update_task(project_id: str, task_id: str, task: TaskUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{project_id}/schedule/{task_id}")
-def delete_task(project_id: str, task_id: str):
+def delete_task(project_id: str, task_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         supabase.table("schedule_tasks").delete().eq("id", task_id).execute()
         return {"status": "success", "message": "Task deleted"}
@@ -763,7 +831,7 @@ def delete_task(project_id: str, task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{project_id}/safety")
-def get_project_safety(project_id: str):
+def get_project_safety(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         data = get_safety_incidents(project_id)
         return {"status": "success", "incidents": data}
@@ -772,7 +840,7 @@ def get_project_safety(project_id: str):
         return {"status": "error", "incidents": [], "error": str(e)}
 
 @router.get("/{project_id}/workforce")
-def get_project_workforce(project_id: str):
+def get_project_workforce(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         data = get_workforce(project_id)
         return {"status": "success", "workforce": data}
@@ -781,7 +849,7 @@ def get_project_workforce(project_id: str):
         return {"status": "error", "workforce": [], "error": str(e)}
 
 @router.get("/{project_id}/equipment")
-def get_project_equipment(project_id: str):
+def get_project_equipment(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         data = get_equipment(project_id)
         return {"status": "success", "equipment": data}
@@ -790,7 +858,7 @@ def get_project_equipment(project_id: str):
         return {"status": "error", "equipment": [], "error": str(e)}
 
 @router.get("/{project_id}/contracts")
-def get_project_contracts(project_id: str):
+def get_project_contracts(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         data = get_contracts(project_id)
         return {"status": "success", "contracts": data}
@@ -798,7 +866,7 @@ def get_project_contracts(project_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{project_id}/permits")
-def get_project_permits(project_id: str):
+def get_project_permits(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         data = get_permits(project_id)
         return {"status": "success", "permits": data}
@@ -806,7 +874,7 @@ def get_project_permits(project_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{project_id}/purchase-orders")
-def get_project_purchase_orders(project_id: str):
+def get_project_purchase_orders(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         data = get_purchase_orders(project_id)
         return {"status": "success", "purchase_orders": data}
@@ -815,7 +883,7 @@ def get_project_purchase_orders(project_id: str):
 
 
 @router.get("/{project_id}/overview")
-def get_project_overview(project_id: str):
+def get_project_overview(project_id: str, _user: dict | None = Depends(_project_dependency)):
     try:
         today = datetime.now(timezone.utc).date()
         in_7 = today + timedelta(days=7)
