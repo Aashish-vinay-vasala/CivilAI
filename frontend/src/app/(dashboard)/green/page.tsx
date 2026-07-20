@@ -263,7 +263,7 @@ export default function GreenPage() {
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
                   <XAxis dataKey="month" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={{ fill: "rgba(0,212,255,0.06)" }} />
                   <Bar dataKey="concrete" fill="#94A3B8" radius={[4, 4, 0, 0]} name="Concrete" />
                   <Bar dataKey="steel" fill="#3B82F6" radius={[4, 4, 0, 0]} name="Steel" />
                   <Bar dataKey="wood" fill="#F59E0B" radius={[4, 4, 0, 0]} name="Wood" />

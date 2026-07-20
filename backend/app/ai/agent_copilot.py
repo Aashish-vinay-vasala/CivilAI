@@ -11,6 +11,7 @@ Streaming is supported: call agent_stream() for an async event generator.
 """
 import json
 import logging
+import re
 from typing import AsyncIterator
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -533,13 +534,14 @@ def analyze_vendor_data(vendor_text: str) -> str:
         result = score_vendor({"raw_text": vendor_text})
         risk = result.get("risk_data", result)
         analysis = result.get("analysis", "")
+        analysis_block = f"Analysis:\n{analysis}" if analysis else ""
         return (
             f"Vendor Score: {risk.get('vendor_score', risk.get('score', 'N/A'))}/10 | "
             f"Risk: {risk.get('risk_level', risk.get('risk', 'Unknown'))} | "
             f"Reliability: {risk.get('reliability_rating', risk.get('reliability', 'Unknown'))}\n\n"
             f"Key Risks: {', '.join(risk.get('key_risks', risk.get('risks', []))) or 'None'}\n"
             f"Recommendations: {', '.join(risk.get('recommendations', [])) or 'None'}\n\n"
-            f"{('Analysis:\n' + analysis) if analysis else ''}"
+            f"{analysis_block}"
         )
     except Exception as exc:
         try:
@@ -1109,8 +1111,6 @@ def generate_advanced_report(report_type: str, project_id: str = "", extra_conte
 def generate_document(document_type: str, project_id: str = "", context: str = "") -> str:
     """
     Generate a professional construction document, optionally pulling live project data as context.
-    Supported types: rfi, incident_report, change_order, weekly_report, payment_reminder,
-    permit_application, letter, email, notice, variation_order, dispute_letter.
 
     Args:
         document_type: rfi / incident_report / change_order / weekly_report / payment_reminder /
@@ -1486,17 +1486,88 @@ _TOOLS = [
     add_punch_list_item,
 ]
 
-_llm = ChatGroq(
-    model=_MODEL,
-    api_key=settings.GROQ_API_KEY,
-    temperature=0.1,
-    max_tokens=4096,
-)
+def _get_llm() -> ChatGroq:
+    """Build a fresh client bound to whichever key groq_client's rotation has
+    currently active — a fixed, module-level ChatGroq (the original approach)
+    never rotated off GROQ_API_KEY even after groq_client.py moved to key 2/3,
+    since it's a completely separate client with its own key baked in at
+    construction time."""
+    from app.ai import groq_client
+    return ChatGroq(
+        model=_MODEL,
+        api_key=groq_client.get_active_key(),
+        temperature=0.1,
+        max_tokens=4096,
+    )
 
-_agent = create_react_agent(_llm, tools=_TOOLS)
+# Binding all 28 tools to every call turned out to be the dominant cost in the
+# TPM-budget failures below — LangChain's JSON-schema serialization of the full
+# tool set runs well over Groq's 12,000 tokens/minute free-tier cap on its own,
+# even for a brand-new session with no history. Instead of one fixed agent, pick
+# only the tools relevant to what's actually being asked; get_project_dashboard
+# (always included) already covers the system prompt's "broad status question"
+# case on its own, so a filtered-down set doesn't lose that path.
+_CORE_TOOLS = [list_projects, get_project_dashboard]
+
+_TOOL_KEYWORDS: list[tuple[str, list]] = [
+    (r"schedul|task|timeline|delay|critical.path|milestone|\bcpm\b|float\b|gantt", [analyze_schedule_data]),
+    (r"safety|incident|hazard|injury|osha|accident|near.miss|\bppe\b|violation", [analyze_safety_data]),
+    (r"log.*incident|report.*incident|record.*incident|new.*incident", [log_safety_incident]),
+    (r"cost|budget|spend|expenditure|burn.rate|overrun", [analyze_cost_data]),
+    (r"predict|forecast|\bml\b|machine.learning|overrun.*risk", [predict_cost_overrun_ml]),
+    (r"contract.*term|clause|fidic|nec4|terms", [analyze_contract_terms]),
+    (r"contract", [analyze_contract_data]),
+    (r"complian|regulat|permit|building.code|standard", [assess_compliance_data]),
+    (r"equipment|machine|crane|vehicle|fleet", [analyze_equipment_data]),
+    (r"payment|invoice|billing|receivable|payable|cash.?flow", [analyze_payment_data]),
+    (r"reconcil|audit", [get_accounting_reconciliation]),
+    (r"workforce|labor|labour|staff|worker|crew|turnover|headcount", [analyze_workforce_data]),
+    (r"procure|purchase.*order|\bpo\b|supply", [analyze_procurement_data]),
+    (r"green|sustainab|carbon|leed|emission", [assess_green_metrics]),
+    (r"punch.?list|defect|snag", [analyze_punch_list_data, add_punch_list_item]),
+    (r"meeting|minutes|\bmom\b", [summarize_meetings]),
+    (r"evm|earned.value|\bcpi\b|\bspi\b|\beac\b|\bbac\b|variance", [get_evm_history, calculate_evm_metrics]),
+    (r"what.?if|scenario|simulate|projection", [run_what_if_scenario]),
+    (r"report\b", [generate_advanced_report]),
+    (r"generate|draft|write.*letter|\brfi\b|change.order|notice\b|dispute", [generate_document]),
+    (r"vendor|supplier|subcontractor", [analyze_vendor_data]),
+    (r"\bbim\b|\bifc\b|clash|\b3d\b", [analyze_bim_data]),
+    (r"material.*price|price.*material|steel.*price|cement.*price|lumber.*price", [extract_material_prices_from_text]),
+    (r"budget.*item|line.?item", [extract_budget_items_from_text]),
+    (r"update.*task|mark.*(complete|done)|change.*status", [update_schedule_task_status]),
+]
+
+
+def _select_tools(user_message: str, history: list[dict] | None = None) -> list:
+    """Pick the tools relevant to this turn instead of binding all 28 every call."""
+    text = user_message.lower()
+    for h in (history or [])[-2:]:
+        if h.get("role") == "user":
+            text += " " + str(h.get("content", "")).lower()
+
+    selected = list(_CORE_TOOLS)
+    seen = {t.name for t in selected}
+    for pattern, tools in _TOOL_KEYWORDS:
+        if re.search(pattern, text):
+            for t in tools:
+                if t.name not in seen:
+                    selected.append(t)
+                    seen.add(t.name)
+    return selected
+
+
+def _build_agent(user_message: str, history: list[dict] | None = None):
+    return create_react_agent(_get_llm(), tools=_select_tools(user_message, history))
 
 
 # ── Public helpers ─────────────────────────────────────────────────────────────
+
+# Groq's free-tier TPM cap (12,000) is already close to what 28 tool schemas + the
+# system prompt cost on their own — unbounded history was the difference between a
+# request that fits and one that doesn't as a conversation grew. Only the most
+# recent turns are usually relevant to the next question anyway.
+_MAX_HISTORY_MESSAGES = 10
+
 
 def _build_messages(
     user_message: str,
@@ -1519,7 +1590,7 @@ def _build_messages(
             )
         ))
 
-    for h in history:
+    for h in history[-_MAX_HISTORY_MESSAGES:]:
         role = h.get("role", "user")
         content = h.get("content", "")
         if not content:
@@ -1561,6 +1632,22 @@ def _extract_result(result: dict) -> tuple[str, list[dict]]:
 def _is_groq_rate_limited(exc: Exception) -> bool:
     err = str(exc)
     return "429" in err or "rate_limit_exceeded" in err
+
+
+def _is_daily_limit(exc: Exception) -> bool:
+    """Tokens-per-day exhaustion — per-key, so rotating to the next key actually
+    helps (unlike the per-minute/per-org case in _is_unrecoverable_rate_limit)."""
+    err = str(exc)
+    return "rate_limit_exceeded" in err and "tokens per day" in err.lower()
+
+
+def _is_malformed_tool_call(exc: Exception) -> bool:
+    """Groq's Llama function-calling occasionally emits syntactically broken tool-call
+    tokens (tool_use_failed) unrelated to rate limits or the tool's own schema — not
+    perfectly deterministic even at low temperature, so one immediate retry is enough
+    to recover most of the time without masking a genuinely broken tool."""
+    err = str(exc)
+    return "tool_use_failed" in err or "Failed to call a function" in err
 
 
 _BUDGET_MESSAGE = (
@@ -1628,21 +1715,34 @@ def run_agent(
         logger.warning("Agent run blocked — daily AI token budget exceeded")
         return {"reply": _BUDGET_MESSAGE, "tool_steps": []}
 
+    from app.ai import groq_client
+
     msgs = _build_messages(user_message, history or [], extra_context, web_context)
-    try:
-        result = _agent.invoke({"messages": msgs})
-        reply, steps = _extract_result(result)
-        _track_tokens(result)
-        return {"reply": reply or "I was unable to generate a response. Please try again.", "tool_steps": steps}
-    except Exception as exc:
-        if _is_groq_rate_limited(exc):
-            logger.warning("Agent LLM rate-limited — falling back to Gemini (no tool-calling this turn): %s", exc)
-            try:
-                return {"reply": _gemini_fallback_reply(msgs), "tool_steps": []}
-            except Exception as gem_exc:
-                logger.error("Gemini fallback also failed: %s", gem_exc)
-        logger.error("Agent run failed: %s", exc)
-        raise RuntimeError(f"Agent error: {exc}") from exc
+    used_malformed_retry = False
+    max_attempts = groq_client.get_key_pool_size() + 2  # + malformed-call retry + safety margin
+    for attempt in range(max_attempts):
+        agent = _build_agent(user_message, history)
+        try:
+            result = agent.invoke({"messages": msgs})
+            reply, steps = _extract_result(result)
+            _track_tokens(result)
+            return {"reply": reply or "I was unable to generate a response. Please try again.", "tool_steps": steps}
+        except Exception as exc:
+            if not used_malformed_retry and _is_malformed_tool_call(exc):
+                used_malformed_retry = True
+                logger.warning("Malformed tool call from Groq — retrying once: %s", exc)
+                continue
+            if _is_daily_limit(exc) and groq_client.rotate_key():
+                logger.warning("Agent LLM hit its daily limit — retrying with next Groq key")
+                continue
+            if _is_groq_rate_limited(exc):
+                logger.warning("Agent LLM rate-limited — falling back to Gemini (no tool-calling this turn): %s", exc)
+                try:
+                    return {"reply": _gemini_fallback_reply(msgs), "tool_steps": []}
+                except Exception as gem_exc:
+                    logger.error("Gemini fallback also failed: %s", gem_exc)
+            logger.error("Agent run failed: %s", exc)
+            raise RuntimeError(f"Agent error: {exc}") from exc
 
 
 async def run_agent_stream(
@@ -1666,63 +1766,81 @@ async def run_agent_stream(
         yield {"type": "done"}
         return
 
+    from app.ai import groq_client
+
     msgs = _build_messages(user_message, history or [], extra_context, web_context)
-    emitted_any = False
-    try:
-        async for event in _agent.astream_events({"messages": msgs}, version="v2"):
-            kind = event.get("event", "")
+    used_malformed_retry = False
+    max_attempts = groq_client.get_key_pool_size() + 2  # + malformed-call retry + safety margin
 
-            if kind == "on_chat_model_end":
+    for attempt in range(max_attempts):
+        agent = _build_agent(user_message, history)
+        emitted_any = False
+        try:
+            async for event in agent.astream_events({"messages": msgs}, version="v2"):
+                kind = event.get("event", "")
+
+                if kind == "on_chat_model_end":
+                    try:
+                        from app.services import usage_tracker
+                        output = event["data"].get("output")
+                        usage = getattr(output, "usage_metadata", None)
+                        if usage:
+                            usage_tracker.add_llm_tokens(usage.get("total_tokens", 0) or 0)
+                    except Exception:
+                        pass
+
+                elif kind == "on_chat_model_stream":
+                    chunk = event["data"].get("chunk")
+                    if chunk and chunk.content:
+                        content = chunk.content if isinstance(chunk.content, str) else ""
+                        if content:
+                            emitted_any = True
+                            yield {"type": "token", "content": content}
+
+                elif kind == "on_tool_start":
+                    emitted_any = True
+                    yield {
+                        "type":  "tool_start",
+                        "tool":  event.get("name", ""),
+                        "input": event["data"].get("input", {}),
+                    }
+
+                elif kind == "on_tool_end":
+                    emitted_any = True
+                    output = event["data"].get("output", "")
+                    yield {
+                        "type":   "tool_end",
+                        "tool":   event.get("name", ""),
+                        "output": str(output)[:800] if output else "",
+                    }
+
+            yield {"type": "done"}
+            return
+
+        except Exception as exc:
+            if not emitted_any and not used_malformed_retry and _is_malformed_tool_call(exc):
+                used_malformed_retry = True
+                logger.warning("Malformed tool call from Groq — retrying stream once: %s", exc)
+                continue
+
+            if not emitted_any and _is_daily_limit(exc) and groq_client.rotate_key():
+                logger.warning("Agent stream hit its daily limit before any output — retrying with next Groq key")
+                continue
+
+            # Only fall back if nothing has streamed yet — a failure mid-stream (after
+            # partial output already reached the client) just ends the generator early,
+            # same as before; retrying would duplicate/conflict with what's already shown.
+            if not emitted_any and _is_groq_rate_limited(exc):
+                logger.warning("Agent stream rate-limited before any output — falling back to Gemini: %s", exc)
                 try:
-                    from app.services import usage_tracker
-                    output = event["data"].get("output")
-                    usage = getattr(output, "usage_metadata", None)
-                    if usage:
-                        usage_tracker.add_llm_tokens(usage.get("total_tokens", 0) or 0)
-                except Exception:
-                    pass
-
-            elif kind == "on_chat_model_stream":
-                chunk = event["data"].get("chunk")
-                if chunk and chunk.content:
-                    content = chunk.content if isinstance(chunk.content, str) else ""
-                    if content:
-                        emitted_any = True
-                        yield {"type": "token", "content": content}
-
-            elif kind == "on_tool_start":
-                emitted_any = True
-                yield {
-                    "type":  "tool_start",
-                    "tool":  event.get("name", ""),
-                    "input": event["data"].get("input", {}),
-                }
-
-            elif kind == "on_tool_end":
-                emitted_any = True
-                output = event["data"].get("output", "")
-                yield {
-                    "type":   "tool_end",
-                    "tool":   event.get("name", ""),
-                    "output": str(output)[:800] if output else "",
-                }
-
-        yield {"type": "done"}
-
-    except Exception as exc:
-        # Only fall back if nothing has streamed yet — a failure mid-stream (after
-        # partial output already reached the client) just ends the generator early,
-        # same as before; retrying would duplicate/conflict with what's already shown.
-        if not emitted_any and _is_groq_rate_limited(exc):
-            logger.warning("Agent stream rate-limited before any output — falling back to Gemini: %s", exc)
-            try:
-                reply = _gemini_fallback_reply(msgs)
-                for i, word in enumerate(reply.split(" ")):
-                    yield {"type": "token", "content": word if i == 0 else " " + word}
-                yield {"type": "done"}
-                return
-            except Exception as gem_exc:
-                logger.error("Gemini fallback also failed: %s", gem_exc)
-        logger.error("Agent stream error: %s", exc)
-        yield {"type": "error", "content": str(exc)}
-        yield {"type": "done"}
+                    reply = _gemini_fallback_reply(msgs)
+                    for i, word in enumerate(reply.split(" ")):
+                        yield {"type": "token", "content": word if i == 0 else " " + word}
+                    yield {"type": "done"}
+                    return
+                except Exception as gem_exc:
+                    logger.error("Gemini fallback also failed: %s", gem_exc)
+            logger.error("Agent stream error: %s", exc)
+            yield {"type": "error", "content": str(exc)}
+            yield {"type": "done"}
+            return

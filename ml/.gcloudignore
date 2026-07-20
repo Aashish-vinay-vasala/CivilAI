@@ -4,14 +4,11 @@
 __pycache__
 *.pyc
 *.pyo
-*.pyd
 venv
 .venv
 *.egg-info
 dist
 build
 .pytest_cache
-.env
-mlflow.db
-/data/
 *.md
+mlruns/

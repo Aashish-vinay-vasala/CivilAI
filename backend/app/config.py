@@ -14,6 +14,7 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: str
     GROQ_API_KEY_2: Optional[str] = None  # fallback key when primary hits daily TPD limit
+    GROQ_API_KEY_3: Optional[str] = None  # second fallback
     GEMINI_API_KEY: str
     SUPABASE_URL: str
     SUPABASE_SECRET_KEY: str

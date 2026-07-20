@@ -440,7 +440,7 @@ export default function ReportsPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#ffffff08" />
               <XAxis dataKey="week" tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} />
+              <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "12px", color: "#f8fafc", fontSize: "12px" }} cursor={{ fill: "rgba(0,212,255,0.06)" }} />
               <Bar dataKey="planned" fill="#3b82f620" stroke="#3b82f6" strokeWidth={1} radius={[6, 6, 0, 0]} name="Planned" />
               <Bar dataKey="actual"  fill="#10b981" radius={[6, 6, 0, 0]} name="Actual" />
             </BarChart>

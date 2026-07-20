@@ -1,0 +1,24 @@
+# Production-only requirements for the ML inference API (api/main.py).
+# Excludes jupyter/notebook/matplotlib/prefect/etc. — those are training/notebook-only,
+# not needed to serve /predict, /data, /gnn, /mlops endpoints.
+fastapi==0.135.3
+uvicorn==0.44.0
+pydantic==2.12.5
+python-multipart==0.0.32
+python-dotenv==1.2.2
+python-jose==3.5.0
+requests==2.33.1
+
+joblib==1.5.3
+numpy==2.4.4
+pandas==2.3.3
+scikit-learn==1.8.0
+xgboost==3.2.0
+
+# GNN risk model (torch_geometric intentionally omitted — gnn_risk.py already has a
+# graceful non-GNN fallback path when it's absent, and torch_geometric's wheel
+# matching is fragile in slim containers; plain torch covers the fallback path).
+torch==2.11.0
+
+# MLOps dashboard (experiment-runs) + prediction logging
+mlflow==3.11.1

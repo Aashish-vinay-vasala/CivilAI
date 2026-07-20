@@ -259,4 +259,13 @@ def build_module_context(text: str) -> str:
             )
         fetched_tables.add(table)
 
-    return "\n\n".join(parts)
+    # 31 broad keyword patterns can co-match a single message (e.g. "project status
+    # and cost risk" hits several at once) and each appends a full JSON table dump
+    # with no limit — this was a real contributor to blowing Groq's per-minute token
+    # budget on broad questions. Cap the combined size; the agent's own tools remain
+    # available for anything a truncated context here doesn't cover.
+    combined = "\n\n".join(parts)
+    _MAX_CONTEXT_CHARS = 4000
+    if len(combined) > _MAX_CONTEXT_CHARS:
+        combined = combined[:_MAX_CONTEXT_CHARS] + "\n... [truncated — ask a more specific question or use a tool for full detail]"
+    return combined

@@ -1138,7 +1138,7 @@ export default function ConstructionPage() {
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
                         <XAxis dataKey="name" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 10 }} axisLine={false} tickLine={false} unit="K" />
-                        <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+                        <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={{ fill: "rgba(0,212,255,0.06)" }} />
                         <Bar dataKey="budget" fill="#00D4FF" radius={[4, 4, 0, 0]} name="Budget ($K)" />
                         <Bar dataKey="actual" fill="#F59E0B" radius={[4, 4, 0, 0]} name="Actual ($K)" />
                       </BarChart>

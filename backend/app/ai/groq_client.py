@@ -15,9 +15,10 @@ _MAX_AUTO_RETRY_SECS = 15  # only sleep-and-retry for short RPM waits; not TPD e
 # ── Key pool ───────────────────────────────────────────────────────────────────
 def _build_key_pool() -> list[str]:
     keys = [settings.GROQ_API_KEY]
-    k2 = getattr(settings, "GROQ_API_KEY_2", None)
-    if k2:
-        keys.append(k2)
+    for attr in ("GROQ_API_KEY_2", "GROQ_API_KEY_3"):
+        k = getattr(settings, attr, None)
+        if k:
+            keys.append(k)
     return [k for k in keys if k]
 
 _key_pool = _build_key_pool()
@@ -95,22 +96,33 @@ def _gemini_fallback(messages: list) -> str:
 def _rotate_key() -> bool:
     """Promote to the next API key. Returns False when all keys are exhausted."""
     global _active_idx
-    if _active_idx == 0:
-        logger.warning(
-            "[GROQ] Key 1 daily token limit reached — "
-            "half of today's quota is done. Switching to backup key 2."
-        )
+    logger.warning(
+        "[GROQ] Key #%d daily token limit reached — trying next key.", _active_idx + 1
+    )
     next_idx = _active_idx + 1
     if next_idx >= len(_key_pool):
         logger.error(
-            "[GROQ] All API keys have hit their daily token limit. "
-            "CivilAI AI features will be unavailable until quota resets (~midnight UTC)."
+            "[GROQ] All %d API key(s) have hit their daily token limit. "
+            "CivilAI AI features will be unavailable until quota resets (~midnight UTC).",
+            len(_key_pool),
         )
         return False
     _active_idx = next_idx
     _activate_key(_active_idx)
     logger.info("[GROQ] Rotated to API key #%d", _active_idx + 1)
     return True
+
+
+def get_active_key() -> str:
+    """Currently active Groq API key — lets other Groq clients (e.g. the
+    LangChain-based ReAct agent in agent_copilot.py) stay in sync with rotation
+    decisions made here, instead of each keeping an independent, stale key."""
+    return _key_pool[_active_idx]
+
+
+def rotate_key() -> bool:
+    """Public wrapper — advance to the next pooled key. False if none remain."""
+    return _rotate_key()
 
 
 # ── Core chat call ─────────────────────────────────────────────────────────────

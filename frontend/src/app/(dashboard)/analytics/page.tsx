@@ -685,7 +685,7 @@ export default function AnalyticsPage() {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
                 <XAxis type="number" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} unit="%" domain={[0, 100]} />
                 <YAxis dataKey="category" type="category" tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11 }} axisLine={false} tickLine={false} width={80} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${v}%`]} />
+                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(0,212,255,0.06)" }} formatter={(v: any) => [`${v}%`]} />
                 <Bar dataKey="rate" fill="#ef4444" radius={[0, 6, 6, 0]} name="Risk %" />
               </BarChart>
             </ResponsiveContainer>

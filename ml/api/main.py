@@ -1,6 +1,7 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import Depends, FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from api.auth import require_login
 import joblib
 import numpy as np
 import pandas as pd
@@ -477,7 +478,7 @@ def data_summary():
 
 
 @app.post("/data/upload/{dataset}")
-async def upload_dataset(dataset: str, file: UploadFile = File(...)):
+async def upload_dataset(dataset: str, file: UploadFile = File(...), _user: dict = Depends(require_login)):
     """Replace a training dataset with a user-supplied CSV. Validates required columns
     are present before overwriting anything; the previous file is kept as a .backup copy."""
     if dataset not in DATASET_SCHEMAS:
@@ -508,7 +509,7 @@ async def upload_dataset(dataset: str, file: UploadFile = File(...)):
 # ── Retraining ──
 
 @app.post("/train/all")
-def train_all_models():
+def train_all_models(_user: dict = Depends(require_login)):
     """Retrain all 6 sklearn/XGBoost models from whatever's currently in data/raw/,
     hot-reload them into this running server, and return before/after metrics."""
     report_path = "models/saved/training_report.json"
@@ -539,7 +540,7 @@ def train_all_models():
 
 
 @app.post("/train/gnn")
-def train_gnn_model():
+def train_gnn_model(_user: dict = Depends(require_login)):
     """Retrain the GNN risk model from synthetic graphs, save the checkpoint,
     and return before/after validation loss."""
     report_path = "models/saved/gnn_training_report.json"
