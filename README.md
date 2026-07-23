@@ -24,6 +24,20 @@ CivilAI is a full-stack construction management platform for project directors, 
 - [Project Structure](#project-structure)
 
 ---
+<img width="1917" height="905" alt="civil1" src="https://github.com/user-attachments/assets/f83b6555-d832-4a04-a2c3-e96160a4c895" />
+<img width="1917" height="917" alt="civil2" src="https://github.com/user-attachments/assets/b42dea80-13f7-43bb-aebe-b9728adb73ea" />
+<img width="1917" height="903" alt="civil3" src="https://github.com/user-attachments/assets/e6499234-328a-4201-9a46-4ea22bce4276" />
+<img width="1917" height="912" alt="civil4" src="https://github.com/user-attachments/assets/bae76ca1-87bd-4a46-9f48-d80397c60ae8" />
+<img width="1917" height="912" alt="civil5" src="https://github.com/user-attachments/assets/79584cc8-6bd5-49aa-9a0b-fdb61c0b9dfc" />
+<img width="1910" height="905" alt="civil6" src="https://github.com/user-attachments/assets/cecf8060-ad30-4d31-bc9b-80a750a6b23f" />
+<img width="1917" height="901" alt="civil7" src="https://github.com/user-attachments/assets/26ebd0fa-4a94-4c1c-9724-f901baa5731b" />
+<img width="1917" height="906" alt="civil8" src="https://github.com/user-attachments/assets/20fc8f7a-1897-4af3-bb6b-90256c839feb" />
+<img width="1917" height="908" alt="civil9" src="https://github.com/user-attachments/assets/25f7fc89-0768-41fb-8d4e-715aebab3416" />
+<img width="1916" height="907" alt="civil10" src="https://github.com/user-attachments/assets/e74a94d1-6f24-4f6a-8ad4-f81c20972269" />
+<img width="1917" height="896" alt="civil11" src="https://github.com/user-attachments/assets/894e70a2-32bd-499c-ab30-de787ba1efe6" />
+<img width="1917" height="911" alt="civil12" src="https://github.com/user-attachments/assets/faea39c0-00a4-44db-b65f-2945c609e333" />
+
+
 
 ## Architecture Overview
 
