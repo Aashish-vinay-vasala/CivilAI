@@ -2,6 +2,14 @@
 
 CivilAI is a full-stack construction management platform for project directors, site engineers, and contractors. It combines traditional project-management workflows (schedules, budgets, contracts, safety, procurement, workforce) with an AI layer: an LLM copilot/agent, ML cost-overrun prediction, document/contract analysis, voice interaction, and a Model Context Protocol (MCP) server that exposes the same tools to external AI clients like Claude Desktop and Claude Code.
 
+### 🔗 Live
+
+| Service | URL |
+|---|---|
+| Web App | [https://gen-lang-client-0881995245.web.app](https://gen-lang-client-0881995245.web.app/) |
+| Backend API | [https://civilai-backend-189758336630.us-central1.run.app](https://civilai-backend-189758336630.us-central1.run.app) |
+| ML API | [https://civilai-ml-enifkvxpja-uc.a.run.app](https://civilai-ml-enifkvxpja-uc.a.run.app) |
+
 ---
 
 ## Table of Contents
