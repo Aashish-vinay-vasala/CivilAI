@@ -809,27 +809,25 @@ export default function DashboardPage() {
                     onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "rgba(0,212,255,0.15)"; (e.currentTarget as HTMLElement).style.background = "rgba(0,212,255,0.03)"; }}
                     onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.06)"; (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.02)"; }}
                   >
-                    {/* Action buttons */}
-                    <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => { setEditingProject(project); setEditForm({ name: project.name, client: project.client || "", location: project.location || "", budget: project.total_budget || 0, status: project.status || "active", start_date: project.start_date || "", end_date: project.end_date || "" }); }}
-                        className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
-                        style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)" }}>
-                        <Edit2 className="w-3 h-3 text-cyan-400" />
-                      </button>
-                      <button onClick={() => handleExportReport(project)} disabled={exporting}
-                        className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
-                        style={{ background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.2)" }}>
-                        {exporting ? <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" /> : <span className="text-emerald-400 text-xs font-bold">↓</span>}
-                      </button>
-                      <button onClick={() => handleDeleteProject(project.id, project.name)} disabled={deletingId === project.id}
-                        className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
-                        style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                        {deletingId === project.id ? <Loader2 className="w-3 h-3 text-red-400 animate-spin" /> : <Trash2 className="w-3 h-3 text-red-400" />}
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between mb-2 pr-24">
-                      <p className="font-semibold text-white text-[13px] truncate">{project.name}</p>
+                    {/* Action buttons + status */}
+                    <div className="absolute top-3 right-3 flex items-center gap-1">
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => handleExportReport(project)} disabled={exporting}
+                          className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                          style={{ background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.2)" }}>
+                          {exporting ? <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" /> : <span className="text-emerald-400 text-xs font-bold">↓</span>}
+                        </button>
+                        <button onClick={() => { setEditingProject(project); setEditForm({ name: project.name, client: project.client || "", location: project.location || "", budget: project.total_budget || 0, status: project.status || "active", start_date: project.start_date || "", end_date: project.end_date || "" }); }}
+                          className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                          style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)" }}>
+                          <Edit2 className="w-3 h-3 text-cyan-400" />
+                        </button>
+                        <button onClick={() => handleDeleteProject(project.id, project.name)} disabled={deletingId === project.id}
+                          className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                          style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                          {deletingId === project.id ? <Loader2 className="w-3 h-3 text-red-400 animate-spin" /> : <Trash2 className="w-3 h-3 text-red-400" />}
+                        </button>
+                      </div>
                       <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0 font-medium"
                         style={{
                           background: project.status === "active" ? "rgba(16,185,129,0.12)" : project.status === "planning" ? "rgba(0,212,255,0.12)" : project.status === "completed" ? "rgba(139,92,246,0.12)" : "rgba(245,158,11,0.12)",
@@ -838,6 +836,10 @@ export default function DashboardPage() {
                         }}>
                         {project.status}
                       </span>
+                    </div>
+
+                    <div className="flex items-center mb-2 pr-4">
+                      <p className="font-semibold text-white text-[13px] truncate">{project.name}</p>
                     </div>
 
                     {project.client && <p className="text-[11px] text-white/35 mb-0.5">{project.client}</p>}

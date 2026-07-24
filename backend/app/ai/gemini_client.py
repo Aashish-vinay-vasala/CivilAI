@@ -48,6 +48,28 @@ def text_completion(prompt: str, system: str | None = None) -> str:
     return response.text
 
 
+def structured_completion(prompt: str, response_model):
+    """Gemini completion constrained to a Pydantic schema. Used by groq_client's
+    instructor_chat() as the final fallback when every Groq key is rate-limited/
+    exhausted, so structured-extraction callers get a real result instead of an
+    empty/degraded one."""
+    from google.genai import types as genai_types
+    client = get_client()
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=response_model,
+        ),
+    )
+    if response.usage_metadata:
+        usage_tracker.add_llm_tokens(response.usage_metadata.total_token_count or 0)
+    if response.parsed is not None:
+        return response.parsed
+    return response_model.model_validate_json(response.text)
+
+
 def analyze_text(text: str, prompt: str) -> str:
     try:
         from app.ai.groq_client import analyze_document

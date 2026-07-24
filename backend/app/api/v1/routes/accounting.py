@@ -504,7 +504,8 @@ def cost_analysis(
 ):
     """
     Delegates to the cost_analyzer module with a live report built from
-    financial_budget_items + cost_entries + invoices for the project.
+    projects.budget + cost_entries + invoices for the project, with
+    financial_budget_items supplying the itemised line-by-line breakdown.
     """
     try:
         from app.services.db_service import supabase
@@ -514,7 +515,12 @@ def cost_analysis(
         costs = supabase.table("cost_entries").select("amount").eq("project_id", project_id).execute().data or []
         invs  = supabase.table("invoices").select("amount,status,contractor").eq("project_id", project_id).execute().data or []
 
-        total_budget   = sum(float(b.get("original_budget") or 0) for b in buds)
+        # Canonical project budget — same source as /dashboard, /summary, and
+        # /analyze-budget. financial_budget_items is an itemised, independently
+        # -imported breakdown that can drift from this figure, so it's only used
+        # below for the per-line-item narrative, never the headline total.
+        proj_res     = supabase.table("projects").select("budget").eq("id", project_id).single().execute()
+        total_budget = float((proj_res.data or {}).get("budget") or 0)
         total_spent    = sum(float(c.get("amount") or 0) for c in costs)
         total_invoiced = sum(float(i.get("amount") or 0) for i in invs)
 

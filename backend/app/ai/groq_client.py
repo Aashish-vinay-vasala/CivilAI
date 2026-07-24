@@ -174,6 +174,41 @@ def chat(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0) -> str
         raise
 
 
+def instructor_chat(response_model, messages: list, model: str = _FAST_MODEL, max_retries: int = 2, _rpm_attempt: int = 0):
+    """Structured-output counterpart to chat() — same key-rotation / Gemini-fallback
+    behavior, but for instructor_client.chat.completions.create() callers (analyzers
+    extracting a Pydantic model from a document). Without this, a rate-limited key
+    made every extract_* call silently return an empty/degraded result instead of
+    rotating or falling back like plain chat() does."""
+    try:
+        return _state["instructor_client"].chat.completions.create(
+            model=model,
+            response_model=response_model,
+            messages=messages,
+            max_retries=max_retries,
+        )
+    except Exception as exc:
+        if _is_daily_limit(exc):
+            if _rotate_key():
+                return instructor_chat(response_model, messages, model, max_retries, _rpm_attempt=0)
+            return _gemini_structured_fallback(response_model, messages)
+        if _is_unrecoverable_rate_limit(exc):
+            return _gemini_structured_fallback(response_model, messages)
+        wait = _rate_limit_wait(exc)
+        if wait is not None and wait <= _MAX_AUTO_RETRY_SECS and _rpm_attempt == 0:
+            logger.warning("Groq rate limited — waiting %.1fs then retrying", wait)
+            _time.sleep(wait + 0.5)
+            return instructor_chat(response_model, messages, model, max_retries, _rpm_attempt=1)
+        return _gemini_structured_fallback(response_model, messages)
+
+
+def _gemini_structured_fallback(response_model, messages: list):
+    from app.ai.gemini_client import structured_completion
+    prompt = "\n\n".join(m["content"] for m in messages)
+    logger.warning("[GROQ] All keys rate-limited/exhausted — falling back to Gemini for structured extraction")
+    return structured_completion(prompt, response_model)
+
+
 def chat_stream(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0):
     """Yields text deltas as they arrive from Groq. Key rotation only applies before
     the stream starts — a failure mid-stream just ends the generator early and lets

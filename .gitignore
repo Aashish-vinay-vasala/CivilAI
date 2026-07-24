@@ -81,3 +81,8 @@ Desktop.ini
 
 # ─── Playwright MCP artifacts ─────────────────────────────────────────────────
 .playwright-mcp/
+
+# ─── Ad-hoc root screenshots ──────────────────────────────────────────────────
+/*.png
+/*.jpg
+/*.jpeg

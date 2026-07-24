@@ -23,8 +23,6 @@ import {
   Eye,
   Database,
   FolderOpen,
-  Calculator,
-  AlertTriangle,
   Trash2,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
@@ -35,7 +33,7 @@ import ModuleChat from "@/components/shared/ModuleChat";
 import ModuleTabs from "@/components/shared/ModuleTabs";
 import DownloadModal from "@/components/shared/DownloadModal";
 import { MarkdownText } from "@/lib/renderMarkdown";
-import { ACCENT, AccentKey, glassInputClass, glassInputStyle, gradientButtonStyle, glassButtonStyle } from "@/lib/theme";
+import { ACCENT, AccentKey, glassInputClass, glassInputStyle, gradientButtonStyle } from "@/lib/theme";
 import { downloadEntries, ExportColumn, ExportFormat, ExportMode } from "@/lib/export/downloadEntries";
 
 const DOCS_TABS = [
@@ -97,8 +95,6 @@ interface RagMessage { role: "user" | "assistant"; content: string; sources?: { 
 
 const primaryBtn =
   "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white whitespace-nowrap transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
-const ghostBtn =
-  "flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-white/70 hover:text-white whitespace-nowrap transition-all hover:scale-105 disabled:opacity-50 disabled:hover:scale-100";
 const cyanGradient = { background: "linear-gradient(135deg, #00D4FF 0%, #1D4ED8 100%)" };
 
 export default function DocumentsPage() {
@@ -129,11 +125,6 @@ export default function DocumentsPage() {
   const [storageFiles, setStorageFiles] = useState<any[]>([]);
   const [storageLoading, setStorageLoading] = useState(false);
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
-
-  // Quick financial extract
-  const [finExtractOpen, setFinExtractOpen] = useState(false);
-  const [finExtractLoading, setFinExtractLoading] = useState(false);
-  const [finExtractResult, setFinExtractResult] = useState<any>(null);
 
   // Download
   const [showDownload, setShowDownload] = useState(false);
@@ -271,25 +262,6 @@ export default function DocumentsPage() {
   const switchBucket = (bucket: "documents" | "blueprints") => {
     setStorageBucket(bucket);
     fetchStorage(bucket);
-  };
-
-  const handleFinExtractUpload = async (file: File) => {
-    setFinExtractLoading(true);
-    setFinExtractResult(null);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await axios.post(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/documents/extract-accounting`,
-        formData
-      );
-      setFinExtractResult(res.data);
-      toast.success("Financial data extracted!");
-    } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? "Failed to extract financial data");
-    } finally {
-      setFinExtractLoading(false);
-    }
   };
 
   const fmtBytes = (bytes?: number) => {
@@ -483,26 +455,6 @@ export default function DocumentsPage() {
                 accept=".pdf,.xlsx,.xls,.docx,.png,.jpg,.jpeg"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
               />
-              <button
-                className={ghostBtn}
-                style={glassButtonStyle}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setFinExtractOpen(true);
-                  document.getElementById("fin-extract-upload")?.click();
-                }}
-              >
-                {finExtractLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4 text-cyan-400" />}
-                Quick Financial Extract
-              </button>
-              <input
-                id="fin-extract-upload"
-                type="file"
-                className="hidden"
-                accept=".pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg,.csv,.txt"
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFinExtractUpload(f); }}
-              />
             </div>
           </div>
 
@@ -535,56 +487,6 @@ export default function DocumentsPage() {
             </div>
           </div>
 
-          {/* Quick Financial Extract result */}
-          {finExtractOpen && (
-            <div className="glass-card p-5" style={{ borderColor: ACCENT.cyan.border }}>
-              <div className="flex items-center gap-2 mb-3">
-                <Calculator className="w-4 h-4 text-cyan-400" />
-                <p className="text-sm font-medium text-white">Quick Financial Extract</p>
-                <button onClick={() => { setFinExtractOpen(false); setFinExtractResult(null); }} className="ml-auto text-white/40 hover:text-white">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              {finExtractLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
-                </div>
-              ) : finExtractResult ? (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs px-2.5 py-1 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-medium">
-                      {DOC_TYPE_LABEL[finExtractResult.document_class] ?? finExtractResult.document_class}
-                    </span>
-                    {finExtractResult.currency && <span className="text-xs text-white/35">{finExtractResult.currency}</span>}
-                  </div>
-                  {finExtractResult.summary && (
-                    <p className="text-xs text-white/40 leading-relaxed">{finExtractResult.summary}</p>
-                  )}
-                  {finExtractResult.key_figures?.length > 0 && (
-                    <div className="grid grid-cols-2 gap-2">
-                      {finExtractResult.key_figures.map((kf: any, i: number) => (
-                        <div key={i} className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.03)" }}>
-                          <p className="text-[10px] text-white/35 uppercase">{kf.label}</p>
-                          <p className="text-sm font-mono font-semibold text-white">
-                            {kf.suffix === "%" ? `${kf.value}%` : kf.value}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {finExtractResult.warnings?.length > 0 && (
-                    <div className="flex items-start gap-2 text-amber-400 text-xs bg-amber-500/8 border border-amber-500/20 rounded-xl px-3 py-2">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                      <div>{finExtractResult.warnings.join(" · ")}</div>
-                    </div>
-                  )}
-                  <a href="/accounting" className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 pt-1">
-                    Open full breakdown in Accounting Extract <ChevronRight className="w-3.5 h-3.5" />
-                  </a>
-                </div>
-              ) : null}
-            </div>
-          )}
         </motion.div>
 
         {/* Document Chat */}

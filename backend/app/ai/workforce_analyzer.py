@@ -1,7 +1,7 @@
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
-from app.ai.groq_client import analyze_document, instructor_client, _FAST_MODEL
+from app.ai.groq_client import analyze_document, instructor_chat
 
 logger = logging.getLogger("civilai.workforce")
 
@@ -45,11 +45,9 @@ class WorkforceRisk(BaseModel):
 def analyze_workforce(text: str) -> dict:
     analysis = analyze_document(text, WORKFORCE_PROMPT)
     try:
-        risk: WorkforceRisk = instructor_client.chat.completions.create(
-            model=_FAST_MODEL,
-            response_model=WorkforceRisk,
-            messages=[{"role": "user", "content": f"Extract workforce risk metrics from this data:\n{text[:3000]}"}],
-            max_retries=2,
+        risk: WorkforceRisk = instructor_chat(
+            WorkforceRisk,
+            [{"role": "user", "content": f"Extract workforce risk metrics from this data:\n{text[:3000]}"}],
         )
         risk_data = risk.model_dump()
     except Exception as exc:
@@ -72,21 +70,31 @@ class MembersList(BaseModel):
     members: list[ExtractedMember] = Field(default_factory=list)
 
 
+_MEMBER_EXTRACT_CHAR_BUDGET = 20000  # ~room for several hundred roster rows
+
+
+def _truncate_at_row_boundary(text: str, limit: int) -> str:
+    """Cut at the last newline before `limit` instead of mid-row, so a long
+    roster loses only its tail rows cleanly rather than a garbled partial row."""
+    if len(text) <= limit:
+        return text
+    cut = text.rfind("\n", 0, limit)
+    return text[:cut if cut > 0 else limit]
+
+
 def extract_team_members(text: str) -> list[dict]:
     try:
-        result: MembersList = instructor_client.chat.completions.create(
-            model=_FAST_MODEL,
-            response_model=MembersList,
-            messages=[{
+        result: MembersList = instructor_chat(
+            MembersList,
+            [{
                 "role": "user",
                 "content": (
                     "Extract every person / team member mentioned in this construction document. "
                     "For each person extract: full name, role/title, trade/discipline, email, phone, status. "
                     "If a field is not mentioned leave it blank. Only include real people, not generic labels.\n\n"
-                    f"{text[:5000]}"
+                    f"{_truncate_at_row_boundary(text, _MEMBER_EXTRACT_CHAR_BUDGET)}"
                 ),
             }],
-            max_retries=2,
         )
         return [m.model_dump() for m in result.members]
     except Exception as exc:

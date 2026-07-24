@@ -173,6 +173,7 @@ async def voice_chat_endpoint(
     # Optional live web search
     web_results: list[dict] = []
     web_ctx = ""
+    warnings: list[str] = []
     if web_search:
         search_query = build_search_query(clean_msg)
         try:
@@ -184,6 +185,8 @@ async def voice_chat_endpoint(
                 f"{i + 1}. {r['title']} — {r['snippet']}\n   URL: {r['url']}"
                 for i, r in enumerate(web_results)
             )
+        else:
+            warnings.append("Web search returned no results for this query.")
 
     try:
         response_text = get_copilot_response(clean_msg, history, extra_context=module_ctx, web_context=web_ctx)
@@ -204,6 +207,7 @@ async def voice_chat_endpoint(
         "response":   safe_response,
         "status":     "success",
         "sources":    filter_cited_sources(safe_response, web_results),
+        "warnings":   warnings,
     }
     if detected_wakeword:
         result["wakeword"] = detected_wakeword

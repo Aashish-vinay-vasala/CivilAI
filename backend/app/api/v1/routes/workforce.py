@@ -197,9 +197,18 @@ async def extract_members_route(file: UploadFile = File(...)):
         doc = process_document(file_bytes, file.filename)
         text = doc["extracted_text"]
         if not text:
-            raise HTTPException(status_code=400, detail="Could not extract text from file")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Could not extract text from this file. If it's a legacy "
+                    ".doc or .xls file, try re-saving as .docx/.xlsx, or upload "
+                    "as PDF, CSV, or an image instead."
+                ),
+            )
         members = extract_team_members(text)
         return {"status": "success", "extracted_members": members}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -21,6 +21,7 @@ export interface ChatResponse {
   session_id?: string;
   status?: string;
   sources?: Source[];
+  warnings?: string[];
 }
 
 export interface StreamChatResult {
@@ -29,6 +30,7 @@ export interface StreamChatResult {
   sessionId: string;
   sources?: Source[];
   toolSteps?: ToolStep[];
+  warnings?: string[];
 }
 
 interface StreamEvent {
@@ -39,6 +41,7 @@ interface StreamEvent {
   final?: string;
   session_id?: string;
   sources?: Source[];
+  warnings?: string[];
   tool_steps?: { tool: string; input?: Record<string, unknown>; output?: string }[];
   tool_start?: boolean;
   tool_end?: boolean;
@@ -114,6 +117,7 @@ export async function streamChat(
           toolSteps: (evt.tool_steps ?? []).map(s => ({
             tool: s.tool, input: s.input ?? {}, output: s.output ?? null, done: true,
           })),
+          warnings: evt.warnings,
         };
       }
     }
@@ -126,6 +130,7 @@ export interface VoiceChatResult {
   response: string;
   status: string;
   sources?: Source[];
+  warnings?: string[];
 }
 
 /** POSTs recorded audio to /api/v1/voice/voice-chat: STT → LLM (server-side session history) → text reply. */

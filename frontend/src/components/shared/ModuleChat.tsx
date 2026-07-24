@@ -618,7 +618,7 @@ export default function ModuleChat({
       );
       setMessages(prev => {
         const copy = [...prev];
-        copy[copy.length - 1] = { role: "assistant", content: result.text, sources: result.sources, toolSteps: result.toolSteps };
+        copy[copy.length - 1] = { role: "assistant", content: result.text, sources: result.sources, toolSteps: result.toolSteps, warnings: result.warnings };
         return copy;
       });
       if (autoSpeak && result.text) speak(result.text, `msg-${historyForRequest.length}`);
@@ -697,6 +697,7 @@ export default function ModuleChat({
         role: "assistant",
         content: response.response,
         sources: response.sources,
+        warnings: response.warnings,
       }]);
       if (autoSpeak && response.response) speak(response.response, `msg-${newMessages.length}`);
     } catch (err) {
@@ -769,11 +770,11 @@ export default function ModuleChat({
   const sendVoiceAudio = useCallback(async (blob: Blob) => {
     setVoiceState("processing");
     try {
-      const { transcript, response, sources } = await sendVoiceChat(blob, { sessionId, chatHistory: messages, webSearch });
+      const { transcript, response, sources, warnings } = await sendVoiceChat(blob, { sessionId, chatHistory: messages, webSearch });
       setMessages(prev => [
         ...prev,
         { role: "user", content: transcript },
-        { role: "assistant", content: response, sources },
+        { role: "assistant", content: response, sources, warnings },
       ]);
       speak(response, `msg-${messages.length + 1}`);
     } catch {
@@ -1379,6 +1380,10 @@ export default function ModuleChat({
                         );
                       })}
                     </div>
+
+                    {m.warnings && m.warnings.length > 0 && (
+                      <p className="text-[10px] text-amber-400/70">{m.warnings.join(" ")}</p>
+                    )}
 
                     {judgeResults[i] && (
                       <MiniJudgePanel

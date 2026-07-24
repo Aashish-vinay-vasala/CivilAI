@@ -30,18 +30,19 @@ from typing import Optional, Any
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
-from groq import Groq
-import instructor
 
-from app.config import settings
+from app.ai.groq_client import chat as _groq_chat, instructor_chat as _groq_instructor_chat
 
 logger = logging.getLogger("civilai.accounting_extractor")
 
-# ── Instructor-wrapped Groq client ─────────────────────────────────────────────
-
-_groq_raw = Groq(api_key=settings.GROQ_API_KEY)
-_client   = instructor.from_groq(_groq_raw, mode=instructor.Mode.JSON)
-_MODEL    = "llama-3.3-70b-versatile"
+# Classification/extraction go through groq_client's instructor_chat, which —
+# unlike a raw instructor.from_groq() client — rotates across all pooled Groq
+# keys and falls back to Gemini when every key is rate-limited/exhausted.
+# Without this, a single exhausted key made every call here fail silently
+# (caught, logged, empty dict returned) and the UI quietly degraded to the
+# generic "top N raw amounts labeled 'Amount'" fallback with no indication
+# anything had gone wrong.
+_MODEL = "llama-3.3-70b-versatile"
 
 
 # ── Pydantic models for structured extraction ──────────────────────────────────
@@ -357,6 +358,13 @@ for _canon, _aliases, _defn in _ACCOUNTING_TERMS:
     for _alias in _aliases:
         _TERM_INDEX[_alias.lower()] = (_canon, _defn)
 
+# Word-boundary pattern per alias — a plain substring check would let short
+# abbreviations like "vo" or "ld" match inside ordinary words ("invoice", "held").
+_TERM_PATTERNS: list[tuple[re.Pattern, str, str, str]] = [
+    (re.compile(r'\b' + re.escape(_alias) + r'\b', re.IGNORECASE), _alias, _canonical, _definition)
+    for _alias, (_canonical, _definition) in _TERM_INDEX.items()
+]
+
 GLOSSARY: list[dict] = [
     {"term": canon, "definition": defn, "aliases": aliases}
     for canon, aliases, defn in _ACCOUNTING_TERMS
@@ -380,6 +388,19 @@ _MONEY_CODE_RE = re.compile(
     r'(?P<code>USD|AUD|GBP|EUR|CAD|NZD|SGD|ZAR|INR|MYR|JPY|CNY|CHF|AED|SAR|NGN|KES|GHS)(?!\w)',
     re.IGNORECASE,
 )
+# D: Bare decimal total — no currency symbol/code/thousands-comma at all.
+# Common in CSV/spreadsheet exports and BOQ line items ("Grand Total | 73526.25")
+# where a per-row currency marker was never present. Requires >=3 digits before
+# the decimal point to stay clear of small unit rates ("45.00 per m3").
+_MONEY_BARE_RE = re.compile(
+    r'(?<![,\d.])(?P<n>\d{3,}\.\d{2})(?!\d)',
+)
+# Unit-of-measure suffixes that mean a bare decimal is a quantity/rate, not a total.
+_UNIT_SUFFIX_RE = re.compile(
+    r'^\s*(?:m2|m3|sq\s?m|sq\s?ft|cum|lm|kg|tonnes?|tons?|hrs?|hours?|pcs?|nos?\.?|'
+    r'units?|days?|litre?s?|liters?)\b',
+    re.IGNORECASE,
+)
 # D: Labeled amounts — "Total Due: $1,234"  "Net Amount: 5000.00"
 _LABELED_AMOUNT_RE = re.compile(
     r'(?P<label>(?:total|sub[\s\-]?total|amount\s*(?:due|paid|owed)?|'
@@ -388,11 +409,32 @@ _LABELED_AMOUNT_RE = re.compile(
     r'contract\s*(?:sum|value|price|amount)?|retention(?:\s+amount)?|advance\s*(?:payment)?|'
     r'deposit|contingency(?:\s+amount)?|provisional\s*sum|payment\s*(?:amount)?|'
     r'received|billed|quoted|budgeted?|expenditure|disbursement)'
+    r'(?:\s*\d+(?:\.\d+)?\s*%)?'  # skip an inline rate, e.g. "Contingency 5%", so the
+                                  # digits captured below are the amount, not the rate
     r'[^:\n\d$£€¥₹]{0,25}[:\s=]+)\s*'
     r'(?P<sym>[$£€¥₹])?\s*'
     r'(?P<n>\d[\d,]*(?:\.\d{1,4})?)',
     re.IGNORECASE | re.MULTILINE,
 )
+
+# Labels from _LABELED_AMOUNT_RE worth surfacing as a fallback key figure when
+# AI extraction yields nothing — deliberately excludes noisy/ambiguous matches
+# (e.g. a bare "received" or "quoted" with no amount qualifier) that wouldn't
+# be meaningfully better than the blind "Amount" dump they're replacing.
+_CANONICAL_KEY_FIGURE_LABELS = {
+    "total", "subtotal", "sub total", "sub-total",
+    "amount due", "amount paid", "amount owed",
+    "invoice total", "invoice amount", "invoice value",
+    "tax amount", "gst amount", "vat amount",
+    "net amount", "gross amount",
+    "balance due", "balance owing",
+    "outstanding amount",
+    "contract sum", "contract value", "contract price", "contract amount",
+    "retention amount", "retention",
+    "advance payment",
+    "deposit", "contingency amount", "contingency",
+    "provisional sum",
+}
 
 _PERCENT_RE = re.compile(
     r'(?P<value>\d+(?:\.\d{1,4})?)\s*%',
@@ -427,6 +469,20 @@ _DATE_RE = re.compile(
 )
 
 
+_SYMBOL_TO_CODE = {"$": "USD", "£": "GBP", "€": "EUR", "¥": "JPY", "₹": "INR"}
+
+# Look-around used to stop pattern B (bare comma-formatted numbers) from
+# re-capturing an amount already tied to a currency symbol/code by A or C —
+# without this, "$12,450.00" is reported twice: once as "USD 12450.00" and
+# again as an untagged "12450.00", i.e. every symbol-prefixed thousands
+# amount would show up as a duplicate row.
+_CUR_SYMBOL_PREFIX_RE = re.compile(r'[$£€¥₹]\s*$')
+_CUR_CODE_SUFFIX_RE   = re.compile(
+    r'^\s*(?:USD|AUD|GBP|EUR|CAD|NZD|SGD|ZAR|INR|MYR|JPY|CNY|CHF|AED|SAR|NGN|KES|GHS)\b',
+    re.IGNORECASE,
+)
+
+
 def _extract_amounts(text: str) -> list[dict]:
     """
     Extract monetary amounts via three focused patterns:
@@ -453,7 +509,8 @@ def _extract_amounts(text: str) -> list[dict]:
         # Skip bare year values (1900–2100) — common false positive
         if 1900.0 <= val <= 2100.0 and val == int(val) and not currency_hint:
             return
-        currency = (price.currency or currency_hint or "").upper()
+        raw_currency = price.currency or currency_hint or ""
+        currency = _SYMBOL_TO_CODE.get(raw_currency, raw_currency).upper()
         key = f"{currency}{val:.2f}"
         if key in seen_keys:
             return
@@ -468,14 +525,30 @@ def _extract_amounts(text: str) -> list[dict]:
         sym = m.group("sym")
         _add(sym + m.group("n"), m.start(), m.end(), sym)
 
-    # Pattern B: comma-formatted thousands (1,234,567.89)
+    # Pattern B: comma-formatted thousands (1,234,567.89) — skip ones already
+    # tagged by a currency symbol immediately before or a currency code right after.
     for m in _MONEY_FORMATTED_RE.finditer(text):
+        if _CUR_SYMBOL_PREFIX_RE.search(text[:m.start()]):
+            continue
+        if _CUR_CODE_SUFFIX_RE.match(text[m.end():]):
+            continue
         _add(m.group("n"), m.start(), m.end())
 
     # Pattern C: currency code suffix (1234.56 USD)
     for m in _MONEY_CODE_RE.finditer(text):
         code = m.group("code").upper()
         _add(m.group("n") + " " + code, m.start(), m.end(), code)
+
+    # Pattern D: bare decimal totals with no currency marker at all — skip ones
+    # already tagged by A/C, and ones immediately followed by a unit of measure.
+    for m in _MONEY_BARE_RE.finditer(text):
+        if _CUR_SYMBOL_PREFIX_RE.search(text[:m.start()]):
+            continue
+        if _CUR_CODE_SUFFIX_RE.match(text[m.end():]):
+            continue
+        if _UNIT_SUFFIX_RE.match(text[m.end():]):
+            continue
+        _add(m.group("n"), m.start(), m.end())
 
     results.sort(key=lambda x: x["value"], reverse=True)
     return results[:80]
@@ -513,7 +586,15 @@ def _extract_percentages(text: str) -> list[dict]:
 
 
 def _extract_references(text: str) -> list[str]:
-    return list({m.group(0).upper() for m in _REF_RE.finditer(text)})
+    # A real reference code (PO-12345, INV#2025-099, CO-004, …) always contains
+    # a digit. Without this check, the case-insensitive prefix match (PO, CO,
+    # SO, DO, MO, …) also matches plain English words — "Concrete",
+    # "Contingency", "Portion" — and reports them as reference numbers.
+    return list({
+        m.group(0).upper()
+        for m in _REF_RE.finditer(text)
+        if any(ch.isdigit() for ch in m.group(0))
+    })
 
 
 def _extract_dates(text: str) -> list[str]:
@@ -645,20 +726,22 @@ def _compute_quality_score(doc_class: str, structured: dict, amounts: list[dict]
 
 
 def _find_accounting_terms(text: str) -> list[dict]:
-    lower = text.lower()
     found: dict[str, dict] = {}
-    for alias, (canonical, definition) in _TERM_INDEX.items():
-        if alias in lower and canonical not in found:
-            idx   = lower.index(alias)
-            start = max(0, idx - 60)
-            end   = min(len(text), idx + len(alias) + 60)
-            ctx   = text[start:end].replace("\n", " ").strip()
-            found[canonical] = {
-                "term":        canonical,
-                "definition":  definition,
-                "context":     ctx,
-                "alias_found": alias,
-            }
+    for pattern, alias, canonical, definition in _TERM_PATTERNS:
+        if canonical in found:
+            continue
+        m = pattern.search(text)
+        if not m:
+            continue
+        start = max(0, m.start() - 60)
+        end   = min(len(text), m.end() + 60)
+        ctx   = text[start:end].replace("\n", " ").strip()
+        found[canonical] = {
+            "term":        canonical,
+            "definition":  definition,
+            "context":     ctx,
+            "alias_found": alias,
+        }
     return list(found.values())
 
 
@@ -701,65 +784,46 @@ def _try_invoice2data(file_bytes: bytes, filename: str) -> Optional[dict]:
 # ── AI structured extraction via instructor ────────────────────────────────────
 
 def _classify(text: str, filename: str) -> DocClassification:
-    try:
-        return _client.chat.completions.create(
-            model=_MODEL,
-            response_model=DocClassification,
-            messages=[
-                {"role": "system", "content":
-                 "Classify this construction financial document. "
-                 "doc_class must be one of: invoice, financial_statement, boq, purchase_order, contract, general."},
-                {"role": "user", "content": f"Filename: {filename}\n\n{text[:3000]}"},
-            ],
-            max_tokens=150,
-            temperature=0,
-        )
-    except Exception as exc:
-        logger.error("classify error: %s", exc)
-        return DocClassification(
-            doc_class="general", doc_subtype="general",
-            currency="", period="", confidence=0.5,
-        )
+    # No try/except here — a failure (even after groq_client's key rotation and
+    # Gemini fallback both give up) must propagate to extract_accounting_data(),
+    # which turns it into a visible warning instead of a silently-faked result.
+    return _groq_instructor_chat(
+        DocClassification,
+        [
+            {"role": "system", "content":
+             "Classify this construction financial document. "
+             "doc_class must be one of: invoice, financial_statement, boq, purchase_order, contract, general."},
+            {"role": "user", "content": f"Filename: {filename}\n\n{text[:3000]}"},
+        ],
+        model=_MODEL,
+    )
 
 
 def _ai_extract(text: str, doc_class: str) -> dict:
     model_cls = _SCHEMA_MAP.get(doc_class, GeneralData)
     system    = _EXTRACT_SYSTEM.get(doc_class, _EXTRACT_SYSTEM["general"])
-    try:
-        result: BaseModel = _client.chat.completions.create(
-            model=_MODEL,
-            response_model=model_cls,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": text[:12000]},
-            ],
-            max_tokens=2048,
-            temperature=0.1,
-        )
-        return result.model_dump(exclude_none=True, by_alias=False)
-    except Exception as exc:
-        logger.error("ai_extract error (%s): %s", doc_class, exc)
-        return {}
+    result: BaseModel = _groq_instructor_chat(
+        model_cls,
+        [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": text[:12000]},
+        ],
+        model=_MODEL,
+    )
+    return result.model_dump(exclude_none=True, by_alias=False)
 
 
 def _summarise(text: str, doc_class: str) -> str:
-    try:
-        from app.ai.groq_client import client as raw_groq
-        resp = raw_groq.chat.completions.create(
-            model=_MODEL,
-            messages=[
-                {"role": "system", "content":
-                 "You are a construction financial analyst. In 2-3 sentences, summarise the key financial "
-                 "facts: amounts, parties, dates, and notable terms. Be specific."},
-                {"role": "user", "content": f"Document type: {doc_class}\n\n{text[:4000]}"},
-            ],
-            max_tokens=200,
-            temperature=0.3,
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception as exc:
-        logger.error("summarise error: %s", exc)
-        return ""
+    content = _groq_chat(
+        [
+            {"role": "system", "content":
+             "You are a construction financial analyst. In 2-3 sentences, summarise the key financial "
+             "facts: amounts, parties, dates, and notable terms. Be specific."},
+            {"role": "user", "content": f"Document type: {doc_class}\n\n{text[:4000]}"},
+        ],
+        model=_MODEL,
+    )
+    return (content or "").strip()
 
 
 # ── Key figure derivation ──────────────────────────────────────────────────────
@@ -805,6 +869,16 @@ def _derive_key_figures(doc_class: str, structured: dict) -> list[dict]:
             add("LD Rate", structured["liquidated_damages_rate"],
                 suffix=f"/{structured.get('liquidated_damages_unit', 'day')}",
                 currency=structured.get("currency", ""))
+    elif doc_class == "general":
+        # GeneralData.key_figures is exactly what the AI was prompted and
+        # schema'd to fill for anything that doesn't fit the five named doc
+        # classes — without this branch those figures were extracted but
+        # never read, so every "general" document fell straight to the
+        # generic "top N raw amounts" fallback even when the AI succeeded.
+        for kf in structured.get("key_figures") or []:
+            if isinstance(kf, dict):
+                add(kf.get("label") or "Amount", kf.get("value"),
+                    currency=kf.get("currency") or "")
 
     return figures
 
@@ -1611,7 +1685,17 @@ def extract_accounting_data(
         i2d_result = _try_invoice2data(file_bytes, filename)
 
     # ── Step 2: classify ───────────────────────────────────────────────────────
-    cls         = _classify(text, filename)
+    try:
+        cls = _classify(text, filename)
+    except Exception as exc:
+        logger.error("classify failed (all Groq keys + Gemini fallback exhausted): %s", exc)
+        warnings.append(
+            "AI document classification is temporarily unavailable — this document "
+            "could not be identified as a specific type, so the fields below are "
+            "based on regex extraction only and may be incomplete."
+        )
+        cls = DocClassification(doc_class="general", doc_subtype="general",
+                                 currency="", period="", confidence=0.0)
     doc_class   = cls.doc_class if cls.doc_class in _SCHEMA_MAP else "general"
     doc_subtype = cls.doc_subtype
     currency    = cls.currency
@@ -1628,7 +1712,24 @@ def extract_accounting_data(
     payment_schedule = _extract_payment_schedule(text)
 
     # ── Step 4: AI structured extraction ──────────────────────────────────────
-    structured = _ai_extract(text, doc_class)
+    try:
+        structured = _ai_extract(text, doc_class)
+        ai_extract_failed = False
+    except Exception as exc:
+        logger.error("ai_extract failed (all Groq keys + Gemini fallback exhausted) (%s): %s", doc_class, exc)
+        warnings.append(
+            "AI structured field extraction is temporarily unavailable — line items, "
+            "totals, and parties below were not verified. Showing raw detected amounts "
+            "and regex-matched labels only."
+        )
+        structured = {}
+        ai_extract_failed = True
+
+    if ai_extract_failed:
+        # Structured extraction is the main signal for confidence — a classifier
+        # that guessed "invoice" with 0.9 confidence but then failed to extract
+        # a single field shouldn't still display as a 90%-confidence result.
+        confidence = min(confidence, 0.3)
 
     # Merge invoice2data result if AI missed key invoice fields
     if i2d_result and doc_class == "invoice":
@@ -1637,18 +1738,41 @@ def extract_accounting_data(
                 structured[field] = i2d_result[field]
 
     # ── Step 5: summary ────────────────────────────────────────────────────────
-    summary = _summarise(text, doc_class)
+    try:
+        summary = _summarise(text, doc_class)
+    except Exception as exc:
+        logger.error("summarise failed (all Groq keys + Gemini fallback exhausted): %s", exc)
+        summary = ""
 
     # ── Step 6: key figures banner ─────────────────────────────────────────────
     key_figures = _derive_key_figures(doc_class, structured)
-    if not key_figures and amounts:
-        for a in amounts[:4]:
-            key_figures.append({
-                "label":    "Amount",
-                "value":    a["value"],
-                "currency": a["currency"],
-                "suffix":   "",
-            })
+    if not key_figures:
+        # AI didn't yield doc-specific totals (classification/extraction failure,
+        # or a doc_class this schema doesn't cover). Prefer regex-labeled amounts
+        # with a recognisable financial label ("Grand Total: 73,526.25") over a
+        # blind dump of the largest numbers under a meaningless "Amount" label.
+        seen_vals: set[float] = set()
+        for la in labeled_amounts:
+            # Strip table-cell artifacts ("subtotal | | |") and an inline rate
+            # ("contingency 5%") so what's left matches the canonical set exactly.
+            clean_label = la["label"].split("|")[0].strip().lower()
+            clean_label = re.sub(r'\s*\d+(?:\.\d+)?\s*%\s*$', '', clean_label).strip()
+            if clean_label in _CANONICAL_KEY_FIGURE_LABELS and la["value"] not in seen_vals:
+                seen_vals.add(la["value"])
+                key_figures.append({
+                    "label":    clean_label.title(),
+                    "value":    la["value"],
+                    "currency": la["currency"],
+                    "suffix":   "",
+                })
+        if not key_figures and amounts:
+            for a in amounts[:4]:
+                key_figures.append({
+                    "label":    "Amount",
+                    "value":    a["value"],
+                    "currency": a["currency"],
+                    "suffix":   "",
+                })
 
     # ── Step 7: anomaly detection ──────────────────────────────────────────────
     anomalies = _detect_anomalies(doc_class, structured, amounts)

@@ -189,11 +189,15 @@ function EditableCell({
   placeholder,
   onSave,
   type = "text",
+  renderValue,
+  forceEditing = false,
 }: {
   value?: string;
   placeholder?: string;
   onSave: (val: string) => Promise<void>;
   type?: string;
+  renderValue?: (value: string) => React.ReactNode;
+  forceEditing?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -213,6 +217,14 @@ function EditableCell({
       setEditing(false);
     }
   };
+
+  // Driven by the row-level "Edit" button: open every cell in the row at once,
+  // and commit whatever's in progress when the user hits "Done".
+  useEffect(() => {
+    if (forceEditing) setEditing(true);
+    else if (editing) commit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forceEditing]);
 
   if (editing) {
     return (
@@ -242,7 +254,9 @@ function EditableCell({
       title="Click to edit"
     >
       {value ? (
-        <span className="text-white/50 group-hover:text-white transition-colors truncate">{value}</span>
+        renderValue ? renderValue(value) : (
+          <span className="text-white/50 group-hover:text-white transition-colors truncate">{value}</span>
+        )
       ) : (
         <span className="text-white/25 italic text-xs">{placeholder ?? "click to add"}</span>
       )}
@@ -448,6 +462,8 @@ export default function ProjectsPage() {
   const [extractedMembers, setExtractedMembers] = useState<ExtractedMember[]>([]);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [addingMember, setAddingMember] = useState<string | null>(null);
+  const [deletingMember, setDeletingMember] = useState<string | null>(null);
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const memberFileRef = useRef<HTMLInputElement>(null);
 
   const [showNewProject, setShowNewProject] = useState(false);
@@ -584,8 +600,9 @@ export default function ProjectsPage() {
       } else {
         toast.info("No team members found in the document.");
       }
-    } catch {
-      toast.error("Failed to extract members from file");
+    } catch (err) {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
+      toast.error(typeof detail === "string" ? detail : "Failed to extract members from file");
     } finally {
       setUploadLoading(false);
     }
@@ -627,6 +644,28 @@ export default function ProjectsPage() {
     await axios.patch(`${API}/api/v1/workforce/workers/${memberId}`, { [field]: value });
     setTeam((prev) => prev.map((m) => m.id === memberId ? { ...m, [field]: value } : m));
     toast.success("Updated");
+  };
+
+  const deleteMember = async (memberId: string, name: string) => {
+    setDeletingMember(memberId);
+    try {
+      await axios.delete(`${API}/api/v1/workforce/workers/${memberId}`);
+      setTeam((prev) => prev.filter((m) => m.id !== memberId));
+      toast.success(`${name} removed from project team`);
+    } catch {
+      toast.error(`Failed to remove ${name}`);
+    } finally {
+      setDeletingMember(null);
+    }
+  };
+
+  // Edit/discard a single row in the "found in document" preview, before it's added
+  const updateExtractedMember = (idx: number, field: keyof ExtractedMember, value: string) => {
+    setExtractedMembers((prev) => prev.map((m, i) => i === idx ? { ...m, [field]: value } : m));
+  };
+
+  const removeExtractedMember = (idx: number) => {
+    setExtractedMembers((prev) => prev.filter((_, i) => i !== idx));
   };
 
   const handleCreateProject = async () => {
@@ -928,25 +967,57 @@ export default function ProjectsPage() {
                         className="flex items-center gap-3 p-3 rounded-xl"
                         style={{ background: "rgba(255,255,255,0.03)" }}
                       >
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-white truncate">{m.name}</p>
-                          <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-medium">{m.role}</span>
-                            {m.trade && <span className="text-xs text-white/35">{m.trade}</span>}
-                            {m.email && <span className="text-xs text-white/35">{m.email}</span>}
-                            {m.phone && <span className="text-xs text-white/35">{m.phone}</span>}
-                          </div>
+                        <div className="flex-1 min-w-0 grid grid-cols-2 sm:grid-cols-5 gap-x-3 gap-y-1">
+                          <EditableCell
+                            value={m.name}
+                            placeholder="name"
+                            onSave={async (v) => updateExtractedMember(idx, "name", v)}
+                            renderValue={(v) => <span className="text-sm font-medium text-white truncate">{v}</span>}
+                          />
+                          <EditableCell
+                            value={m.role}
+                            placeholder="role"
+                            onSave={async (v) => updateExtractedMember(idx, "role", v)}
+                            renderValue={(v) => (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-medium truncate">{v}</span>
+                            )}
+                          />
+                          <EditableCell
+                            value={m.trade}
+                            placeholder="trade"
+                            onSave={async (v) => updateExtractedMember(idx, "trade", v)}
+                          />
+                          <EditableCell
+                            value={m.email}
+                            placeholder="email"
+                            type="email"
+                            onSave={async (v) => updateExtractedMember(idx, "email", v)}
+                          />
+                          <EditableCell
+                            value={m.phone}
+                            placeholder="phone"
+                            onSave={async (v) => updateExtractedMember(idx, "phone", v)}
+                          />
                         </div>
-                        <button
-                          onClick={() => addExtractedMember(m, idx)}
-                          disabled={addingMember === String(idx) || addingMember === "all"}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors disabled:opacity-60 shrink-0"
-                        >
-                          {addingMember === String(idx)
-                            ? <Loader2 className="w-3 h-3 animate-spin" />
-                            : <Plus className="w-3 h-3" />}
-                          Add
-                        </button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={() => addExtractedMember(m, idx)}
+                            disabled={addingMember === String(idx) || addingMember === "all"}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors disabled:opacity-60 shrink-0"
+                          >
+                            {addingMember === String(idx)
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : <Plus className="w-3 h-3" />}
+                            Add
+                          </button>
+                          <button
+                            onClick={() => removeExtractedMember(idx)}
+                            title="Discard this entry"
+                            className="p-1.5 rounded-lg text-white/40 hover:text-red-400 hover:bg-white/5 transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -985,28 +1056,46 @@ export default function ProjectsPage() {
                       className="text-white/35 text-xs uppercase tracking-wider"
                       style={{ background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.07)" }}
                     >
-                      <th className="px-5 py-3 text-left font-semibold">Role</th>
-                      <th className="px-5 py-3 text-left font-semibold">Name</th>
+                      <th className="px-5 py-3 text-left font-semibold">Role <span className="normal-case text-[10px] opacity-60">✎ editable</span></th>
+                      <th className="px-5 py-3 text-left font-semibold">Name <span className="normal-case text-[10px] opacity-60">✎ editable</span></th>
                       <th className="px-5 py-3 text-left font-semibold">Email <span className="normal-case text-[10px] opacity-60">✎ editable</span></th>
                       <th className="px-5 py-3 text-left font-semibold">Mobile <span className="normal-case text-[10px] opacity-60">✎ editable</span></th>
-                      <th className="px-5 py-3 text-left font-semibold">Status</th>
+                      <th className="px-5 py-3 text-left font-semibold">Status <span className="normal-case text-[10px] opacity-60">✎ editable</span></th>
+                      <th className="px-5 py-3 text-right font-semibold">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/6">
                     {team.map((m) => (
                       <tr key={m.id} className="hover:bg-white/2 transition-colors">
-                        <td className="px-5 py-3">
-                          <span className="inline-flex px-2 py-0.5 rounded-md bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-cyan-500/20 whitespace-nowrap">
-                            {m.role}
-                          </span>
+                        <td className="px-5 py-3 min-w-28">
+                          <EditableCell
+                            value={m.role}
+                            placeholder="add role"
+                            onSave={(val) => patchMember(m.id, "role", val)}
+                            forceEditing={editingRowId === m.id}
+                            renderValue={(v) => (
+                              <span className="inline-flex px-2 py-0.5 rounded-md bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-cyan-500/20 whitespace-nowrap">
+                                {v}
+                              </span>
+                            )}
+                          />
                         </td>
-                        <td className="px-5 py-3 font-medium text-white whitespace-nowrap">{m.name}</td>
+                        <td className="px-5 py-3 min-w-32">
+                          <EditableCell
+                            value={m.name}
+                            placeholder="add name"
+                            onSave={(val) => patchMember(m.id, "name", val)}
+                            forceEditing={editingRowId === m.id}
+                            renderValue={(v) => <span className="font-medium text-white whitespace-nowrap">{v}</span>}
+                          />
+                        </td>
                         <td className="px-5 py-3 min-w-40">
                           <EditableCell
                             value={m.email}
                             placeholder="add email"
                             type="email"
                             onSave={(val) => patchMember(m.id, "email", val)}
+                            forceEditing={editingRowId === m.id}
                           />
                         </td>
                         <td className="px-5 py-3 min-w-36">
@@ -1014,10 +1103,42 @@ export default function ProjectsPage() {
                             value={m.phone}
                             placeholder="add mobile"
                             onSave={(val) => patchMember(m.id, "phone", val)}
+                            forceEditing={editingRowId === m.id}
                           />
                         </td>
                         <td className="px-5 py-3">
-                          <StatusBadge status={m.status} />
+                          <select
+                            value={m.status ?? "active"}
+                            onChange={(e) => patchMember(m.id, "status", e.target.value)}
+                            className="text-xs font-medium rounded-md px-1.5 py-0.5 outline-none cursor-pointer bg-transparent border border-white/10 text-white/70 hover:border-white/25 transition-colors capitalize"
+                          >
+                            <option value="active" className="bg-[#0b1220] text-white">active</option>
+                            <option value="onleave" className="bg-[#0b1220] text-white">onleave</option>
+                            <option value="inactive" className="bg-[#0b1220] text-white">inactive</option>
+                          </select>
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => setEditingRowId((id) => (id === m.id ? null : m.id))}
+                              title={editingRowId === m.id ? "Done editing" : "Edit team member"}
+                              className="p-1.5 rounded-lg hover:bg-cyan-500/10 transition-colors"
+                            >
+                              {editingRowId === m.id
+                                ? <CheckIcon className="w-3.5 h-3.5 text-cyan-400" />
+                                : <Pencil className="w-3.5 h-3.5 text-cyan-400" />}
+                            </button>
+                            <button
+                              onClick={() => deleteMember(m.id, m.name)}
+                              disabled={deletingMember === m.id}
+                              title="Remove from project team"
+                              className="p-1.5 rounded-lg hover:bg-red-500/10 transition-colors disabled:opacity-60"
+                            >
+                              {deletingMember === m.id
+                                ? <Loader2 className="w-3.5 h-3.5 text-red-400 animate-spin" />
+                                : <Trash2 className="w-3.5 h-3.5 text-red-400" />}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

@@ -17,6 +17,7 @@ export interface ChatMessage {
   content: string;
   sources?: ChatSource[];
   toolSteps?: ChatToolStep[];
+  warnings?: string[];
 }
 
 // Shared with the AI Copilot page (frontend/src/app/(dashboard)/copilot/page.tsx),

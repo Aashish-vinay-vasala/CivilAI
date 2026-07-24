@@ -15,7 +15,6 @@ from app.services.storage_service import (
     get_content_type,
 )
 from app.ai.groq_client import client as groq_client
-from app.ai.accounting_extractor import extract_accounting_data
 from app.ai.llama_rag import rag_answer
 from typing import Optional
 
@@ -223,72 +222,3 @@ async def ask_documents(payload: AskPayload):
         return {"answer": answer, "sources": sources[:5], "engine": "groq-direct"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/extract-accounting")
-async def extract_accounting_route(
-    file:       UploadFile = File(...),
-    project_id: Optional[str] = Form(None),
-):
-    """
-    Upload any financial document (invoice, BOQ, P&L, contract, PO, etc.)
-    and receive structured accounting data:
-    - Document classification and key figures
-    - All monetary amounts and percentages extracted by regex
-    - AI-structured fields (line items, totals, parties, dates)
-    - Anomaly detection (math errors, duplicate amounts, overruns)
-    - Cross-module DB enrichment when project_id is supplied
-    - Accounting glossary terms found with definitions
-    """
-    allowed_exts = {"pdf", "xlsx", "xls", "docx", "doc", "png", "jpg", "jpeg", "csv", "txt"}
-    filename = file.filename or "document"
-    ext = filename.rsplit(".", 1)[-1].lower()
-
-    if ext not in allowed_exts:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '.{ext}'. Allowed: {', '.join(sorted(allowed_exts))}",
-        )
-
-    file_bytes = await file.read()
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
-    if ext == "csv":
-        try:
-            import io
-            import csv as _csv
-            text   = file_bytes.decode("utf-8-sig", errors="replace")
-            reader = _csv.reader(io.StringIO(text))
-            extracted_text = "\n".join(" | ".join(row) for row in reader)
-        except Exception as e:
-            logger.error("CSV parse failed for %s: %s", filename, e)
-            raise HTTPException(status_code=400, detail="CSV parse failed")
-    elif ext == "txt":
-        extracted_text = file_bytes.decode("utf-8", errors="replace")
-    else:
-        try:
-            doc            = process_document(file_bytes, filename)
-            extracted_text = doc.get("extracted_text", "")
-        except Exception as e:
-            logger.error("document processing failed for %s: %s", filename, e)
-            raise HTTPException(status_code=500, detail="Document processing failed")
-
-    if not extracted_text or not extracted_text.strip():
-        raise HTTPException(
-            status_code=422,
-            detail="Could not extract text from this file. Try a text-based PDF or DOCX.",
-        )
-
-    try:
-        result = extract_accounting_data(
-            text=extracted_text,
-            filename=filename,
-            file_bytes=file_bytes,
-            project_id=project_id,
-        )
-    except Exception as e:
-        logger.error("accounting extraction failed for %s: %s", filename, e)
-        raise HTTPException(status_code=500, detail="Accounting extraction failed")
-
-    return {"status": "success", "filename": filename, **result}

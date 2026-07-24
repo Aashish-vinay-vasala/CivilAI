@@ -58,6 +58,7 @@ interface Message {
   followUp?:   string;
   sources?:    Source[];
   toolSteps?:  ToolStep[];
+  warnings?:   string[];
 }
 
 type VoiceState = "idle" | "recording" | "processing" | "speaking";
@@ -226,6 +227,9 @@ function Bubble({ msg, onFollowUp, onNavigate, onJudge, judging, verdict }: Bubb
               </a>
             ))}
           </div>
+        )}
+        {!isUser && msg.warnings && msg.warnings.length > 0 && (
+          <p className="text-[10px] pl-1 text-amber-400/70">{msg.warnings.join(" ")}</p>
         )}
         {!isUser && (msg.domain || msg.confidence !== undefined) && (
           <div className="flex items-center gap-2 flex-wrap pl-1">
@@ -430,7 +434,7 @@ export default function CopilotPage() {
         const data = await uploadFileChat(fileToSend, msg, sessionId, webSearch);
         setMessages((prev) => [...prev, {
           id: crypto.randomUUID(), role: "assistant", content: data.response,
-          timestamp: new Date().toLocaleTimeString(), sources: data.sources,
+          timestamp: new Date().toLocaleTimeString(), sources: data.sources, warnings: data.warnings,
         }]);
         setMsgCount((c) => c + 1);
         return;
@@ -440,7 +444,7 @@ export default function CopilotPage() {
         const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? ""}/api/v1/copilot/structured`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ message: msg, session_id: sessionId }),
+          body:    JSON.stringify({ message: msg, session_id: sessionId, web_search: webSearch }),
         });
         const data = await res.json();
         setMessages((prev) => [...prev, {
@@ -451,6 +455,8 @@ export default function CopilotPage() {
           confidence: data.confidence,
           domain:     data.domain,
           followUp:   data.follow_up ?? undefined,
+          sources:    data.sources,
+          warnings:   data.warnings,
         }]);
         setMsgCount((c) => c + 1);
         return;
@@ -483,7 +489,7 @@ export default function CopilotPage() {
       );
       setMessages((prev) => {
         const copy = [...prev];
-        copy[copy.length - 1] = { ...copy[copy.length - 1], content: result.text, sources: result.sources, toolSteps: result.toolSteps };
+        copy[copy.length - 1] = { ...copy[copy.length - 1], content: result.text, sources: result.sources, toolSteps: result.toolSteps, warnings: result.warnings };
         return copy;
       });
       setMsgCount((c) => c + 1);
@@ -564,11 +570,11 @@ export default function CopilotPage() {
   const handleVoiceStop = useCallback(async (blob: Blob) => {
     setVoiceState("processing");
     try {
-      const { transcript, response, sources } = await sendVoiceChat(blob, { sessionId, chatHistory: [], webSearch });
+      const { transcript, response, sources, warnings } = await sendVoiceChat(blob, { sessionId, chatHistory: [], webSearch });
       setMessages((prev) => [
         ...prev,
         { id: crypto.randomUUID(), role: "user", content: transcript, timestamp: new Date().toLocaleTimeString() },
-        { id: crypto.randomUUID(), role: "assistant", content: response, timestamp: new Date().toLocaleTimeString(), sources },
+        { id: crypto.randomUUID(), role: "assistant", content: response, timestamp: new Date().toLocaleTimeString(), sources, warnings },
       ]);
       setMsgCount((c) => c + 1);
       speakReply(response);

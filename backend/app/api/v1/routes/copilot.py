@@ -134,6 +134,8 @@ async def chat_with_copilot(
                     f"{i + 1}. {r['title']} — {r['snippet']}\n   URL: {r['url']}"
                     for i, r in enumerate(web_results)
                 )
+            else:
+                warnings.append("Web search returned no results for this query.")
 
         # ── Layer 4: main LLM call — LangGraph tool-calling agent ────────────
         try:
@@ -256,6 +258,7 @@ async def chat_with_copilot_stream(
 
     web_results: list[dict] = []
     web_ctx = ""
+    web_search_warning = ""
     if payload.web_search:
         search_query = build_search_query(clean_message)
         try:
@@ -267,6 +270,8 @@ async def chat_with_copilot_stream(
                 f"{i + 1}. {r['title']} — {r['snippet']}\n   URL: {r['url']}"
                 for i, r in enumerate(web_results)
             )
+        else:
+            web_search_warning = "Web search returned no results for this query."
 
     async def event_stream():
         full_text = ""
@@ -322,6 +327,7 @@ async def chat_with_copilot_stream(
             "session_id": session_id,
             "sources": sources,
             "tool_steps": tool_steps,
+            "warnings": [web_search_warning] if web_search_warning else [],
         })
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
@@ -347,12 +353,35 @@ async def structured_chat(payload: ChatMessage):
     session_id = payload.session_id.strip() or f"copilot_{int(time.time() * 1000)}"
     history = get_history(session_id)
 
-    result = await pydantic_chat(clean_message, history)
+    # ── Optional live web search — same behaviour as /chat and /chat/stream ─────
+    web_results: list[dict] = []
+    web_ctx = ""
+    warnings: list[str] = []
+    if payload.web_search:
+        search_query = build_search_query(clean_message)
+        try:
+            web_results = await asyncio.to_thread(search_web, search_query)
+        except Exception:
+            web_results = []
+        if web_results:
+            web_ctx = "\n".join(
+                f"{i + 1}. {r['title']} — {r['snippet']}\n   URL: {r['url']}"
+                for i, r in enumerate(web_results)
+            )
+        else:
+            warnings.append("Web search returned no results for this query.")
+
+    result = await pydantic_chat(clean_message, history, web_ctx)
 
     add_message(session_id, "user", payload.message)
     add_message(session_id, "assistant", result.answer)
 
-    return {"status": "success", "session_id": session_id, **result.model_dump()}
+    sources = filter_cited_sources(result.answer, web_results)
+
+    return {
+        "status": "success", "session_id": session_id, "warnings": warnings, "sources": sources,
+        **result.model_dump(),
+    }
 
 
 @router.delete("/session/{session_id}")

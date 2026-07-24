@@ -9,7 +9,7 @@ import {
   ClipboardCheck, ChevronRight, LayoutDashboard, Database,
   Scale, TrendingUp, TrendingDown, Clock, RefreshCw,
   Copy, Trash2, AlertTriangle, Link2, Download,
-  PieChart, Search, Sparkles, Type, FileSignature,
+  Search, Sparkles, Type, FileSignature,
   type LucideIcon,
 } from "lucide-react";
 import axios from "axios";
@@ -29,12 +29,7 @@ const DOCS_TABS = [
 ];
 
 const SUB_TABS = [
-  { id: "extract",   label: "Extract",    icon: Calculator },
-  { id: "dashboard", label: "Dashboard",  icon: LayoutDashboard },
-  { id: "summary",   label: "Summary",    icon: PieChart },
-  { id: "reports",   label: "AI Reports", icon: Sparkles },
-  { id: "records",   label: "Records",    icon: Database },
-  { id: "reconcile", label: "Reconcile",  icon: Scale },
+  { id: "workspace", label: "Accounting", icon: Calculator },
   { id: "glossary",  label: "Glossary",   icon: BookOpen },
 ] as const;
 type SubTab = typeof SUB_TABS[number]["id"];
@@ -387,12 +382,16 @@ function ProjectSelect({ projects, value, onChange }: {
       className="px-3 py-2 rounded-xl text-[13px] text-white/70 outline-none"
       style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
     >
+      {/* Lets Overview show its all-projects aggregate and Records show
+          standalone (unlinked) extractions — without this there is no way
+          back to that view once a project auto-selects on load. */}
+      <option value="">All Projects</option>
       {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
     </select>
   );
 }
 
-// ── Dashboard tab ─────────────────────────────────────────────────────────────
+// ── Overview tab (merged Dashboard + Summary — one KPI source of truth) ────────
 
 interface DashboardKPIs {
   total_invoiced: number; total_received: number; total_pending: number; total_overdue: number;
@@ -404,17 +403,49 @@ interface EVMSnapshot { cpi: number; spi: number; eac: number; bac: number; snap
 interface RecentExtraction { id: string; filename: string; doc_class: string; confidence: number; anomaly_count: number; created_at: string }
 interface DashboardData { kpis: DashboardKPIs; evm: EVMSnapshot | null; recent_extractions: RecentExtraction[] }
 
-function AccountingDashboardTab({ projectId }: { projectId: string }) {
+type AccountingModuleData = Record<string, number>;
+interface ProjectSummaryData {
+  project_id: string;
+  modules: Record<string, AccountingModuleData>;
+}
+
+const OVERVIEW_MODULE_CARDS: { key: string; label: string; icon: LucideIcon }[] = [
+  { key: "budget", label: "Budget Items", icon: Building2 },
+  { key: "contracts", label: "Contracts", icon: FileSignature },
+  { key: "cost_entries", label: "Cost Entries", icon: TrendingDown },
+  { key: "purchase_orders", label: "Purchase Orders", icon: ClipboardCheck },
+];
+
+function AccountingOverviewTab({ projectId }: { projectId: string }) {
   const [data, setData]       = useState<DashboardData | null>(null);
+  const [summary, setSummary] = useState<ProjectSummaryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState("");
 
+  // This tab fetches unconditionally on mount (unlike the project-gated tabs
+  // below), so the very first call — fired before the parent has resolved its
+  // default project — is still in flight when projectId changes and a second,
+  // correct call goes out. Without this guard the stale mount-time response
+  // can resolve second and silently overwrite the project-scoped data (e.g.
+  // wiping the module breakdown back to the all-projects aggregate).
+  const requestId = useRef(0);
+
   const load = useCallback(() => {
+    const id = ++requestId.current;
     setLoading(true); setError("");
-    axios.get(`${API}/api/v1/accounting/dashboard`, { params: projectId ? { project_id: projectId } : {} })
-      .then((res) => setData(res.data))
-      .catch(() => setError("Could not load financial dashboard"))
-      .finally(() => setLoading(false));
+    Promise.all([
+      axios.get(`${API}/api/v1/accounting/dashboard`, { params: projectId ? { project_id: projectId } : {} }),
+      // Per-module breakdown only makes sense once a project is selected —
+      // the KPI grid above already covers the all-projects aggregate.
+      projectId ? axios.get(`${API}/api/v1/accounting/summary/${projectId}`) : Promise.resolve(null),
+    ])
+      .then(([dashRes, summaryRes]) => {
+        if (id !== requestId.current) return; // a newer request already landed
+        setData(dashRes.data);
+        setSummary(summaryRes ? summaryRes.data : null);
+      })
+      .catch(() => { if (id === requestId.current) setError("Could not load financial overview"); })
+      .finally(() => { if (id === requestId.current) setLoading(false); });
   }, [projectId]);
 
   // Fetch-on-mount + reusable "Refresh" button handler — a legitimate data-fetching
@@ -423,7 +454,7 @@ function AccountingDashboardTab({ projectId }: { projectId: string }) {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
-  if (loading) return <CenterLoader label="Loading financial dashboard…" />;
+  if (loading) return <CenterLoader label="Loading financial overview…" />;
   if (error) return <ErrorBanner text={error} />;
   if (!data) return null;
 
@@ -440,7 +471,8 @@ function AccountingDashboardTab({ projectId }: { projectId: string }) {
         </button>
       </div>
 
-      {/* KPI grid */}
+      {/* KPI grid — the single source of truth for aggregate figures; the
+          module breakdown below never repeats these numbers. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiTile label="Total Invoiced" value={fmt(kpis.total_invoiced)} icon={DollarSign}   color="#00D4FF" />
         <KpiTile label="Received"       value={fmt(kpis.total_received)} icon={TrendingUp}   color="#10B981" />
@@ -502,6 +534,37 @@ function AccountingDashboardTab({ projectId }: { projectId: string }) {
               <p className="text-[10px] text-white/30">BAC</p>
               <p className="text-[15px] font-mono font-semibold text-white/80">{fmt(evm.bac)}</p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Per-module breakdown — record counts only; the "invoices" module is
+          omitted since its totals exactly duplicate the KPI grid above. */}
+      {summary && (
+        <div>
+          <p className="text-[11px] font-semibold text-white/30 uppercase tracking-wider mb-2 px-1">Module Breakdown</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {OVERVIEW_MODULE_CARDS.map(({ key, label, icon: Icon }) => {
+              const m = summary.modules[key];
+              if (!m) return null;
+              return (
+                <div key={key} className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Icon className="w-3.5 h-3.5 text-cyan-400" />
+                    <p className="text-[12px] text-white/60 font-medium">{label}</p>
+                    <span className="ml-auto text-[10px] text-white/30">{m.count ?? m.items_count ?? 0} record(s)</span>
+                  </div>
+                  <div className="space-y-1">
+                    {Object.entries(m).filter(([k]) => k !== "count" && k !== "items_count" && k !== "by_class" && k !== "latest_extractions").map(([k, v]) => (
+                      <div key={k} className="flex items-center justify-between text-[11px]">
+                        <span className="text-white/30">{k.replace(/_/g, " ")}</span>
+                        <span className="text-white/70 font-mono">{typeof v === "number" ? fmt(v) : String(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -655,7 +718,13 @@ function AccountingRecordsTab({ projectId }: { projectId: string }) {
           {records.map((r) => (
             <div key={r.id} className="rounded-2xl overflow-hidden"
               style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <button onClick={() => toggle(r.id)} className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors">
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => toggle(r.id)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(r.id); } }}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors cursor-pointer"
+              >
                 <FileText className="w-4 h-4 text-cyan-400/70 shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-[13px] text-white/80 font-medium truncate">{r.filename}</p>
@@ -676,7 +745,7 @@ function AccountingRecordsTab({ projectId }: { projectId: string }) {
                   {deletingId === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                 </button>
                 <ChevronRight className={`w-4 h-4 text-white/25 shrink-0 transition-transform ${expandedId === r.id ? "rotate-90" : ""}`} />
-              </button>
+              </div>
 
               {expandedId === r.id && (
                 <div className="border-t border-white/[0.06] px-4 pb-4 pt-3">
@@ -715,7 +784,7 @@ function AccountingRecordsTab({ projectId }: { projectId: string }) {
   );
 }
 
-// ── Reconcile tab ─────────────────────────────────────────────────────────────
+// ── Insights & Reconciliation tab (merged: deterministic checks + AI narratives) ─
 
 interface UnmatchedInvoice { invoice_id: string; invoice_number: string; amount: number; status: string; contractor: string }
 interface DuplicateAmount  { invoice_number: string; amount: number; contractor: string; duplicate_of: string }
@@ -732,247 +801,31 @@ interface ReconcileData {
   error?: string;
 }
 
-function AccountingReconcileTab({ projectId }: { projectId: string }) {
-  const [data, setData]       = useState<ReconcileData | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const load = useCallback(() => {
-    if (!projectId) return;
-    setLoading(true); setData(null);
-    axios.get(`${API}/api/v1/accounting/reconcile/${projectId}`)
-      .then((res) => setData(res.data))
-      .catch(() => setData({ error: "Reconciliation failed" } as ReconcileData))
-      .finally(() => setLoading(false));
-  }, [projectId]);
-
-  // Fetch-on-mount + reusable "Refresh" button handler — a legitimate data-fetching
-  // effect (per the rule's own docs: syncing with an external system), not derived
-  // state that could be computed during render.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { load(); }, [load]);
-
-  if (!projectId) return <EmptyState text="Select a project to run reconciliation" icon={Scale} />;
-  if (loading) return <CenterLoader label="Cross-referencing invoices, budget & cost entries…" />;
-  if (!data || data.error) return <ErrorBanner text={data?.error || "Reconciliation failed"} />;
-
-  const { summary, budget_status, unmatched_invoices, duplicate_amounts, overpayments } = data;
-  const allClear = summary.unmatched_count === 0 && summary.duplicate_count === 0 && summary.budget_overrun_count === 0;
-
-  return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <p className="text-white/35 text-[12px]">Cross-checks invoices against contracts and budget</p>
-        <button onClick={load} className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/70 transition-colors">
-          <RefreshCw className="w-3.5 h-3.5" /> Re-run
-        </button>
-      </div>
-
-      {/* Summary strip */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiTile label="Invoices"        value={String(summary.total_invoices)} icon={FileText}      color="#00D4FF" />
-        <KpiTile label="Unmatched"       value={String(summary.unmatched_count)} icon={AlertTriangle} color={summary.unmatched_count > 0 ? "#EF4444" : "#10B981"} />
-        <KpiTile label="Duplicates"      value={String(summary.duplicate_count)} icon={Copy}          color={summary.duplicate_count > 0 ? "#F59E0B" : "#10B981"} />
-        <KpiTile label="Budget Overruns" value={String(summary.budget_overrun_count)} icon={TrendingDown} color={summary.budget_overrun_count > 0 ? "#EF4444" : "#10B981"} />
-      </div>
-
-      {budget_status.utilization_pct !== null && (
-        <div className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
-          <div className="flex items-center justify-between text-[12px] mb-2">
-            <span className="text-white/40">Budget Committed</span>
-            <span className="font-semibold text-white/70">{fmt(budget_status.total_committed)} / {fmt(budget_status.total_budget)}</span>
-          </div>
-          <div className="h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
-            <div className="h-1.5 rounded-full" style={{
-              width: `${Math.min(budget_status.utilization_pct ?? 0, 100)}%`,
-              background: (budget_status.utilization_pct ?? 0) > 100 ? "#EF4444" : (budget_status.utilization_pct ?? 0) > 85 ? "#F59E0B" : "#10B981",
-            }} />
-          </div>
-        </div>
-      )}
-
-      {allClear && (
-        <div className="flex items-center gap-2 text-emerald-400 text-[13px] bg-emerald-500/8 border border-emerald-500/20 rounded-xl px-4 py-3">
-          <CheckCircle2 className="w-4 h-4 shrink-0" /> No discrepancies found — invoices, budget, and cost entries reconcile cleanly.
-        </div>
-      )}
-
-      {unmatched_invoices.length > 0 && (
-        <Section title="Invoices With No Contract on File" icon={AlertTriangle} count={unmatched_invoices.length} defaultOpen>
-          <div className="space-y-2">
-            {unmatched_invoices.map((inv, i) => (
-              <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg text-[12px]"
-                style={{ background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.15)" }}>
-                <div>
-                  <span className="text-white/70 font-medium">{inv.invoice_number || inv.invoice_id}</span>
-                  <span className="text-white/30 ml-2">{inv.contractor}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-white/25 text-[10px]">{inv.status}</span>
-                  <span className="text-red-400 font-mono font-semibold">{fmt(inv.amount)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {duplicate_amounts.length > 0 && (
-        <Section title="Duplicate Amounts" icon={Copy} count={duplicate_amounts.length} defaultOpen>
-          <div className="space-y-2">
-            {duplicate_amounts.map((d, i) => (
-              <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg text-[12px]"
-                style={{ background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.15)" }}>
-                <div>
-                  <span className="text-white/70 font-medium">{d.invoice_number}</span>
-                  <span className="text-white/30 ml-2">{d.contractor} · duplicate of {d.duplicate_of}</span>
-                </div>
-                <span className="text-amber-400 font-mono font-semibold">{fmt(d.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {overpayments.length > 0 && (
-        <Section title="Budget Overruns" icon={TrendingDown} count={overpayments.length} defaultOpen>
-          <div className="space-y-2">
-            {overpayments.map((o, i) => (
-              <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg text-[12px]"
-                style={{ background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.15)" }}>
-                <div>
-                  <span className="text-white/70 font-medium">[{o.code}] {o.description}</span>
-                  <span className="text-white/30 ml-2">budget {fmt(o.original_budget)} → spend {fmt(o.total_spend)}</span>
-                </div>
-                <span className="text-red-400 font-mono font-semibold">+{o.overrun_pct}%</span>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-    </div>
-  );
-}
-
-// ── Summary tab ───────────────────────────────────────────────────────────────
-
-type AccountingModuleData = Record<string, number>;
-
-interface ProjectSummaryData {
-  project_id: string;
-  modules: Record<string, AccountingModuleData>;
-  financial_health: {
-    original_budget: number; total_spent: number; total_invoiced: number;
-    budget_remaining: number; budget_utilization: number | null;
-  };
-}
-
-function AccountingSummaryTab({ projectId }: { projectId: string }) {
-  const [data, setData]       = useState<ProjectSummaryData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState("");
-
-  const load = useCallback(() => {
-    if (!projectId) return;
-    setLoading(true); setError(""); setData(null);
-    axios.get(`${API}/api/v1/accounting/summary/${projectId}`)
-      .then((res) => setData(res.data))
-      .catch(() => setError("Could not build project financial summary"))
-      .finally(() => setLoading(false));
-  }, [projectId]);
-
-  // Fetch-on-mount + reusable "Refresh" button handler — a legitimate data-fetching
-  // effect (per the rule's own docs: syncing with an external system), not derived
-  // state that could be computed during render.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { load(); }, [load]);
-
-  if (!projectId) return <EmptyState text="Select a project to see its cross-module financial summary" icon={PieChart} />;
-  if (loading) return <CenterLoader label="Aggregating invoices, budget, contracts, POs, EVM…" />;
-  if (error) return <ErrorBanner text={error} />;
-  if (!data) return null;
-
-  const { modules, financial_health: fh } = data;
-  const utilPct = fh.budget_utilization ?? 0;
-  const utilColor = utilPct > 100 ? "#EF4444" : utilPct > 85 ? "#F59E0B" : "#10B981";
-
-  const moduleCards: { key: string; label: string; icon: LucideIcon }[] = [
-    { key: "invoices", label: "Invoices", icon: DollarSign },
-    { key: "budget", label: "Budget Items", icon: Building2 },
-    { key: "contracts", label: "Contracts", icon: FileSignature },
-    { key: "cost_entries", label: "Cost Entries", icon: TrendingDown },
-    { key: "purchase_orders", label: "Purchase Orders", icon: ClipboardCheck },
-  ];
-
-  return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <p className="text-white/35 text-[12px]">Aggregated financial picture across every connected module</p>
-        <button onClick={load} className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/70 transition-colors">
-          <RefreshCw className="w-3.5 h-3.5" /> Refresh
-        </button>
-      </div>
-
-      <div className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
-        <div className="flex items-center justify-between text-[12px] mb-2">
-          <span className="text-white/40">Budget Utilization</span>
-          <span className="font-semibold" style={{ color: utilColor }}>{fh.budget_utilization ?? "—"}%</span>
-        </div>
-        <div className="h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
-          <div className="h-1.5 rounded-full transition-all" style={{ width: `${Math.min(utilPct, 100)}%`, background: utilColor }} />
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-          <KpiTile label="Original Budget" value={fmt(fh.original_budget)} icon={Building2} color="#00D4FF" />
-          <KpiTile label="Total Spent"     value={fmt(fh.total_spent)}     icon={TrendingDown} color="#F97316" />
-          <KpiTile label="Total Invoiced"  value={fmt(fh.total_invoiced)}  icon={DollarSign} color="#A78BFA" />
-          <KpiTile label="Remaining"       value={fmt(fh.budget_remaining)} icon={Hash} color="#10B981" />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {moduleCards.map(({ key, label, icon: Icon }) => {
-          const m = modules[key];
-          if (!m) return null;
-          return (
-            <div key={key} className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
-              <div className="flex items-center gap-2 mb-2">
-                <Icon className="w-3.5 h-3.5 text-cyan-400" />
-                <p className="text-[12px] text-white/60 font-medium">{label}</p>
-                <span className="ml-auto text-[10px] text-white/30">{m.count ?? m.items_count ?? 0} record(s)</span>
-              </div>
-              <div className="space-y-1">
-                {Object.entries(m).filter(([k]) => k !== "count" && k !== "items_count" && k !== "by_class" && k !== "latest_extractions").map(([k, v]) => (
-                  <div key={k} className="flex items-center justify-between text-[11px]">
-                    <span className="text-white/30">{k.replace(/_/g, " ")}</span>
-                    <span className="text-white/70 font-mono">{typeof v === "number" ? fmt(v) : String(v)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-        {modules.evm && (
-          <div className="rounded-2xl p-4" style={{ background: "rgba(0,212,255,0.03)", border: "1px solid rgba(0,212,255,0.1)" }}>
-            <p className="text-[11px] text-white/35 uppercase tracking-wide mb-2">Latest EVM Snapshot</p>
-            <div className="grid grid-cols-2 gap-2 text-[12px]">
-              <div><span className="text-white/30">CPI </span><span className="text-white/80 font-mono">{modules.evm.cpi?.toFixed(2)}</span></div>
-              <div><span className="text-white/30">SPI </span><span className="text-white/80 font-mono">{modules.evm.spi?.toFixed(2)}</span></div>
-              <div><span className="text-white/30">EAC </span><span className="text-white/80 font-mono">{fmt(modules.evm.eac)}</span></div>
-              <div><span className="text-white/30">BAC </span><span className="text-white/80 font-mono">{fmt(modules.evm.bac)}</span></div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── AI Reports tab (cost analysis / payment summary / contract terms) ────────
-
 interface CostSnapshot { total_budget: number; total_spent: number; total_invoiced: number; budget_remaining: number }
 interface PaymentKpis  { total_invoiced: number; total_received: number; total_pending: number; total_overdue: number }
 interface ContractTerm { id: string; title: string; contractor: string; value: number; status: string }
 
-function AccountingReportsTab({ projectId }: { projectId: string }) {
+function AccountingInsightsTab({ projectId }: { projectId: string }) {
+  // Reconciliation — deterministic, auto-loads (no AI cost).
+  const [reconData, setReconData]       = useState<ReconcileData | null>(null);
+  const [reconLoading, setReconLoading] = useState(false);
+
+  const loadRecon = useCallback(() => {
+    if (!projectId) return;
+    setReconLoading(true); setReconData(null);
+    axios.get(`${API}/api/v1/accounting/reconcile/${projectId}`)
+      .then((res) => setReconData(res.data))
+      .catch(() => setReconData({ error: "Reconciliation failed" } as ReconcileData))
+      .finally(() => setReconLoading(false));
+  }, [projectId]);
+
+  // Fetch-on-mount + reusable "Re-run" button handler — a legitimate data-fetching
+  // effect (per the rule's own docs: syncing with an external system), not derived
+  // state that could be computed during render.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { loadRecon(); }, [loadRecon]);
+
+  // AI-generated narratives — on-demand only, each costs a generation call.
   const [costAnalysis, setCostAnalysis]   = useState<{ analysis: string; snapshot: CostSnapshot | null } | null>(null);
   const [costLoading, setCostLoading]     = useState(false);
   const [paymentSummary, setPaymentSummary] = useState<{ analysis: string; kpis: PaymentKpis | null } | null>(null);
@@ -1012,85 +865,193 @@ function AccountingReportsTab({ projectId }: { projectId: string }) {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadContracts(); }, [loadContracts]);
 
-  if (!projectId) return <EmptyState text="Select a project to generate AI financial reports" icon={Sparkles} />;
+  if (!projectId) return <EmptyState text="Select a project to see insights & reconciliation" icon={Scale} />;
+
+  const allClear = reconData && !reconData.error &&
+    reconData.summary.unmatched_count === 0 && reconData.summary.duplicate_count === 0 && reconData.summary.budget_overrun_count === 0;
 
   return (
-    <div className="space-y-4">
-      <Section title="AI Cost Analysis" icon={TrendingDown} defaultOpen>
-        {!costAnalysis && !costLoading && (
-          <button onClick={loadCost} className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] font-medium"
-            style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", color: "#00D4FF" }}>
-            <Sparkles className="w-3.5 h-3.5" /> Generate Cost Analysis
+    <div className="space-y-8">
+      {/* ── Reconciliation ─────────────────────────────────────────────────── */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] font-semibold text-white/30 uppercase tracking-wider px-1">Reconciliation · cross-checks invoices against contracts and budget</p>
+          <button onClick={loadRecon} className="flex items-center gap-1.5 text-[12px] text-white/30 hover:text-white/70 transition-colors">
+            <RefreshCw className="w-3.5 h-3.5" /> Re-run
           </button>
-        )}
-        {costLoading && <CenterLoader label="Analyzing cost report…" />}
-        {costAnalysis && (
-          <div className="space-y-3">
-            {costAnalysis.snapshot && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <KpiTile label="Budget" value={fmt(costAnalysis.snapshot.total_budget)} icon={Building2} color="#00D4FF" />
-                <KpiTile label="Spent" value={fmt(costAnalysis.snapshot.total_spent)} icon={TrendingDown} color="#F97316" />
-                <KpiTile label="Invoiced" value={fmt(costAnalysis.snapshot.total_invoiced)} icon={DollarSign} color="#A78BFA" />
-                <KpiTile label="Remaining" value={fmt(costAnalysis.snapshot.budget_remaining)} icon={Hash} color="#10B981" />
-              </div>
-            )}
-            <p className="text-white/60 text-[13px] leading-relaxed whitespace-pre-wrap">{costAnalysis.analysis}</p>
-          </div>
-        )}
-      </Section>
+        </div>
 
-      <Section title="AI Payment Summary" icon={DollarSign} defaultOpen>
-        {!paymentSummary && !paymentLoading && (
-          <button onClick={loadPayment} className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] font-medium"
-            style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", color: "#00D4FF" }}>
-            <Sparkles className="w-3.5 h-3.5" /> Generate Payment Summary
-          </button>
-        )}
-        {paymentLoading && <CenterLoader label="Analyzing payment cash flow…" />}
-        {paymentSummary && (
-          <div className="space-y-3">
-            {paymentSummary.kpis && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <KpiTile label="Invoiced" value={fmt(paymentSummary.kpis.total_invoiced)} icon={DollarSign} color="#00D4FF" />
-                <KpiTile label="Received" value={fmt(paymentSummary.kpis.total_received)} icon={TrendingUp} color="#10B981" />
-                <KpiTile label="Pending" value={fmt(paymentSummary.kpis.total_pending)} icon={Clock} color="#F59E0B" />
-                <KpiTile label="Overdue" value={fmt(paymentSummary.kpis.total_overdue)} icon={AlertTriangle} color="#EF4444" />
-              </div>
-            )}
-            <p className="text-white/60 text-[13px] leading-relaxed whitespace-pre-wrap">{paymentSummary.analysis || "No invoices found for this project"}</p>
-          </div>
-        )}
-      </Section>
-
-      <Section title="Contract Financial Terms" icon={FileSignature} count={contractTerms?.contracts?.length} defaultOpen>
-        {contractsLoading ? (
-          <CenterLoader label="Loading contract terms…" />
-        ) : !contractTerms || contractTerms.contracts.length === 0 ? (
-          <p className="text-white/30 text-[13px]">No contracts found for this project</p>
+        {reconLoading ? (
+          <CenterLoader label="Cross-referencing invoices, budget & cost entries…" />
+        ) : !reconData || reconData.error ? (
+          <ErrorBanner text={reconData?.error || "Reconciliation failed"} />
         ) : (
-          <div className="space-y-2">
-            <div className="flex gap-4 text-[12px] mb-2">
-              <span className="text-white/40">Total value: <span className="text-white/80 font-mono">{fmt(contractTerms.total_value)}</span></span>
-              <span className="text-white/40">Active: <span className="text-white/80 font-mono">{contractTerms.active_count}</span></span>
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <KpiTile label="Invoices"        value={String(reconData.summary.total_invoices)} icon={FileText}      color="#00D4FF" />
+              <KpiTile label="Unmatched"       value={String(reconData.summary.unmatched_count)} icon={AlertTriangle} color={reconData.summary.unmatched_count > 0 ? "#EF4444" : "#10B981"} />
+              <KpiTile label="Duplicates"      value={String(reconData.summary.duplicate_count)} icon={Copy}          color={reconData.summary.duplicate_count > 0 ? "#F59E0B" : "#10B981"} />
+              <KpiTile label="Budget Overruns" value={String(reconData.summary.budget_overrun_count)} icon={TrendingDown} color={reconData.summary.budget_overrun_count > 0 ? "#EF4444" : "#10B981"} />
             </div>
-            {contractTerms.contracts.map((c) => (
-              <div key={c.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl text-[12px]"
-                style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                <div>
-                  <span className="text-white/70 font-medium">{c.title}</span>
-                  <span className="text-white/30 ml-2">{c.contractor}</span>
+
+            {reconData.budget_status.utilization_pct !== null && (
+              <div className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+                <div className="flex items-center justify-between text-[12px] mb-2">
+                  <span className="text-white/40">Budget Committed</span>
+                  <span className="font-semibold text-white/70">{fmt(reconData.budget_status.total_committed)} / {fmt(reconData.budget_status.total_budget)}</span>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.status === "active" ? "bg-emerald-500/10 text-emerald-400" : "bg-white/5 text-white/40"}`}>
-                    {c.status}
-                  </span>
-                  <span className="text-white/80 font-mono font-semibold">{fmt(c.value)}</span>
+                <div className="h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
+                  <div className="h-1.5 rounded-full" style={{
+                    width: `${Math.min(reconData.budget_status.utilization_pct ?? 0, 100)}%`,
+                    background: (reconData.budget_status.utilization_pct ?? 0) > 100 ? "#EF4444" : (reconData.budget_status.utilization_pct ?? 0) > 85 ? "#F59E0B" : "#10B981",
+                  }} />
                 </div>
               </div>
-            ))}
-          </div>
+            )}
+
+            {allClear && (
+              <div className="flex items-center gap-2 text-emerald-400 text-[13px] bg-emerald-500/8 border border-emerald-500/20 rounded-xl px-4 py-3">
+                <CheckCircle2 className="w-4 h-4 shrink-0" /> No discrepancies found — invoices, budget, and cost entries reconcile cleanly.
+              </div>
+            )}
+
+            {reconData.unmatched_invoices.length > 0 && (
+              <Section title="Invoices With No Contract on File" icon={AlertTriangle} count={reconData.unmatched_invoices.length} defaultOpen>
+                <div className="space-y-2">
+                  {reconData.unmatched_invoices.map((inv, i) => (
+                    <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg text-[12px]"
+                      style={{ background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.15)" }}>
+                      <div>
+                        <span className="text-white/70 font-medium">{inv.invoice_number || inv.invoice_id}</span>
+                        <span className="text-white/30 ml-2">{inv.contractor}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-white/25 text-[10px]">{inv.status}</span>
+                        <span className="text-red-400 font-mono font-semibold">{fmt(inv.amount)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {reconData.duplicate_amounts.length > 0 && (
+              <Section title="Duplicate Amounts" icon={Copy} count={reconData.duplicate_amounts.length} defaultOpen>
+                <div className="space-y-2">
+                  {reconData.duplicate_amounts.map((d, i) => (
+                    <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg text-[12px]"
+                      style={{ background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.15)" }}>
+                      <div>
+                        <span className="text-white/70 font-medium">{d.invoice_number}</span>
+                        <span className="text-white/30 ml-2">{d.contractor} · duplicate of {d.duplicate_of}</span>
+                      </div>
+                      <span className="text-amber-400 font-mono font-semibold">{fmt(d.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {reconData.overpayments.length > 0 && (
+              <Section title="Budget Overruns" icon={TrendingDown} count={reconData.overpayments.length} defaultOpen>
+                <div className="space-y-2">
+                  {reconData.overpayments.map((o, i) => (
+                    <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg text-[12px]"
+                      style={{ background: "rgba(239,68,68,0.05)", border: "1px solid rgba(239,68,68,0.15)" }}>
+                      <div>
+                        <span className="text-white/70 font-medium">[{o.code}] {o.description}</span>
+                        <span className="text-white/30 ml-2">budget {fmt(o.original_budget)} → spend {fmt(o.total_spend)}</span>
+                      </div>
+                      <span className="text-red-400 font-mono font-semibold">+{o.overrun_pct}%</span>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+          </>
         )}
-      </Section>
+      </div>
+
+      {/* ── AI-Generated Reports ───────────────────────────────────────────── */}
+      <div className="space-y-4">
+        <p className="text-[11px] font-semibold text-white/30 uppercase tracking-wider px-1">AI-Generated Reports</p>
+
+        <Section title="AI Cost Analysis" icon={TrendingDown} defaultOpen>
+          {!costAnalysis && !costLoading && (
+            <button onClick={loadCost} className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] font-medium"
+              style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", color: "#00D4FF" }}>
+              <Sparkles className="w-3.5 h-3.5" /> Generate Cost Analysis
+            </button>
+          )}
+          {costLoading && <CenterLoader label="Analyzing cost report…" />}
+          {costAnalysis && (
+            <div className="space-y-3">
+              {costAnalysis.snapshot && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <KpiTile label="Budget" value={fmt(costAnalysis.snapshot.total_budget)} icon={Building2} color="#00D4FF" />
+                  <KpiTile label="Spent" value={fmt(costAnalysis.snapshot.total_spent)} icon={TrendingDown} color="#F97316" />
+                  <KpiTile label="Invoiced" value={fmt(costAnalysis.snapshot.total_invoiced)} icon={DollarSign} color="#A78BFA" />
+                  <KpiTile label="Remaining" value={fmt(costAnalysis.snapshot.budget_remaining)} icon={Hash} color="#10B981" />
+                </div>
+              )}
+              <p className="text-white/60 text-[13px] leading-relaxed whitespace-pre-wrap">{costAnalysis.analysis}</p>
+            </div>
+          )}
+        </Section>
+
+        <Section title="AI Payment Summary" icon={DollarSign} defaultOpen>
+          {!paymentSummary && !paymentLoading && (
+            <button onClick={loadPayment} className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] font-medium"
+              style={{ background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.25)", color: "#00D4FF" }}>
+              <Sparkles className="w-3.5 h-3.5" /> Generate Payment Summary
+            </button>
+          )}
+          {paymentLoading && <CenterLoader label="Analyzing payment cash flow…" />}
+          {paymentSummary && (
+            <div className="space-y-3">
+              {paymentSummary.kpis && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <KpiTile label="Invoiced" value={fmt(paymentSummary.kpis.total_invoiced)} icon={DollarSign} color="#00D4FF" />
+                  <KpiTile label="Received" value={fmt(paymentSummary.kpis.total_received)} icon={TrendingUp} color="#10B981" />
+                  <KpiTile label="Pending" value={fmt(paymentSummary.kpis.total_pending)} icon={Clock} color="#F59E0B" />
+                  <KpiTile label="Overdue" value={fmt(paymentSummary.kpis.total_overdue)} icon={AlertTriangle} color="#EF4444" />
+                </div>
+              )}
+              <p className="text-white/60 text-[13px] leading-relaxed whitespace-pre-wrap">{paymentSummary.analysis || "No invoices found for this project"}</p>
+            </div>
+          )}
+        </Section>
+
+        <Section title="Contract Financial Terms" icon={FileSignature} count={contractTerms?.contracts?.length} defaultOpen>
+          {contractsLoading ? (
+            <CenterLoader label="Loading contract terms…" />
+          ) : !contractTerms || contractTerms.contracts.length === 0 ? (
+            <p className="text-white/30 text-[13px]">No contracts found for this project</p>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex gap-4 text-[12px] mb-2">
+                <span className="text-white/40">Total value: <span className="text-white/80 font-mono">{fmt(contractTerms.total_value)}</span></span>
+                <span className="text-white/40">Active: <span className="text-white/80 font-mono">{contractTerms.active_count}</span></span>
+              </div>
+              {contractTerms.contracts.map((c) => (
+                <div key={c.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl text-[12px]"
+                  style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div>
+                    <span className="text-white/70 font-medium">{c.title}</span>
+                    <span className="text-white/30 ml-2">{c.contractor}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.status === "active" ? "bg-emerald-500/10 text-emerald-400" : "bg-white/5 text-white/40"}`}>
+                      {c.status}
+                    </span>
+                    <span className="text-white/80 font-mono font-semibold">{fmt(c.value)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+      </div>
     </div>
   );
 }
@@ -1322,7 +1283,7 @@ interface BudgetCheckResult {
 
 export default function AccountingPage() {
   const { triggerRefresh } = useDataRefreshStore();
-  const [activeTab, setActiveTab] = useState<SubTab>("extract");
+  const [activeTab, setActiveTab] = useState<SubTab>("workspace");
   const [projects, setProjects]   = useState<ProjectOption[]>([]);
   const [projectId, setProjectId] = useState("");
 
@@ -1445,7 +1406,7 @@ export default function AccountingPage() {
             </p>
           </div>
         </div>
-        {activeTab !== "extract" && (
+        {activeTab === "workspace" && (
           <ProjectSelect projects={projects} value={projectId} onChange={setProjectId} />
         )}
       </div>
@@ -1464,15 +1425,13 @@ export default function AccountingPage() {
         ))}
       </div>
 
-      {activeTab === "dashboard" && <AccountingDashboardTab projectId={projectId} />}
-      {activeTab === "summary"   && <AccountingSummaryTab   projectId={projectId} />}
-      {activeTab === "reports"   && <AccountingReportsTab   projectId={projectId} />}
-      {activeTab === "records"   && <AccountingRecordsTab   projectId={projectId} />}
-      {activeTab === "reconcile" && <AccountingReconcileTab projectId={projectId} />}
-      {activeTab === "glossary"  && <AccountingGlossaryTab />}
+      {activeTab === "glossary" && <AccountingGlossaryTab />}
 
+      {activeTab === "workspace" && (
+      <div className="space-y-5">
+      <Section title="New Extraction" icon={Calculator} defaultOpen>
       {/* Upload */}
-      {activeTab === "extract" && !result && !loading && (
+      {!result && !loading && (
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
           <div className="flex items-center gap-2">
             <Link2 className="w-3.5 h-3.5 text-white/25 shrink-0" />
@@ -1533,7 +1492,7 @@ export default function AccountingPage() {
       )}
 
       {/* Loading */}
-      {activeTab === "extract" && loading && (
+      {loading && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -1560,7 +1519,7 @@ export default function AccountingPage() {
 
       {/* Results */}
       <AnimatePresence>
-        {activeTab === "extract" && result && !loading && (
+        {result && !loading && (
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1698,23 +1657,6 @@ export default function AccountingPage() {
                   )
                 )}
               </div>
-            )}
-
-            {/* Cross-module action banners */}
-            {(docClass === "boq" || docClass === "invoice") && (
-              <a
-                href="/compliance"
-                className="flex items-center gap-3 px-4 py-3 rounded-xl transition-colors"
-                style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)" }}
-              >
-                <ClipboardCheck className="w-4 h-4 shrink-0" style={{ color: "#34d399" }} />
-                <p className="text-[12px] flex-1" style={{ color: "rgba(255,255,255,0.55)" }}>
-                  Cross-check permit requirements and regulatory compliance for the costs and scope in this document.
-                </p>
-                <span className="text-[11px] font-medium whitespace-nowrap flex items-center gap-1" style={{ color: "#34d399" }}>
-                  Check Compliance <ChevronRight className="w-3 h-3" />
-                </span>
-              </a>
             )}
 
             {/* Structured Data */}
@@ -1874,6 +1816,21 @@ export default function AccountingPage() {
           </motion.div>
         )}
       </AnimatePresence>
+      </Section>
+
+      <Section title="Financial Overview" icon={LayoutDashboard} defaultOpen>
+        <AccountingOverviewTab projectId={projectId} />
+      </Section>
+
+      <Section title="Insights & Reconciliation" icon={Scale} defaultOpen>
+        <AccountingInsightsTab projectId={projectId} />
+      </Section>
+
+      <Section title="Records" icon={Database} defaultOpen={false}>
+        <AccountingRecordsTab projectId={projectId} />
+      </Section>
+      </div>
+      )}
     </div>
   );
 }

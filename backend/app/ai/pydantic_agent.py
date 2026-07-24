@@ -72,21 +72,29 @@ def get_agent() -> Optional[object]:
     return _agent
 
 
-def _build_prompt(message: str, history: Optional[list[dict]]) -> str:
-    """Prepend the last 4 turns of history to the user message."""
-    if not history:
-        return message
-    lines = []
-    for m in history[-4:]:
-        prefix = "User" if m.get("role") == "user" else "Assistant"
-        lines.append(f"{prefix}: {m.get('content', '')[:300]}")
-    context = "\n".join(lines)
-    return f"Recent conversation:\n{context}\n\nNew question: {message}"
+def _build_prompt(message: str, history: Optional[list[dict]], web_context: str = "") -> str:
+    """Prepend the last 4 turns of history (and any live web results) to the user message."""
+    prompt = message
+    if history:
+        lines = []
+        for m in history[-4:]:
+            prefix = "User" if m.get("role") == "user" else "Assistant"
+            lines.append(f"{prefix}: {m.get('content', '')[:300]}")
+        context = "\n".join(lines)
+        prompt = f"Recent conversation:\n{context}\n\nNew question: {message}"
+    if web_context:
+        prompt = (
+            "Live public web search results for this query (from the internet, may be more "
+            "current than your training data). Only use a result if it is genuinely relevant; "
+            f"cite it inline as a markdown link, e.g. [Title](URL):\n{web_context}\n\n{prompt}"
+        )
+    return prompt
 
 
 async def pydantic_chat(
     message: str,
     history: Optional[list[dict]] = None,
+    web_context: str = "",
 ) -> ConstructionAnswer:
     """
     Run the PydanticAI agent on a user message and return a ConstructionAnswer.
@@ -100,7 +108,7 @@ async def pydantic_chat(
             answer="PydanticAI agent unavailable. Check pydantic-ai installation.",
             confidence=0.0,
         )
-    prompt = _build_prompt(message, history)
+    prompt = _build_prompt(message, history, web_context)
     try:
         result = await agent.run(prompt)  # type: ignore[union-attr]
         return result.data
