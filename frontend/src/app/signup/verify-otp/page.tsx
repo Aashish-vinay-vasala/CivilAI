@@ -23,9 +23,33 @@ const ctaPrimaryStyle: React.CSSProperties = {
 
 export default function VerifyOtpPage() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+
+  // A user who hasn't verified yet is still "logged in", so the dashboard
+  // guard bounces them straight back to this page from anywhere else in the
+  // app — including the browser Back button. Signing out is what actually
+  // breaks that loop and gives them a real way out.
+  const handleCancel = async () => {
+    setCancelling(true);
+    await signOut();
+    router.replace("/");
+  };
+
+  const handleResend = async () => {
+    if (!user?.email) return;
+    setResending(true);
+    const { error } = await supabase.auth.signInWithOtp({ email: user.email, options: { shouldCreateUser: false } });
+    setResending(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    toast.success("Code resent — check your email");
+  };
 
   const handleVerify = async () => {
     if (!user?.email || code.length < 6) {
@@ -83,6 +107,24 @@ export default function VerifyOtpPage() {
         <Button className="w-full text-white transition-all hover:scale-[1.02]" style={ctaPrimaryStyle} onClick={handleVerify} disabled={submitting}>
           {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Verify"}
         </Button>
+        <button
+          type="button"
+          onClick={handleResend}
+          disabled={resending}
+          className="text-xs text-muted-foreground hover:text-cyan-400 transition-colors mt-4 disabled:opacity-50"
+        >
+          {resending ? "Resending..." : "Didn't get a code? Resend"}
+        </button>
+        <div>
+          <button
+            type="button"
+            onClick={handleCancel}
+            disabled={cancelling}
+            className="text-xs text-muted-foreground hover:text-white transition-colors mt-3 disabled:opacity-50"
+          >
+            {cancelling ? "Signing out..." : "← Cancel and go back"}
+          </button>
+        </div>
       </motion.div>
     </div>
   );

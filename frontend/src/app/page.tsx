@@ -140,6 +140,11 @@ export default function LandingPage() {
           </span>
         </div>
         <div className="flex items-center gap-3">
+          <Link href="/login">
+            <Button className="text-white/70 hover:text-white transition-all hover:scale-105" style={ctaSecondaryStyle}>
+              Log In
+            </Button>
+          </Link>
           <Link href="/signup">
             <Button className="text-white/70 hover:text-white transition-all hover:scale-105" style={ctaSecondaryStyle}>
               Create Account

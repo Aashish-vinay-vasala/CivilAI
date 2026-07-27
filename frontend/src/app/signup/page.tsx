@@ -51,6 +51,7 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
 
   useEffect(() => {
     if (!authLoading && user) router.replace("/dashboard");
@@ -71,10 +72,14 @@ export default function SignupPage() {
       return;
     }
     setSubmitting(true);
-    const { error } = await signUpWithPassword(email, password, fullName, role as DemoRole);
+    const { error, needsEmailConfirmation } = await signUpWithPassword(email, password, fullName, role as DemoRole);
     setSubmitting(false);
     if (error) {
       toast.error(error.message);
+      return;
+    }
+    if (needsEmailConfirmation) {
+      setAwaitingConfirmation(true);
       return;
     }
     router.push("/dashboard");
@@ -114,69 +119,92 @@ export default function SignupPage() {
           </span>
         </div>
 
-        <h1 className="text-2xl font-bold text-foreground mb-1">Create your account</h1>
-        <p className="text-sm text-muted-foreground mb-6">
-          You get your own private workspace — nothing here is shared with the demo data or other accounts.
-        </p>
+        {awaitingConfirmation ? (
+          <>
+            <h1 className="text-2xl font-bold text-foreground mb-1">Check your email</h1>
+            <p className="text-sm text-muted-foreground mb-6">
+              We sent a confirmation link to <span className="text-foreground">{email}</span>. Click it and
+              you&apos;ll be signed in automatically.
+            </p>
+            <p className="text-sm text-muted-foreground text-center">
+              <Link href="/" className="text-cyan-400 hover:underline">
+                Back to home
+              </Link>
+            </p>
+          </>
+        ) : (
+          <>
+            <h1 className="text-2xl font-bold text-foreground mb-1">Create your account</h1>
+            <p className="text-sm text-muted-foreground mb-6">
+              You get your own private workspace — nothing here is shared with the demo data or other accounts.
+            </p>
 
-        <Label className="mb-2 block">1. Choose a role</Label>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-          {ROLE_OPTIONS.map(({ role: r, label, desc, icon: Icon, color }) => {
-            const selected = role === r;
-            return (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRole(r)}
-                className={`relative glass-card p-4 text-left transition-all ${
-                  selected ? "border-cyan-500/50 bg-cyan-500/6" : "hover:border-white/20"
-                }`}
-              >
-                {selected && (
-                  <span className="absolute top-3 right-3 w-5 h-5 rounded-full bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center">
-                    <Check className="w-3 h-3 text-cyan-400" />
-                  </span>
-                )}
-                <div className={`w-10 h-10 rounded-xl border flex items-center justify-center mb-3 ${color}`}>
-                  <Icon className="w-5 h-5" />
-                </div>
-                <p className="font-semibold text-foreground text-sm pr-6">{label}</p>
-                <p className="text-xs text-muted-foreground mt-1 leading-snug">{desc}</p>
-              </button>
-            );
-          })}
-        </div>
+            <Label className="mb-2 block">1. Choose a role</Label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+              {ROLE_OPTIONS.map(({ role: r, label, desc, icon: Icon, color }) => {
+                const selected = role === r;
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setRole(r)}
+                    className={`relative glass-card p-4 text-left transition-all ${
+                      selected ? "border-cyan-500/50 bg-cyan-500/6" : "hover:border-white/20"
+                    }`}
+                  >
+                    {selected && (
+                      <span className="absolute top-3 right-3 w-5 h-5 rounded-full bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center">
+                        <Check className="w-3 h-3 text-cyan-400" />
+                      </span>
+                    )}
+                    <div className={`w-10 h-10 rounded-xl border flex items-center justify-center mb-3 ${color}`}>
+                      <Icon className="w-5 h-5" />
+                    </div>
+                    <p className="font-semibold text-foreground text-sm pr-6">{label}</p>
+                    <p className="text-xs text-muted-foreground mt-1 leading-snug">{desc}</p>
+                  </button>
+                );
+              })}
+            </div>
 
-        <Label className="mb-2 block">2. Sign up</Label>
-        <div className="space-y-3 mb-4">
-          <Input placeholder="Full name" className="focus-visible:border-cyan-500/50 focus-visible:ring-cyan-500/20" value={fullName} onChange={(e) => setFullName(e.target.value)} />
-          <Input type="email" placeholder="Email" className="focus-visible:border-cyan-500/50 focus-visible:ring-cyan-500/20" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <Input type="password" placeholder="Password" className="focus-visible:border-cyan-500/50 focus-visible:ring-cyan-500/20" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <Button className="w-full text-white transition-all hover:scale-[1.02]" style={ctaPrimaryStyle} onClick={handlePasswordSignup} disabled={submitting}>
-            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Create account"}
-          </Button>
-        </div>
+            <Label className="mb-2 block">2. Sign up</Label>
+            <div className="space-y-3 mb-4">
+              <Input placeholder="Full name" className="focus-visible:border-cyan-500/50 focus-visible:ring-cyan-500/20" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+              <Input type="email" placeholder="Email" className="focus-visible:border-cyan-500/50 focus-visible:ring-cyan-500/20" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <Input type="password" placeholder="Password" className="focus-visible:border-cyan-500/50 focus-visible:ring-cyan-500/20" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <Button className="w-full text-white transition-all hover:scale-[1.02]" style={ctaPrimaryStyle} onClick={handlePasswordSignup} disabled={submitting}>
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Create account"}
+              </Button>
+            </div>
 
-        <div className="flex items-center gap-3 my-4">
-          <div className="h-px flex-1 bg-border" />
-          <span className="text-xs text-muted-foreground">OR</span>
-          <div className="h-px flex-1 bg-border" />
-        </div>
+            <div className="flex items-center gap-3 my-4">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-xs text-muted-foreground">OR</span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
 
-        <Button className="w-full gap-2 text-white/70 hover:text-white transition-all hover:scale-[1.02]" style={ctaSecondaryStyle} onClick={handleGoogleSignup} disabled={submitting}>
-          <GoogleIcon />
-          Continue with Google
-        </Button>
-        <p className="text-xs text-muted-foreground mt-2 text-center">
-          Google sign-up requires a one-time code emailed to you before you get access.
-        </p>
+            <Button className="w-full gap-2 text-white/70 hover:text-white transition-all hover:scale-[1.02]" style={ctaSecondaryStyle} onClick={handleGoogleSignup} disabled={submitting}>
+              <GoogleIcon />
+              Continue with Google
+            </Button>
+            <p className="text-xs text-muted-foreground mt-2 text-center">
+              Google sign-up requires a one-time code emailed to you before you get access.
+            </p>
 
-        <p className="text-sm text-muted-foreground mt-6 text-center">
-          Just want to look around?{" "}
-          <Link href="/" className="text-cyan-400 hover:underline">
-            Try the demo instead
-          </Link>
-        </p>
+            <p className="text-sm text-muted-foreground mt-6 text-center">
+              Already have an account?{" "}
+              <Link href="/login" className="text-cyan-400 hover:underline">
+                Log in
+              </Link>
+            </p>
+            <p className="text-sm text-muted-foreground mt-2 text-center">
+              Just want to look around?{" "}
+              <Link href="/" className="text-cyan-400 hover:underline">
+                Try the demo instead
+              </Link>
+            </p>
+          </>
+        )}
       </motion.div>
     </div>
   );

@@ -9,11 +9,12 @@ import { supabase } from "@/lib/supabase";
 const API = process.env.NEXT_PUBLIC_API_URL;
 
 /**
- * Google OAuth redirect target. The role picked on /signup was stashed in
- * sessionStorage before the redirect (query params aren't reliably carried
- * through Google's OAuth round trip). From here: set the role server-side,
- * then route to OTP verification (Google signups always start
- * otp_verified=false — see migration 041) or straight to the dashboard.
+ * Redirect target for both Google OAuth and email-confirmation links. The
+ * role picked on /signup was stashed in sessionStorage before the redirect
+ * (query params aren't reliably carried through either round trip). From
+ * here: exchange the PKCE code for a session, set the role server-side, then
+ * route to OTP verification (Google signups always start otp_verified=false
+ * — see migration 041) or straight to the dashboard.
  */
 export default function AuthCallbackPage() {
   const router = useRouter();
@@ -25,19 +26,47 @@ export default function AuthCallbackPage() {
     ran.current = true;
 
     (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) {
+      const params = new URLSearchParams(window.location.search);
+      const errorDescription = params.get("error_description");
+      if (errorDescription) {
+        setError(errorDescription);
+        return;
+      }
+
+      // PKCE flow: the redirect carries a one-time `code` that must be
+      // exchanged for a session explicitly — getSession() alone won't do it.
+      const code = params.get("code");
+      let result = code
+        ? await supabase.auth.exchangeCodeForSession(code)
+        : await supabase.auth.getSession();
+
+      if ((result.error || !result.data.session) && code) {
+        // The code is single-use. If a duplicate call already consumed it
+        // (e.g. React Strict Mode double-firing this effect in dev) and that
+        // one actually succeeded, we're already signed in — check before
+        // reporting a false failure.
+        console.error("exchangeCodeForSession failed, checking for an existing session:", result.error);
+        result = await supabase.auth.getSession();
+      }
+
+      const { data, error: exchangeError } = result;
+
+      if (exchangeError || !data.session) {
         setError("Sign-in did not complete. Please try again.");
         return;
       }
 
-      const role = sessionStorage.getItem("civilai_signup_role") ?? "viewer";
+      // Only present for a fresh signup (see signUpWithGoogle) — a returning
+      // login via Google leaves this unset so their existing role is untouched.
+      const role = sessionStorage.getItem("civilai_signup_role");
       sessionStorage.removeItem("civilai_signup_role");
 
-      try {
-        await axios.post(`${API}/api/v1/auth/complete-signup`, { role });
-      } catch {
-        // Non-fatal — role defaults to 'viewer' server-side if this fails.
+      if (role) {
+        try {
+          await axios.post(`${API}/api/v1/auth/complete-signup`, { role });
+        } catch {
+          // Non-fatal — role defaults to 'viewer' server-side if this fails.
+        }
       }
 
       const { data: profile } = await supabase
@@ -47,7 +76,14 @@ export default function AuthCallbackPage() {
         .single();
 
       if (profile && profile.otp_verified === false) {
-        await supabase.auth.signInWithOtp({ email: data.session.user.email!, options: { shouldCreateUser: false } });
+        const { error: otpError } = await supabase.auth.signInWithOtp({
+          email: data.session.user.email!,
+          options: { shouldCreateUser: false },
+        });
+        if (otpError) {
+          setError(`Couldn't send your verification code: ${otpError.message}`);
+          return;
+        }
         router.replace("/signup/verify-otp");
       } else {
         router.replace("/dashboard");
