@@ -1,4 +1,9 @@
 # Cloud Build CI/CD — triggers on push to main
+# NOTE: this is the GKE/Kubernetes deployment path. It is NOT what currently
+# serves production traffic (see DEPLOY_CLOUDRUN.md for the live Cloud Run +
+# Firebase Hosting path) — this pipeline targets the k8s/ manifests in this
+# repo for anyone running (or migrating to) a GKE cluster.
+#
 # Substitutions (set in Cloud Build trigger config):
 #   _REGION          e.g. us-central1
 #   _PROJECT_ID      your GCP project ID
@@ -6,6 +11,7 @@
 #   _NEXT_PUBLIC_SUPABASE_URL     (set in trigger secrets)
 #   _NEXT_PUBLIC_SUPABASE_ANON_KEY
 #   _NEXT_PUBLIC_API_URL          e.g. https://api.civilai.YOUR_DOMAIN.com
+#   _NEXT_PUBLIC_ML_API_URL       e.g. https://ml.civilai.YOUR_DOMAIN.com
 
 substitutions:
   _REGION: us-central1
@@ -13,7 +19,7 @@ substitutions:
   _REPO: civilai
 
 steps:
-  # ── 1. Build backend image ───────────────────────────────────────────────────
+  # ── 1. Build images (parallel) ───────────────────────────────────────────────
   - name: "gcr.io/cloud-builders/docker"
     id: build-backend
     args:
@@ -25,7 +31,17 @@ steps:
       - ./backend
     waitFor: ["-"]
 
-  # ── 2. Build frontend image ──────────────────────────────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    id: build-ml
+    args:
+      - build
+      - -t
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/ml:${SHORT_SHA}"
+      - -t
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/ml:latest"
+      - ./ml
+    waitFor: ["-"]
+
   - name: "gcr.io/cloud-builders/docker"
     id: build-frontend
     args:
@@ -40,10 +56,12 @@ steps:
       - "NEXT_PUBLIC_SUPABASE_ANON_KEY=${_NEXT_PUBLIC_SUPABASE_ANON_KEY}"
       - --build-arg
       - "NEXT_PUBLIC_API_URL=${_NEXT_PUBLIC_API_URL}"
+      - --build-arg
+      - "NEXT_PUBLIC_ML_API_URL=${_NEXT_PUBLIC_ML_API_URL}"
       - ./frontend
     waitFor: ["-"]
 
-  # ── 3. Push both images ──────────────────────────────────────────────────────
+  # ── 2. Push images ────────────────────────────────────────────────────────────
   - name: "gcr.io/cloud-builders/docker"
     id: push-backend
     args:
@@ -53,6 +71,14 @@ steps:
     waitFor: ["build-backend"]
 
   - name: "gcr.io/cloud-builders/docker"
+    id: push-ml
+    args:
+      - push
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/ml"
+    waitFor: ["build-ml"]
+
+  - name: "gcr.io/cloud-builders/docker"
     id: push-frontend
     args:
       - push
@@ -60,7 +86,7 @@ steps:
       - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/frontend"
     waitFor: ["build-frontend"]
 
-  # ── 4. Get GKE credentials ───────────────────────────────────────────────────
+  # ── 3. Get GKE credentials ────────────────────────────────────────────────────
   - name: "gcr.io/cloud-builders/gcloud"
     id: get-credentials
     args:
@@ -72,9 +98,24 @@ steps:
       - "${_REGION}"
       - --project
       - "${PROJECT_ID}"
-    waitFor: ["push-backend", "push-frontend"]
+    waitFor: ["push-backend", "push-ml", "push-frontend"]
 
-  # ── 5. Deploy to GKE ─────────────────────────────────────────────────────────
+  # ── 4. Apply manifests (namespace/config/secrets/services/HPA/ingress) ──────
+  # Idempotent — safe to run on every deploy. Uses the `latest` tag baked into
+  # k8s/overlays/production/kustomization.yaml; step 5 then pins the exact
+  # commit image on top of it.
+  - name: "gcr.io/cloud-builders/kubectl"
+    id: apply-manifests
+    args:
+      - apply
+      - -k
+      - k8s/overlays/production
+    env:
+      - "CLOUDSDK_COMPUTE_REGION=${_REGION}"
+      - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER}"
+    waitFor: ["get-credentials"]
+
+  # ── 5. Pin the exact image built in this run ─────────────────────────────────
   - name: "gcr.io/cloud-builders/kubectl"
     id: deploy-backend
     args:
@@ -87,7 +128,21 @@ steps:
     env:
       - "CLOUDSDK_COMPUTE_REGION=${_REGION}"
       - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER}"
-    waitFor: ["get-credentials"]
+    waitFor: ["apply-manifests"]
+
+  - name: "gcr.io/cloud-builders/kubectl"
+    id: deploy-ml
+    args:
+      - set
+      - image
+      - deployment/ml
+      - "ml=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/ml:${SHORT_SHA}"
+      - -n
+      - civilai
+    env:
+      - "CLOUDSDK_COMPUTE_REGION=${_REGION}"
+      - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER}"
+    waitFor: ["apply-manifests"]
 
   - name: "gcr.io/cloud-builders/kubectl"
     id: deploy-frontend
@@ -101,14 +156,15 @@ steps:
     env:
       - "CLOUDSDK_COMPUTE_REGION=${_REGION}"
       - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER}"
-    waitFor: ["get-credentials"]
+    waitFor: ["apply-manifests"]
 
-  # ── 6. Verify rollout ────────────────────────────────────────────────────────
+  # ── 6. Verify rollout ─────────────────────────────────────────────────────────
   - name: "gcr.io/cloud-builders/kubectl"
     args:
       - rollout
       - status
       - deployment/backend
+      - deployment/ml
       - deployment/frontend
       - -n
       - civilai
@@ -116,10 +172,11 @@ steps:
     env:
       - "CLOUDSDK_COMPUTE_REGION=${_REGION}"
       - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER}"
-    waitFor: ["deploy-backend", "deploy-frontend"]
+    waitFor: ["deploy-backend", "deploy-ml", "deploy-frontend"]
 
 images:
   - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:${SHORT_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/ml:${SHORT_SHA}"
   - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/frontend:${SHORT_SHA}"
 
 options:

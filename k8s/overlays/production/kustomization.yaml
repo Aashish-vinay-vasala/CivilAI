@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - ingress.yaml
+
+# cloudbuild.yaml bumps these tags to ${SHORT_SHA} on every deploy via
+# `kustomize edit set image` — `latest` here is just the fallback for a
+# manual `kubectl apply -k` run.
+images:
+  - name: us-central1-docker.pkg.dev/gen-lang-client-0881995245/civilai/backend
+    newTag: latest
+  - name: us-central1-docker.pkg.dev/gen-lang-client-0881995245/civilai/frontend
+    newTag: latest
+  - name: us-central1-docker.pkg.dev/gen-lang-client-0881995245/civilai/ml
+    newTag: latest

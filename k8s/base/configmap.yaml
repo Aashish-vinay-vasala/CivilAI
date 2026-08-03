@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: civilai-config
+  namespace: civilai
+data:
+  # Read by backend/app/config.py (Settings.ALLOWED_ORIGINS) — comma-separated
+  # list of origins the FastAPI CORS middleware accepts requests from.
+  ALLOWED_ORIGINS: "https://civilai.YOUR_DOMAIN.com"
+
+# NOTE: there is no NEXT_PUBLIC_* entry here on purpose. Next.js inlines
+# NEXT_PUBLIC_* vars into the static JS bundle at `next build` time — a
+# ConfigMap can only change a running container's environment, which has no
+# effect on files that were already baked into the frontend image. Those
+# values are set as Docker build-args in cloudbuild.yaml instead.

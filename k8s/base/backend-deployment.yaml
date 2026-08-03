@@ -27,38 +27,16 @@ spec:
                 secretKeyRef:
                   name: civilai-secrets
                   key: GROQ_API_KEY
-            - name: SUPABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: civilai-secrets
-                  key: SUPABASE_URL
-            - name: SUPABASE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: civilai-secrets
-                  key: SUPABASE_KEY
-            - name: RESEND_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: civilai-secrets
-                  key: RESEND_API_KEY
-            - name: ENVIRONMENT
-              valueFrom:
-                configMapKeyRef:
-                  name: civilai-config
-                  key: ENVIRONMENT
-            - name: CORS_ORIGINS
-              valueFrom:
-                configMapKeyRef:
-                  name: civilai-config
-                  key: CORS_ORIGINS
-            - name: CELERY_BROKER_URL
-              value: "redis://redis:6379/0"
             - name: GEMINI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: civilai-secrets
                   key: GEMINI_API_KEY
+            - name: SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: civilai-secrets
+                  key: SUPABASE_URL
             - name: SUPABASE_SECRET_KEY
               valueFrom:
                 secretKeyRef:
@@ -69,13 +47,19 @@ spec:
                 secretKeyRef:
                   name: civilai-secrets
                   key: HUGGINGFACE_TOKEN
-            - name: SECRET_KEY
+            - name: RESEND_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: civilai-secrets
-                  key: SECRET_KEY
+                  key: RESEND_API_KEY
+                  optional: true # app degrades gracefully (logs instead of sending) when unset
             - name: ALLOWED_ORIGINS
-              value: "http://34.10.217.226:3000,http://localhost:3000"
+              valueFrom:
+                configMapKeyRef:
+                  name: civilai-config
+                  key: ALLOWED_ORIGINS
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
           resources:
             requests:
               cpu: "500m"

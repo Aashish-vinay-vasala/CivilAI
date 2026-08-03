@@ -31,6 +31,16 @@ spec:
                 name: backend
                 port:
                   number: 80
+    - host: ml.civilai.YOUR_DOMAIN.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ml
+                port:
+                  number: 80
 ---
 # GCP-managed SSL certificate (auto-provisions Let's Encrypt equiv)
 apiVersion: networking.gke.io/v1
@@ -42,3 +52,4 @@ spec:
   domains:
     - civilai.YOUR_DOMAIN.com
     - api.civilai.YOUR_DOMAIN.com
+    - ml.civilai.YOUR_DOMAIN.com

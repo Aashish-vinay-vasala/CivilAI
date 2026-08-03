@@ -21,22 +21,10 @@ spec:
           imagePullPolicy: Always
           ports:
             - containerPort: 3000
-          env:
-            - name: NEXT_PUBLIC_SUPABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: civilai-secrets
-                  key: NEXT_PUBLIC_SUPABASE_URL
-            - name: NEXT_PUBLIC_SUPABASE_ANON_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: civilai-secrets
-                  key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-            - name: NEXT_PUBLIC_API_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: civilai-config
-                  key: NEXT_PUBLIC_API_URL
+          # No env here: this image is a static Next.js export (see frontend/Dockerfile),
+          # so every NEXT_PUBLIC_* value is already compiled into the JS bundle at
+          # `docker build` time via --build-arg (set in cloudbuild.yaml). Setting them
+          # as container env vars here would be silently ignored.
           resources:
             requests:
               cpu: "250m"

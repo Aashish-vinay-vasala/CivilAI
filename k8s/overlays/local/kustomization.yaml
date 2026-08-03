@@ -1,0 +1,121 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# Real credentials for the local cluster, pulled from a gitignored env file
+# (same values as backend/.env) — replaces the REPLACE_ME placeholder Secret
+# from base so the pods actually authenticate against Supabase/Groq/etc.
+secretGenerator:
+  - name: civilai-secrets
+    namespace: civilai
+    behavior: replace
+    envs:
+      - .env.secrets
+generatorOptions:
+  disableNameSuffixHash: true
+
+# This machine has 7GB total RAM — one replica of each and much smaller
+# resource requests keep the whole stack inside the 4GB given to Docker
+# Desktop's Kubernetes VM. Production keeps the real replica counts/sizing
+# in base/.
+replicas:
+  - name: backend
+    count: 1
+  - name: frontend
+    count: 1
+  - name: ml
+    count: 1
+
+# Swap the Artifact Registry references for the images `docker compose build`
+# already built into Docker's local store — no registry/push needed to demo
+# this on a laptop.
+images:
+  - name: us-central1-docker.pkg.dev/gen-lang-client-0881995245/civilai/backend
+    newName: civilai-backend
+    newTag: latest
+  - name: us-central1-docker.pkg.dev/gen-lang-client-0881995245/civilai/frontend
+    newName: civilai-frontend
+    newTag: latest
+  - name: us-central1-docker.pkg.dev/gen-lang-client-0881995245/civilai/ml
+    newName: civilai-ml
+    newTag: latest
+
+patches:
+  # `Never` forces the kubelet to use the image already sitting in Docker's
+  # local store instead of trying to pull it from a registry.
+  - target:
+      kind: Deployment
+      name: "backend|frontend|ml"
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: { cpu: "250m", memory: "512Mi" }
+          limits: { cpu: "1", memory: "1Gi" }
+  - target:
+      kind: Deployment
+      name: ml
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: { cpu: "250m", memory: "768Mi" }
+          limits: { cpu: "1", memory: "1.5Gi" }
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: { cpu: "100m", memory: "128Mi" }
+          limits: { cpu: "500m", memory: "512Mi" }
+  # Expose backend + ml directly on localhost like docker-compose does, instead
+  # of requiring `kubectl port-forward` — Docker Desktop's Kubernetes publishes
+  # LoadBalancer Services on localhost automatically. Each gets its own port
+  # (matching docker-compose's 3000/8000/8001) since 3 services all sitting on
+  # port 80 would collide on localhost.
+  - target:
+      kind: Service
+      name: "backend|ml"
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: LoadBalancer
+  - target:
+      kind: Service
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 3000
+  - target:
+      kind: Service
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8000
+  - target:
+      kind: Service
+      name: ml
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8001
+  # No HPA on a single-node local cluster — one replica is the whole point.
+  - target:
+      kind: HorizontalPodAutoscaler
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
