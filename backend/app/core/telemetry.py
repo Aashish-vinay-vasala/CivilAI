@@ -48,14 +48,23 @@ def setup_otel(service_name: str = "civilai-backend") -> None:
 
 
 def setup_langsmith() -> bool:
-    enabled = os.getenv("LANGCHAIN_TRACING_V2", "").lower() in ("1", "true", "yes")
-    if not enabled:
+    # pydantic-settings reads .env into `settings` but never mirrors those values
+    # into os.environ — and both os.getenv() below and the langsmith SDK's own
+    # @traceable decorator read os.environ directly, so without this the .env
+    # config is silently ignored and no traces are ever sent.
+    from app.config import settings
+
+    if not settings.LANGCHAIN_TRACING_V2:
         return False
-    if not os.getenv("LANGCHAIN_API_KEY"):
+    if not settings.LANGCHAIN_API_KEY:
         logger.warning("LANGCHAIN_TRACING_V2=true but LANGCHAIN_API_KEY not set — tracing disabled")
         return False
-    project = os.getenv("LANGCHAIN_PROJECT", "civilai")
-    logger.info("LangSmith tracing enabled | project=%s", project)
+
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
+    os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
+
+    logger.info("LangSmith tracing enabled | project=%s", settings.LANGCHAIN_PROJECT)
     return True
 
 
