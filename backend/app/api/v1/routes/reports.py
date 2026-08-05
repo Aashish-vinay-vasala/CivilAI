@@ -1,3 +1,8 @@
+"""
+Reports routes (/api/v1/reports): AI-generated project reports. Endpoints:
+POST /weekly, /stakeholder, /risk, /meeting-summary, /kpi — each takes
+project context/text and returns a generated report.
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from app.core.guardrails import guard_text, MAX_TRANSCRIPT_LENGTH

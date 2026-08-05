@@ -1,3 +1,9 @@
+"""
+Cost routes (/api/v1/cost): AI cost-report analysis and forecasting.
+Endpoints: POST /analyze-report (parses an uploaded cost report), POST
+/cashflow-forecast, POST /material-prices (price-impact analysis), POST
+/scenarios/analyze (what-if cost scenarios).
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from app.ai.cost_analyzer import (

@@ -1,3 +1,11 @@
+"""
+AI analysis of construction cost/budget reports. Validates and extracts
+structured cost line items from uploaded documents, produces a narrative cost
+report (overruns, budget utilization, material/labour breakdown,
+recommendations) with structured risk metrics, and also forecasts cash flow,
+compares budget what-if scenarios against live EVM data, and assesses
+material price risk.
+"""
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field

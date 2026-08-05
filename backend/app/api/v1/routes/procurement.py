@@ -1,3 +1,9 @@
+"""
+Procurement routes (/api/v1/procurement): purchasing analysis and purchase
+order tracking. Endpoints: POST /analyze, /purchase-order, /compare-suppliers,
+/demand-forecast; GET/POST /purchase-orders, PATCH/DELETE
+/purchase-orders/{po_id} (purchase-order record CRUD).
+"""
 from datetime import date
 from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File

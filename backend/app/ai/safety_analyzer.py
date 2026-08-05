@@ -1,3 +1,9 @@
+"""
+AI analysis of construction site safety. Produces a narrative safety report
+(risk zones, violations, OSHA compliance, recommendations) with structured
+risk metrics, extracts structured incident records from uploaded documents,
+and generates OSHA incident reports and per-zone risk assessments.
+"""
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field

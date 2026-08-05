@@ -1,3 +1,9 @@
+"""
+Contracts routes (/api/v1/contracts): contract document analysis and
+lifecycle tracking. Endpoints: POST /analyze (AI contract-term extraction),
+/rfi, /upload, /change-order; GET / (list), POST / (create), PUT/DELETE
+/{contract_id} for contract record CRUD.
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Depends
 from pydantic import BaseModel
 from typing import Optional
@@ -15,7 +21,7 @@ from app.services.db_service import supabase
 from app.services.storage_service import upload_document
 
 router = APIRouter()
-_contract_roles = ("project_director", "admin", "engineer")
+_contract_roles = ("admin", "project_manager", "procurement_manager")
 
 class RFIRequest(BaseModel):
     issue: str

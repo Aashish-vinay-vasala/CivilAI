@@ -1,3 +1,9 @@
+"""
+Compliance routes (/api/v1/compliance): building-code/regulatory checks and
+permit tracking. Endpoints: POST /analyze (document analysis), /code-check,
+/permit-application, /regulatory-check; GET/POST/PUT/DELETE /permits (permit
+CRUD) and POST /permits/upload (file-backed permit creation); GET /stats.
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from typing import Optional

@@ -1,3 +1,9 @@
+"""
+Smoke test: imports a hardcoded list of route modules and prints a check/
+cross mark per module, to catch import-time errors (missing deps, circular
+imports, syntax errors) early without spinning up the full FastAPI app.
+"""
+
 import traceback
 
 modules = [

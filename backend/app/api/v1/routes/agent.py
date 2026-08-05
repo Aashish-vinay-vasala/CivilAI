@@ -25,6 +25,9 @@ from app.ai.chatbot_memory import get_history, add_message
 from app.core.guardrails import sanitize_prompt, validate_output
 from app.core.llama_guard import check_input, check_output
 from app.core.nemo_rails import check_message
+from app.core.grounding import check_grounding, GROUNDING_CAVEAT
+from app.core import hitl
+from app.services import semantic_cache
 
 _AUDIO_EXTS = {"mp3", "wav", "webm", "m4a", "ogg", "flac", "mp4"}
 _MAX_CONTENT_CHARS = 12_000
@@ -60,6 +63,18 @@ class AgentResponse(BaseModel):
     tool_steps: list[ToolStep] = []
     intent:     Optional[str] = None
     status:     str = "success"
+    sources:    list[str] = []            # distinct tool names the reply is grounded in
+    requires_review: bool = False         # True when the grounding check flagged this reply
+    review_id:  Optional[str] = None      # ai_review_queue row id when requires_review is True
+
+
+def _tool_sources(tool_steps: list[dict]) -> list[str]:
+    seen: list[str] = []
+    for step in tool_steps:
+        name = step.get("tool")
+        if name and name not in seen:
+            seen.append(name)
+    return seen
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -72,7 +87,10 @@ async def agent_chat(request: Request, body: AgentMessage):
 
     Runs the same guardrail chain as /api/v1/copilot/chat (sanitize -> LlamaGuard
     input -> jailbreak classifier -> agent -> LlamaGuard output -> validate) since
-    this route reaches the same write-capable tools.
+    this route reaches the same write-capable tools. Because this route can trigger
+    writes (e.g. log_safety_incident), the LlamaGuard and jailbreak checks fail
+    CLOSED here (an outage blocks the request) rather than the open-by-default
+    behaviour used on read-only routes.
     """
     ip = request.client.host if request.client else "unknown"
     session_id = body.session_id.strip() or f"agent_{int(time.time() * 1000)}"
@@ -82,7 +100,7 @@ async def agent_chat(request: Request, body: AgentMessage):
     except ValueError as e:
         return AgentResponse(reply=str(e), session_id=session_id, status="input_blocked")
 
-    input_safe, input_violation = check_input(clean_message)
+    input_safe, input_violation = check_input(clean_message, fail_closed=True)
     if not input_safe:
         logger.warning("Agent LlamaGuard INPUT blocked | ip=%s | violation=%s", ip, input_violation)
         return AgentResponse(
@@ -91,7 +109,7 @@ async def agent_chat(request: Request, body: AgentMessage):
             status="input_blocked",
         )
 
-    nemo_passed, nemo_refusal = await check_message(clean_message)
+    nemo_passed, nemo_refusal = await check_message(clean_message, fail_closed=True)
     if not nemo_passed:
         logger.warning("Agent jailbreak classifier blocked | ip=%s | refusal=%.60s", ip, nemo_refusal)
         return AgentResponse(reply=nemo_refusal, session_id=session_id, status="guardrail_triggered")
@@ -102,6 +120,15 @@ async def agent_chat(request: Request, body: AgentMessage):
     agent_message = clean_message
     if body.project_id.strip():
         agent_message = f"[project_id: {body.project_id.strip()}]\n{clean_message}"
+
+    # ── Semantic cache — same approach as copilot.py's /chat, see
+    # app/services/semantic_cache.py. Checked before dialogue classification
+    # too, since that's a real Groq call on every request otherwise.
+    cached = await asyncio.to_thread(semantic_cache.get, agent_message)
+    if cached is not None:
+        add_message(session_id, "user",      body.message, channel="agent")
+        add_message(session_id, "assistant", cached,        channel="agent")
+        return AgentResponse(reply=cached, session_id=session_id)
 
     # Classify intent for the response metadata
     dialogue = classify_dialogue(clean_message, history[-4:] if history else [])
@@ -115,7 +142,7 @@ async def agent_chat(request: Request, body: AgentMessage):
     reply = result["reply"]
     steps = [ToolStep(**s) for s in result["tool_steps"]]
 
-    output_safe, output_violation = check_output(clean_message, reply)
+    output_safe, output_violation = check_output(clean_message, reply, fail_closed=True)
     if not output_safe:
         logger.warning("Agent LlamaGuard OUTPUT blocked | ip=%s | violation=%s", ip, output_violation)
         return AgentResponse(
@@ -126,6 +153,21 @@ async def agent_chat(request: Request, body: AgentMessage):
 
     safe_reply, _ = validate_output(reply, context=clean_message)
 
+    # Only cache responses with zero tool calls — a tool-driven answer
+    # reflects live project data at this moment and must not be replayed
+    # later. See app/services/semantic_cache.py.
+    if not result["tool_steps"]:
+        asyncio.create_task(asyncio.to_thread(semantic_cache.set, agent_message, safe_reply))
+
+    is_grounded, grounding_reason = await check_grounding(safe_reply, result["tool_steps"])
+    requires_review, review_id = False, None
+    if not is_grounded:
+        requires_review, review_id, _ = hitl.check_agent_reply(
+            safe_reply, grounding_reason, result["tool_steps"],
+            session_id, body.project_id.strip() or None,
+        )
+        safe_reply += GROUNDING_CAVEAT
+
     add_message(session_id, "user",      body.message, channel="agent")
     add_message(session_id, "assistant", safe_reply,   channel="agent")
 
@@ -134,6 +176,9 @@ async def agent_chat(request: Request, body: AgentMessage):
         session_id=session_id,
         tool_steps=steps,
         intent=dialogue.intent,
+        sources=_tool_sources(result["tool_steps"]),
+        requires_review=requires_review,
+        review_id=review_id,
     )
 
 
@@ -167,7 +212,7 @@ async def agent_stream(request: Request, body: AgentMessage):
     except ValueError as e:
         return StreamingResponse(blocked_stream(str(e)), media_type="text/event-stream")
 
-    input_safe, input_violation = check_input(clean_message)
+    input_safe, input_violation = check_input(clean_message, fail_closed=True)
     if not input_safe:
         logger.warning("Agent stream LlamaGuard INPUT blocked | ip=%s | violation=%s", ip, input_violation)
         return StreamingResponse(
@@ -175,7 +220,7 @@ async def agent_stream(request: Request, body: AgentMessage):
             media_type="text/event-stream",
         )
 
-    nemo_passed, nemo_refusal = await check_message(clean_message)
+    nemo_passed, nemo_refusal = await check_message(clean_message, fail_closed=True)
     if not nemo_passed:
         logger.warning("Agent stream jailbreak classifier blocked | ip=%s | refusal=%.60s", ip, nemo_refusal)
         return StreamingResponse(
@@ -215,7 +260,7 @@ async def agent_stream(request: Request, body: AgentMessage):
 
         # ── Output safety screen on the fully-assembled text ─────────────────
         final_reply = "".join(full_reply_parts)
-        output_safe, output_violation = check_output(clean_message, final_reply) if final_reply else (True, "")
+        output_safe, output_violation = check_output(clean_message, final_reply, fail_closed=True) if final_reply else (True, "")
         if not output_safe:
             logger.warning("Agent stream LlamaGuard OUTPUT blocked | ip=%s | violation=%s", ip, output_violation)
             yield f"data: {json.dumps({'type': 'token', 'content': 'I generated a response that could not be delivered due to content policy. Please rephrase your question.'})}\n\n"
@@ -223,11 +268,23 @@ async def agent_stream(request: Request, body: AgentMessage):
             return
 
         safe_reply, _ = validate_output(final_reply, context=clean_message) if final_reply else ("", True)
+
+        # ── Grounding check + HITL routing on the fully-assembled reply ──────
+        requires_review, review_id = False, None
+        if safe_reply:
+            is_grounded, grounding_reason = await check_grounding(safe_reply, tool_steps_for_session)
+            if not is_grounded:
+                requires_review, review_id, _ = hitl.check_agent_reply(
+                    safe_reply, grounding_reason, tool_steps_for_session,
+                    session_id, body.project_id.strip() or None,
+                )
+                safe_reply += GROUNDING_CAVEAT
+
         # Tokens already reached the client live, so only an *appended* disclaimer
         # (not a truncation, which shortens the text) can be sent as a trailing delta.
         if safe_reply.startswith(final_reply) and len(safe_reply) > len(final_reply):
             yield f"data: {json.dumps({'type': 'token', 'content': safe_reply[len(final_reply):]})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'sources': _tool_sources(tool_steps_for_session), 'requires_review': requires_review, 'review_id': review_id})}\n\n"
 
         # Persist to memory and Supabase after streaming completes
         if safe_reply:
@@ -334,7 +391,7 @@ async def agent_upload(
     except ValueError as e:
         return AgentResponse(reply=str(e), session_id=sid, status="input_blocked")
 
-    input_safe, input_violation = check_input(user_question)
+    input_safe, input_violation = check_input(user_question, fail_closed=True)
     if not input_safe:
         logger.warning("Agent upload LlamaGuard INPUT blocked | ip=%s | violation=%s", ip, input_violation)
         return AgentResponse(
@@ -361,7 +418,7 @@ async def agent_upload(
     reply = result["reply"]
     steps = [ToolStep(**s) for s in result["tool_steps"]]
 
-    output_safe, output_violation = check_output(user_question, reply)
+    output_safe, output_violation = check_output(user_question, reply, fail_closed=True)
     if not output_safe:
         logger.warning("Agent upload LlamaGuard OUTPUT blocked | ip=%s | violation=%s", ip, output_violation)
         return AgentResponse(
@@ -372,6 +429,14 @@ async def agent_upload(
 
     safe_reply, _ = validate_output(reply, context=user_question)
 
+    is_grounded, grounding_reason = await check_grounding(safe_reply, result["tool_steps"])
+    requires_review, review_id = False, None
+    if not is_grounded:
+        requires_review, review_id, _ = hitl.check_agent_reply(
+            safe_reply, grounding_reason, result["tool_steps"], sid, None,
+        )
+        safe_reply += GROUNDING_CAVEAT
+
     display_user = f"📎 {filename}\n{user_question}"
     add_message(sid, "user",      display_user, channel="agent")
     add_message(sid, "assistant", safe_reply,   channel="agent")
@@ -381,6 +446,9 @@ async def agent_upload(
         session_id=sid,
         tool_steps=steps,
         intent=dialogue.intent,
+        sources=_tool_sources(result["tool_steps"]),
+        requires_review=requires_review,
+        review_id=review_id,
     )
 
 

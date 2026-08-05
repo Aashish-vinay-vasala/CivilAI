@@ -1,3 +1,9 @@
+"""
+Human review queue routes (/api/v1/review): manual approve/reject workflow
+for AI outputs flagged for human-in-the-loop review. Endpoints: GET /queue
+(list pending items), GET /stats, GET /queue/{review_id}, POST
+/queue/{review_id}/approve, POST /queue/{review_id}/reject.
+"""
 import datetime
 import logging
 from typing import Optional

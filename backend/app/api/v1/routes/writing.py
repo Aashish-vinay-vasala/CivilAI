@@ -1,3 +1,9 @@
+"""
+Writing assistant routes (/api/v1/writing): AI-drafted correspondence and
+document analysis. Endpoints: POST /letter, /email, /notice,
+/variation-order, /dispute-letter (generate drafts); POST /analyze-blueprint,
+/analyze-contract, /analyze-boq (analyze an uploaded document).
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from app.core.guardrails import guard_text

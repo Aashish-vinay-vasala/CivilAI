@@ -1,3 +1,13 @@
+"""
+Core Groq LLM client shared by every analyzer/copilot module in app/ai/. Wraps
+the Groq SDK with a rotating multi-key pool (GROQ_API_KEY/_2/_3), automatic
+retry on short rate-limit waits, and key rotation on daily/per-minute quota
+exhaustion. When every key is exhausted it falls back to app.ai.gemini_client
+so callers still get an answer. Exposes chat()/chat_stream() for plain text,
+instructor_chat()/instructor_client for Pydantic-structured extraction, and
+analyze_document() (the prompt+document helper most analyzer files call into),
+plus per-call token usage tracking via app.services.usage_tracker.
+"""
 import re
 import time as _time
 import logging
@@ -94,16 +104,20 @@ def _gemini_fallback(messages: list) -> str:
 
 
 def _rotate_key() -> bool:
-    """Promote to the next API key. Returns False when all keys are exhausted."""
+    """Promote to the next API key. Returns False when all keys are exhausted.
+
+    Called both on daily-limit exhaustion and on ordinary rate-limit errors
+    the short in-place retry couldn't ride out — either way, moving to an
+    independent key's quota is worth trying before falling back to Gemini."""
     global _active_idx
     logger.warning(
-        "[GROQ] Key #%d daily token limit reached — trying next key.", _active_idx + 1
+        "[GROQ] Key #%d rate-limited — trying next key.", _active_idx + 1
     )
     next_idx = _active_idx + 1
     if next_idx >= len(_key_pool):
         logger.error(
-            "[GROQ] All %d API key(s) have hit their daily token limit. "
-            "CivilAI AI features will be unavailable until quota resets (~midnight UTC).",
+            "[GROQ] All %d API key(s) are rate-limited/exhausted. "
+            "CivilAI AI features will be degraded until quota resets.",
             len(_key_pool),
         )
         return False
@@ -128,6 +142,7 @@ def rotate_key() -> bool:
 # ── Core chat call ─────────────────────────────────────────────────────────────
 @traceable(name="groq-chat", run_type="llm", metadata={"provider": "groq"})
 def chat(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0) -> str:
+    _t0 = _time.time()
     try:
         response = _state["client"].chat.completions.create(
             model=model,
@@ -136,7 +151,11 @@ def chat(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0) -> str
             max_tokens=2048,
         )
         if response.usage:
-            usage_tracker.add_llm_tokens(response.usage.total_tokens)
+            usage_tracker.add_llm_tokens(
+                response.usage.total_tokens, provider="groq", model=model, source="groq_client.chat",
+                input_tokens=response.usage.prompt_tokens, output_tokens=response.usage.completion_tokens,
+                latency_ms=(_time.time() - _t0) * 1000,
+            )
         return response.choices[0].message.content
     except Exception as exc:
         if _is_daily_limit(exc):
@@ -152,6 +171,8 @@ def chat(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0) -> str
                     "also failed. Please try again after midnight UTC."
                 ) from exc
         if _is_unrecoverable_rate_limit(exc):
+            if _rotate_key():
+                return chat(messages, model, _rpm_attempt=0)
             try:
                 return _gemini_fallback(messages)
             except Exception:
@@ -166,7 +187,9 @@ def chat(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0) -> str
             _time.sleep(wait + 0.5)
             return chat(messages, model, _rpm_attempt=1)
         if _rpm_attempt > 0 or wait is None:
-            # Retry already used (or not retryable) — try Gemini before giving up.
+            # Retry already used (or not retryable) — try the next key before Gemini.
+            if _rotate_key():
+                return chat(messages, model, _rpm_attempt=0)
             try:
                 return _gemini_fallback(messages)
             except Exception:
@@ -180,25 +203,37 @@ def instructor_chat(response_model, messages: list, model: str = _FAST_MODEL, ma
     extracting a Pydantic model from a document). Without this, a rate-limited key
     made every extract_* call silently return an empty/degraded result instead of
     rotating or falling back like plain chat() does."""
+    _t0 = _time.time()
     try:
-        return _state["instructor_client"].chat.completions.create(
+        result, completion = _state["instructor_client"].chat.completions.create_with_completion(
             model=model,
             response_model=response_model,
             messages=messages,
             max_retries=max_retries,
         )
+        if completion.usage:
+            usage_tracker.add_llm_tokens(
+                completion.usage.total_tokens, provider="groq", model=model, source="groq_client.instructor_chat",
+                input_tokens=completion.usage.prompt_tokens, output_tokens=completion.usage.completion_tokens,
+                latency_ms=(_time.time() - _t0) * 1000,
+            )
+        return result
     except Exception as exc:
         if _is_daily_limit(exc):
             if _rotate_key():
                 return instructor_chat(response_model, messages, model, max_retries, _rpm_attempt=0)
             return _gemini_structured_fallback(response_model, messages)
         if _is_unrecoverable_rate_limit(exc):
+            if _rotate_key():
+                return instructor_chat(response_model, messages, model, max_retries, _rpm_attempt=0)
             return _gemini_structured_fallback(response_model, messages)
         wait = _rate_limit_wait(exc)
         if wait is not None and wait <= _MAX_AUTO_RETRY_SECS and _rpm_attempt == 0:
             logger.warning("Groq rate limited — waiting %.1fs then retrying", wait)
             _time.sleep(wait + 0.5)
             return instructor_chat(response_model, messages, model, max_retries, _rpm_attempt=1)
+        if _rotate_key():
+            return instructor_chat(response_model, messages, model, max_retries, _rpm_attempt=0)
         return _gemini_structured_fallback(response_model, messages)
 
 
@@ -213,6 +248,7 @@ def chat_stream(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0)
     """Yields text deltas as they arrive from Groq. Key rotation only applies before
     the stream starts — a failure mid-stream just ends the generator early and lets
     the caller's accumulated partial text stand (better than losing it outright)."""
+    _t0 = _time.time()
     try:
         stream = _state["client"].chat.completions.create(
             model=model,
@@ -245,7 +281,11 @@ def chat_stream(messages: list, model: str = _FAST_MODEL, _rpm_attempt: int = 0)
 
     for chunk in stream:
         if chunk.usage:
-            usage_tracker.add_llm_tokens(chunk.usage.total_tokens)
+            usage_tracker.add_llm_tokens(
+                chunk.usage.total_tokens, provider="groq", model=model, source="groq_client.chat_stream",
+                input_tokens=chunk.usage.prompt_tokens, output_tokens=chunk.usage.completion_tokens,
+                latency_ms=(_time.time() - _t0) * 1000,
+            )
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta.content
@@ -271,6 +311,30 @@ def _gemini_fallback_stream(messages: list):
 
 def get_key_pool_size() -> int:
     return len(_key_pool)
+
+
+def call_with_retry(fn, retries: int = 2, delay: float = 2.0):
+    """Run `fn()` and retry on any exception, waiting `delay` seconds between
+    attempts (delay doubles each retry).
+
+    Used by the guardrail classifiers (llama_guard.py, nemo_rails.py) —
+    unlike chat()/instructor_chat() above they don't rotate keys or fall
+    back to Gemini, but a couple of spaced-out retries is enough to ride out
+    a Groq rate-limit blip instead of it surfacing as a user-facing "check
+    unavailable" block on an otherwise harmless message.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                wait = delay * (2 ** attempt)
+                logger.warning("Groq call failed (attempt %d/%d), retrying in %.1fs | error=%s",
+                                attempt + 1, retries + 1, wait, exc)
+                _time.sleep(wait)
+    raise last_exc
 
 
 _ANALYZE_SYSTEM = """\

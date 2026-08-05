@@ -1,3 +1,11 @@
+"""
+Sliding-window rate-limiting middleware, mounted in main.py. Applies a
+tighter per-minute limit to AI-heavy endpoints (copilot/agent/documents/bim/
+etc.) and a looser one to everything else, keyed by client IP + path. Uses
+an in-process deque backend by default, or a Redis sorted-set backend
+(safe across multiple pods) when REDIS_URL is configured.
+"""
+
 import time
 import threading
 import logging

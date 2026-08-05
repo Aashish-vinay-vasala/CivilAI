@@ -1,3 +1,10 @@
+"""
+Auth routes (/api/v1/auth): demo login and post-signup account setup.
+Endpoints: POST /demo-login (issues a session for the demo account), POST
+/complete-signup (finishes profile setup for a newly created Supabase user),
+POST /otp/confirm (marks OTP verification complete for the current user),
+GET /permissions (returns the current user's module-access permissions).
+"""
 import logging
 import requests
 from fastapi import APIRouter, Depends, HTTPException

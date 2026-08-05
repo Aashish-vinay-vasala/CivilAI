@@ -1,3 +1,11 @@
+"""
+IFC/BIM file parsing built on ifcopenshell: geometry/dimension extraction per
+element, storey/floor mapping, 3D mesh export, AABB-based clash detection
+(within a model and cross-model structural-vs-MEP), quantity takeoff, BOQ
+(bill of quantities) generation, and diffing two IFC model versions.
+Degrades gracefully (HAS_IFC=False) if ifcopenshell isn't installed.
+"""
+
 import logging
 
 logger = logging.getLogger(__name__)

@@ -1,3 +1,9 @@
+"""
+Pre-construction routes (/api/v1/preconstruction): tender document analysis
+ahead of bidding. Endpoints: POST /analyse (AI tender-document analysis),
+POST /requirements (extract requirements from an uploaded document), POST
+/gap-check (compare extracted requirements against project capabilities).
+"""
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel

@@ -1,9 +1,21 @@
+"""
+BIM & CAD routes (/api/v1/bim): IFC/3D model parsing and AI analysis, plus
+per-project model and sensor storage. Endpoints: POST /parse-ifc,
+/clash-detection, /extract-quantities, /analyze-blueprint (with local OCR
+fallback), /analyze-ifc-ai, /parse-3d, /quantities-report, /structural-check,
+/diff-ifc, /debug-ifc; GET/POST/DELETE /project/{id}/model(s) and
+/model/{id}/download, /fallback-models/*; GET/POST/DELETE
+/project/{id}/sensors.
+"""
 import json
 import logging
-from typing import Optional
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Response
 from pydantic import BaseModel
-from app.ai.gemini_client import analyze_image, analyze_text
+from app.ai.gemini_client import analyze_text, analyze_image_structured
+from app.ai.groq_client import instructor_chat
+from app.ai import groq_vision
+from app.ai import ocr_fallback
 from app.services.storage_service import upload_document, get_document, delete_document
 from app.services.db_service import (
     get_current_bim_model, deactivate_bim_models, create_bim_model,
@@ -73,31 +85,122 @@ async def extract_qty(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/analyze-drawing")
-async def analyze_drawing(file: UploadFile = File(...)):
-    try:
-        file_bytes = await file.read()
-        filename = file.filename or ""
-        ext = filename.rsplit(".", 1)[-1].lower()
-        if ext in ("png", "jpg", "jpeg", "pdf"):
-            analysis = analyze_image(file_bytes, """
-                You are an expert construction engineer analyzing a CAD drawing or blueprint.
-                Analyze this drawing and provide:
-                1. Drawing type (floor plan, elevation, section, detail, or other)
-                2. Key dimensions visible
-                3. Materials specified
-                4. Structural elements identified
-                5. Construction notes or specifications
-                6. Potential issues or code compliance concerns
-                7. Overall assessment and recommendations
+class BlueprintRoom(BaseModel):
+    name: str
+    dimensions: Optional[str] = None
+    area_sqft: Optional[float] = None
+    notes: Optional[str] = None
 
-                Format your response with clear numbered sections.
-            """)
-        else:
-            analysis = "Please upload an image (PNG/JPG) or PDF file for drawing analysis."
-        return {"status": "success", "analysis": analysis}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+class BlueprintElement(BaseModel):
+    type: str  # e.g. door, window, staircase, column, beam
+    count: Optional[int] = None
+    details: Optional[str] = None
+
+
+class BlueprintAnalysis(BaseModel):
+    drawing_type: str  # e.g. "residential floor plan", "elevation", "site plan"
+    scale: Optional[str] = None
+    overall_dimensions: Optional[str] = None
+    total_area_sqft: Optional[float] = None
+    rooms: List[BlueprintRoom] = []
+    elements: List[BlueprintElement] = []
+    materials: List[str] = []
+    structural_notes: Optional[str] = None
+    compliance_notes: List[str] = []
+    summary: str
+
+
+_BLUEPRINT_PROMPT = """
+You are an expert architect and construction engineer analyzing an uploaded blueprint
+or floor plan image. This could be a full construction/CAD drawing, or a simpler plan
+of a house, apartment, or single room. Study it carefully and extract:
+
+1. The drawing type (e.g. residential floor plan, elevation, section, site plan, detail).
+2. The scale, if marked.
+3. Overall building/unit dimensions and total area, if determinable from labels or a scale.
+4. Every distinct room or space visible, with its name/label, dimensions if marked, and
+   approximate area in square feet if it can be computed or reasonably estimated.
+5. Notable elements: doors, windows, staircases, columns, beams, fixtures — with counts
+   where visible.
+6. Materials called out on the drawing, if any.
+7. Structural notes worth flagging (load-bearing walls, spans, etc.), if visible.
+8. Any code-compliance or design concerns you notice (e.g. missing egress, undersized
+   room, unclear dimensions).
+9. A short overall summary of the drawing.
+
+If a field cannot be determined from the image, omit it or leave it null rather than
+guessing. Do not fabricate dimensions that aren't shown or clearly inferable.
+"""
+
+# Fallback path when Gemini vision is unavailable — there's no vision-capable
+# Groq model on this account, so instead this structures whatever text a local
+# Tesseract OCR pass could read off the drawing (see app/ai/ocr_fallback.py).
+# Necessarily weaker than the real vision prompt above: it only ever sees
+# printed labels, never the drawing's actual layout.
+_BLUEPRINT_OCR_PROMPT = """
+You are an expert architect analyzing OCR text extracted from a blueprint or floor
+plan image (a house, apartment, room, or full CAD drawing). The text below is exactly
+what a local OCR pass could read off the drawing — it has errors, missing words, and
+no layout information, so treat it as a rough transcript, not a clean document.
+
+From it, extract whatever you can reasonably infer:
+1. The drawing type, if apparent.
+2. The scale, if mentioned.
+3. Overall dimensions/area, if legible.
+4. Rooms/spaces named in the text, with dimensions if given.
+5. Elements (doors, windows, etc.) if explicitly labeled with counts.
+6. Materials mentioned.
+7. Structural or compliance notes only if explicitly stated in the text.
+8. A short summary that's honest about how limited OCR-only text is compared to
+   seeing the actual drawing — mention this was extracted via OCR fallback, not
+   direct image analysis.
+
+Leave a field null/empty rather than guessing at anything the text doesn't support.
+"""
+
+
+def _analyze_blueprint_via_ocr_fallback(file_bytes: bytes, is_pdf: bool) -> BlueprintAnalysis:
+    ocr_text = ocr_fallback.extract_text(file_bytes, is_pdf=is_pdf).strip()
+    if not ocr_text:
+        raise HTTPException(
+            status_code=502,
+            detail="Blueprint analysis is temporarily unavailable (AI vision provider "
+                   "failed) and the local OCR fallback found no readable text on this "
+                   "drawing. Try again later, or upload a version with clearer labels.",
+        )
+    return instructor_chat(BlueprintAnalysis, [
+        {"role": "system", "content": _BLUEPRINT_OCR_PROMPT},
+        {"role": "user", "content": ocr_text[:6000]},
+    ])
+
+
+@router.post("/analyze-blueprint", response_model=BlueprintAnalysis)
+async def analyze_blueprint(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    filename = file.filename or ""
+    ext = filename.rsplit(".", 1)[-1].lower()
+    if ext not in ("png", "jpg", "jpeg", "pdf"):
+        raise HTTPException(status_code=400, detail="Please upload an image (PNG/JPG) or PDF file for blueprint analysis.")
+    is_pdf = ext == "pdf"
+
+    try:
+        return analyze_image_structured(file_bytes, _BLUEPRINT_PROMPT, BlueprintAnalysis)
+    except Exception as gemini_exc:
+        logger.warning("Gemini blueprint analysis failed, falling back to Groq vision: %s", gemini_exc)
+
+    try:
+        return groq_vision.analyze_image_structured(file_bytes, _BLUEPRINT_PROMPT, BlueprintAnalysis, is_pdf=is_pdf)
+    except Exception as groq_exc:
+        logger.warning("Groq vision blueprint analysis failed, falling back to local OCR + Groq text: %s", groq_exc)
+
+    try:
+        return _analyze_blueprint_via_ocr_fallback(file_bytes, is_pdf=is_pdf)
+    except HTTPException:
+        raise
+    except Exception as ocr_exc:
+        logger.error("OCR fallback also failed: %s", ocr_exc)
+        raise HTTPException(status_code=500, detail=f"Blueprint analysis failed on every provider: {ocr_exc}") from ocr_exc
 
 
 @router.post("/analyze-ifc-ai")

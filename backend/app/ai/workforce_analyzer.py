@@ -1,3 +1,10 @@
+"""
+AI analysis of construction workforce data. Produces a narrative report
+(skills gaps, turnover risk, resource planning) with structured risk metrics,
+extracts structured team-member/roster records from uploaded documents, and
+matches workers to job requirements, predicts turnover, and generates
+onboarding plans.
+"""
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field

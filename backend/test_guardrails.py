@@ -91,9 +91,14 @@ def test_has_permission_admin_has_broad_access():
     assert has_permission("admin", "financials") is True
 
 
-def test_has_permission_contractor_is_restricted():
-    assert has_permission("contractor", "financials") is False
-    assert has_permission("contractor", "agent") is True
+def test_has_permission_field_role_is_restricted_from_financials():
+    # "contractor" was never a real role (see ROLE_PERMISSIONS / frontend
+    # roleStore.ts — the five roles are admin, project_manager, site_engineer,
+    # procurement_manager, viewer), so this previously tested a role that
+    # doesn't exist and always failed. site_engineer is the intended stand-in:
+    # read-only on financials, full read/write on agent tools.
+    assert has_permission("site_engineer", "financials", "write") is False
+    assert has_permission("site_engineer", "agent") is True
 
 
 def test_has_permission_unknown_role_denied():

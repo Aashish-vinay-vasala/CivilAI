@@ -1,3 +1,9 @@
+"""
+Workforce routes (/api/v1/workforce): worker roster plus AI workforce
+analysis. Endpoints: GET/POST /workers, PATCH/DELETE /workers/{worker_id};
+GET /stats, GET/PUT /skill-targets; POST /analyze (uploaded roster/report),
+/extract-members, /match-skills, /predict-turnover, /onboarding-plan.
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional

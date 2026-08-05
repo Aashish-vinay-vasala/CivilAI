@@ -1,3 +1,9 @@
+"""
+AI analysis of construction equipment fleet data. Produces a narrative
+health/maintenance/downtime-risk report with structured risk metrics,
+extracts structured equipment records from uploaded documents, and generates
+failure predictions, maintenance schedules, and downtime impact assessments.
+"""
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field

@@ -1,3 +1,8 @@
+"""
+Schedule routes (/api/v1/schedule): AI schedule analysis. Endpoints: POST
+/analyze (parses an uploaded schedule), /predict-delays, /what-if
+(scenario simulation), /recovery-plan.
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from app.ai.schedule_analyzer import (

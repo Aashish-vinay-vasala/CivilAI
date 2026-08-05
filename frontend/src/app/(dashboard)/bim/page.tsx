@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import {
   Building2, Upload, Loader2, CheckCircle, AlertTriangle, Layers, Box,
   FileText, Eye, Sparkles, Wrench, ClipboardList, GitMerge, Download, ChevronDown, Gauge,
+  Ruler, Home,
 } from "lucide-react";
 import axios from "axios";
 import { toast } from "sonner";
@@ -48,6 +49,7 @@ const ELEMENT_COLORS: Record<string, string> = {
 
 const tabs = [
   { id: "overview",  label: "Overview",   icon: Building2 },
+  { id: "blueprint", label: "Blueprint Analysis", icon: Ruler },
   { id: "viewer",    label: "3D Viewer",  icon: Eye },
   { id: "elements",  label: "Elements",   icon: Layers },
   { id: "boq",       label: "BOQ",        icon: ClipboardList },
@@ -79,8 +81,9 @@ export default function BIMPage() {
   const [bimData, setBimData] = useState<any>(null);
   const [meshData, setMeshData] = useState<any[]>([]);
   const [clashData, setClashData] = useState<any>(null);
-  const [analysis, setAnalysis] = useState("");
   const [drawingAnalysis, setDrawingAnalysis] = useState("");
+  const [blueprintAnalysis, setBlueprintAnalysis] = useState<any>(null);
+  const [blueprintImageUrl, setBlueprintImageUrl] = useState<string | null>(null);
   const [boqData, setBoqData] = useState<any>(null);
   const [boqAnalysis, setBoqAnalysis] = useState("");
   const [structuralData, setStructuralData] = useState<any>(null);
@@ -113,6 +116,7 @@ export default function BIMPage() {
   const ifcInputRef = useRef<HTMLInputElement>(null);
   const boqInputRef = useRef<HTMLInputElement>(null);
   const drawingInputRef = useRef<HTMLInputElement>(null);
+  const blueprintInputRef = useRef<HTMLInputElement>(null);
   const clashInputRef = useRef<HTMLInputElement>(null);
   const structuralInputRef = useRef<HTMLInputElement>(null);
   const clashFile2Ref = useRef<HTMLInputElement>(null);
@@ -164,7 +168,6 @@ export default function BIMPage() {
   const resetModel = () => {
     setBimData(null);
     setMeshData([]);
-    setAnalysis("");
     setCurrentModelMeta(null);
   };
 
@@ -174,7 +177,6 @@ export default function BIMPage() {
       if (res.data.success) {
         setBimData(res.data.bim_data);
         setMeshData(res.data.meshes || []);
-        setAnalysis(res.data.ai_analysis || "");
         setCurrentModelMeta({
           original_name: res.data.original_name,
           created_at: res.data.created_at,
@@ -217,7 +219,6 @@ export default function BIMPage() {
       if (res.data.success) {
         setBimData(res.data.bim_data);
         setMeshData(res.data.meshes || []);
-        setAnalysis(res.data.ai_analysis || "");
         setCurrentModelMeta({
           original_name: res.data.original_name,
           created_at: res.data.model?.created_at,
@@ -233,6 +234,7 @@ export default function BIMPage() {
       toast.error(detail || "Failed to parse IFC file");
     } finally {
       setLoading(false);
+      e.target.value = "";
     }
   };
 
@@ -255,6 +257,7 @@ export default function BIMPage() {
       toast.error(detail || "Failed to run clash detection");
     } finally {
       setLoading(false);
+      e.target.value = "";
     }
   };
 
@@ -278,6 +281,31 @@ export default function BIMPage() {
       toast.error(detail || "Failed to analyze drawing");
     } finally {
       setLoading(false);
+      e.target.value = "";
+    }
+  };
+
+  // ── Blueprint Analysis (any floor plan — house, room, or full CAD drawing) —
+  // structured extraction (rooms, dimensions, elements) via Gemini, independent
+  // of the generic documents pipeline Drawing AI uses above.
+  const handleBlueprintUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBlueprintImageUrl(URL.createObjectURL(file));
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/bim/analyze-blueprint`, formData);
+      setBlueprintAnalysis(response.data);
+      toast.success("Blueprint analyzed!");
+      setActiveTab("blueprint");
+    } catch (err) {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
+      toast.error(detail || "Failed to analyze blueprint");
+    } finally {
+      setLoading(false);
+      e.target.value = "";
     }
   };
 
@@ -298,6 +326,7 @@ export default function BIMPage() {
       toast.error(detail || "Failed to generate BOQ");
     } finally {
       setLoading(false);
+      e.target.value = "";
     }
   };
 
@@ -318,6 +347,7 @@ export default function BIMPage() {
       toast.error(detail || "Failed to run structural screening");
     } finally {
       setLoading(false);
+      e.target.value = "";
     }
   };
 
@@ -454,6 +484,7 @@ export default function BIMPage() {
           <input ref={ifcInputRef} type="file" className="hidden" accept=".ifc" onChange={handleIFCUpload} />
           <input ref={boqInputRef} type="file" className="hidden" accept=".ifc" onChange={handleBOQUpload} />
           <input ref={drawingInputRef} type="file" className="hidden" accept=".png,.jpg,.jpeg,.pdf" onChange={handleDrawingUpload} />
+          <input ref={blueprintInputRef} type="file" className="hidden" accept=".png,.jpg,.jpeg,.pdf" onChange={handleBlueprintUpload} />
           <input ref={clashInputRef} type="file" className="hidden" accept=".ifc" onChange={handleClashDetection} />
           <input ref={structuralInputRef} type="file" className="hidden" accept=".ifc" onChange={handleStructuralUpload} />
 
@@ -1280,6 +1311,118 @@ export default function BIMPage() {
         </motion.div>
       )}
 
+      {/* ── Blueprint Analysis (structured — any floor plan / house / room) ─── */}
+      {activeTab === "blueprint" && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+          className="glass-card p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Ruler className="w-5 h-5 text-cyan-400" />
+            <h3 className="font-semibold text-white">Blueprint Analysis</h3>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400">Gemini Vision</span>
+          </div>
+
+          {!blueprintAnalysis ? (
+            <div className="text-center py-8">
+              <Home className="w-10 h-10 text-white/30 mx-auto mb-2" />
+              <p className="text-sm text-white/35 mb-1">Upload any floor plan or blueprint — a house, apartment, single room, or full CAD drawing</p>
+              <p className="text-xs text-white/25 mb-4">Extracts rooms, dimensions, materials, and structural notes · PNG, JPG, PDF</p>
+              <button className={primaryBtn + " mx-auto"} style={gradientButtonStyle} disabled={loading}
+                onClick={() => blueprintInputRef.current?.click()}>
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                Upload Blueprint
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <p className="text-sm text-white font-medium capitalize">{blueprintAnalysis.drawing_type}</p>
+                  <p className="text-xs text-white/40 mt-1">
+                    {blueprintAnalysis.overall_dimensions && <>Overall: {blueprintAnalysis.overall_dimensions} · </>}
+                    {blueprintAnalysis.total_area_sqft ? `${blueprintAnalysis.total_area_sqft.toLocaleString()} sq ft` : ""}
+                    {blueprintAnalysis.scale && <> · Scale: {blueprintAnalysis.scale}</>}
+                  </p>
+                </div>
+                <button className={ghostBtn} style={glassButtonStyle} disabled={loading} onClick={() => blueprintInputRef.current?.click()}>
+                  {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                  Analyze Another
+                </button>
+              </div>
+
+              {blueprintImageUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={blueprintImageUrl} alt="Uploaded blueprint" className="max-h-72 rounded-xl border object-contain" style={{ borderColor: "rgba(255,255,255,0.1)" }} />
+              )}
+
+              <p className="text-sm text-white/60 leading-relaxed">{blueprintAnalysis.summary}</p>
+
+              {blueprintAnalysis.rooms?.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-white mb-2">Rooms ({blueprintAnalysis.rooms.length})</h4>
+                  <div className="space-y-1.5">
+                    {blueprintAnalysis.rooms.map((room: any, i: number) => (
+                      <div key={i} className="flex items-center gap-3 p-2.5 rounded-xl" style={{ background: "rgba(255,255,255,0.015)" }}>
+                        <span className="text-xs text-white flex-1">{room.name}</span>
+                        {room.dimensions && <span className="text-xs text-white/40">{room.dimensions}</span>}
+                        {room.area_sqft != null && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-md" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.5)" }}>
+                            {room.area_sqft} sq ft
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {blueprintAnalysis.elements?.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-white mb-2">Detected Elements</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {blueprintAnalysis.elements.map((el: any, i: number) => (
+                      <span key={i} className="text-xs px-2.5 py-1 rounded-lg capitalize" style={{ background: "rgba(0,212,255,0.08)", color: "#00D4FF" }}>
+                        {el.type}{el.count ? ` × ${el.count}` : ""}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {blueprintAnalysis.materials?.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-white mb-2">Materials</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {blueprintAnalysis.materials.map((m: string, i: number) => (
+                      <span key={i} className="text-xs px-2.5 py-1 rounded-lg" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)" }}>{m}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {blueprintAnalysis.structural_notes && (
+                <div>
+                  <h4 className="text-sm font-medium text-white mb-2">Structural Notes</h4>
+                  <p className="text-xs text-white/50 leading-relaxed">{blueprintAnalysis.structural_notes}</p>
+                </div>
+              )}
+
+              {blueprintAnalysis.compliance_notes?.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-amber-400 mb-2 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" />Compliance Concerns
+                  </h4>
+                  <ul className="space-y-1">
+                    {blueprintAnalysis.compliance_notes.map((c: string, i: number) => (
+                      <li key={i} className="text-xs text-white/50">• {c}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </motion.div>
+      )}
+
       {/* ── Site Progress ─────────────────────────────────────────────────── */}
       {activeTab === "progress" && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
@@ -1329,18 +1472,6 @@ export default function BIMPage() {
             <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400">Interactive Layout</span>
           </div>
           <SpacePlanning3D />
-        </motion.div>
-      )}
-
-      {/* AI Analysis banner */}
-      {analysis && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          className="glass-card p-6" style={{ borderColor: ACCENT.cyan.border }}>
-          <div className="flex items-center gap-2 mb-3">
-            <Sparkles className="w-5 h-5 text-cyan-400" />
-            <h3 className="font-semibold text-white text-[15px]">AI BIM Analysis</h3>
-          </div>
-          <MarkdownText text={analysis} className="text-sm text-white/60 leading-relaxed" />
         </motion.div>
       )}
 

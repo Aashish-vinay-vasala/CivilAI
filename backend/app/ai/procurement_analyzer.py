@@ -1,3 +1,9 @@
+"""
+AI analysis of construction procurement. Produces a narrative report
+(demand forecast, supplier analysis, cost optimization, supply-chain risk)
+with structured risk metrics, and also drafts purchase orders, compares
+suppliers, and forecasts material demand.
+"""
 import logging
 from typing import Literal
 from pydantic import BaseModel, Field

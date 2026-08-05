@@ -25,6 +25,7 @@ export interface ChatMessage {
 // and the Copilot page converge on the same backend session/history, whichever
 // mounts first.
 const SESSION_STORAGE_KEY = "civilai_copilot_session";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function newSessionId(): string {
   return typeof crypto !== "undefined" && crypto.randomUUID
@@ -32,11 +33,16 @@ function newSessionId(): string {
     : `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
+// backend/app/api/v1/routes/copilot.py's /sessions upsert writes this id into a
+// uuid-typed Postgres column — a saved value from before this store existed, or
+// from the crypto.randomUUID-unavailable fallback above, 500s on every save.
+// Discarding anything non-UUID-shaped here self-heals on the next page load
+// instead of requiring a manual localStorage clear.
 function loadOrCreateSessionId(): string {
   if (typeof window === "undefined") return newSessionId();
   try {
     const saved = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    if (saved) return saved;
+    if (saved && UUID_RE.test(saved)) return saved;
     const fresh = newSessionId();
     window.localStorage.setItem(SESSION_STORAGE_KEY, fresh);
     return fresh;

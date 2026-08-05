@@ -1,3 +1,9 @@
+"""
+Vendor scoring routes (/api/v1/vendors): vendor registry plus AI vendor
+scoring. Endpoints: GET / (list), POST / (create), PATCH/DELETE
+/{vendor_id}; POST /extract-items (from an uploaded document), /score,
+/compare, /report.
+"""
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Query
 from pydantic import BaseModel
@@ -9,7 +15,7 @@ from app.services.db_service import supabase
 import uuid
 
 router = APIRouter()
-_finance_roles = ("project_director", "admin")
+_finance_roles = ("admin", "project_manager", "procurement_manager")
 
 
 class VendorData(BaseModel):

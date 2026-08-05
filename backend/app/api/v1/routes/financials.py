@@ -1,3 +1,11 @@
+"""
+Financial budget routes (/api/v1/financials): project budget tracking and
+AI-assisted budget extraction. Endpoints: GET /live-actuals,
+GET/POST/PUT/DELETE /budget-items and /items/{id} (line-item CRUD), GET
+/budget-sync-preview, POST /sync-project-budget, GET/DELETE /change-history,
+GET /export, GET /sync-from-modules, POST /import/validate, /import/confirm,
+/import/from-items, /extract (AI extraction from an uploaded document).
+"""
 import io
 import csv
 import json

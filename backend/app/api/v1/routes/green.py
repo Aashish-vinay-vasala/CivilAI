@@ -1,3 +1,9 @@
+"""
+Green monitor routes (/api/v1/green): sustainability/ESG analysis.
+Endpoints: POST /analyze-waste (waste-stream analysis), POST /esg-report
+(ESG report generation), POST /carbon-footprint (carbon-emissions
+estimation).
+"""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from app.ai.green_analyzer import (

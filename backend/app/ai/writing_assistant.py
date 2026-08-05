@@ -1,3 +1,10 @@
+"""
+Generates formal construction correspondence and documents — letters, emails,
+notices, variation orders, and dispute letters — from structured input dicts.
+Also analyzes blueprints (via Gemini vision with a Groq-vision text fallback),
+contract documents, and Bills of Quantities (BOQ) through Gemini's
+analyze_text/analyze_document path.
+"""
 from app.ai.groq_client import analyze_document
 from app.ai.gemini_client import analyze_text
 
@@ -96,9 +103,10 @@ def generate_variation_order(data: dict) -> str:
 
 def analyze_blueprint(image_data: bytes, query: str) -> str:
     from app.ai.gemini_client import analyze_image
+    from app.ai import groq_vision
     prompt = f"""
     You are an expert construction engineer analyzing a blueprint/drawing.
-    
+
     Analyze this construction drawing and provide:
     1. Drawing type identification
     2. Key dimensions and measurements
@@ -106,10 +114,15 @@ def analyze_blueprint(image_data: bytes, query: str) -> str:
     4. Construction notes
     5. Potential issues or clashes
     6. Compliance observations
-    
+
     Specific query: {query}
     """
-    return analyze_image(image_data, prompt)
+    try:
+        return analyze_image(image_data, prompt)
+    except Exception:
+        # Gemini unavailable (billing hold, rate limit, etc.) — same
+        # Groq-vision fallback used everywhere else Gemini is primary.
+        return groq_vision.analyze_image_text(image_data, prompt)
 
 def analyze_contract_document(text: str) -> str:
     prompt = f"""

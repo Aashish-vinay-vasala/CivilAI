@@ -1,3 +1,12 @@
+"""
+Auth/security utilities: verifies Supabase Auth JWTs against the project's
+JWKS (with caching), resolves a token into a user dict enriched with role/
+profile data from the `profiles` table, and exposes FastAPI dependencies
+(get_current_user, require_role, protect_route, require_module_access) that
+enforce authentication and RBAC — the latter gates whole routers in main.py
+using the permission matrix from app/core/guardrails.py.
+"""
+
 import logging
 import time
 import requests

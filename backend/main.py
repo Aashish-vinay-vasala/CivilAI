@@ -1,3 +1,11 @@
+"""
+FastAPI app entrypoint. Sets the Windows Proactor event loop policy, boots
+LangSmith/OTel tracing, configures CORS and the rate-limiter middleware (order
+matters — see comment below), and mounts every /api/v1/* router with its
+require_module_access RBAC dependency (copilot/support/auth are intentionally
+ungated). Also exposes / and /health, and runs uvicorn when invoked directly.
+"""
+
 import asyncio
 import logging
 import sys
@@ -11,7 +19,7 @@ from app.config import settings
 from app.core.telemetry import setup_all
 from app.core.security import require_module_access
 from app.middleware.rate_limiter import RateLimiterMiddleware
-from app.api.v1.routes import auth, copilot, chatbot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction, transcribe, email_notifications, preconstruction, financials, review, support, voice, agent, evaluation, judge, accounting, notifications, tenders, material_prices
+from app.api.v1.routes import auth, copilot, chatbot, documents, contracts, safety, cost, schedule, workforce, procurement, compliance, equipment, reports, ml, projects, writing, green, vendors, payments, bim, construction, transcribe, email_notifications, preconstruction, financials, review, support, voice, agent, evaluation, judge, accounting, notifications, tenders, material_prices, knowledge_graph
 
 setup_all()   # boot LangSmith tracing + OTel before the app object is created
 
@@ -24,6 +32,15 @@ app = FastAPI(
 )
 
 _origins = settings.get_origins()
+
+# Starlette wraps middleware in reverse add-order — whatever is added LAST ends
+# up OUTERMOST. RateLimiterMiddleware must be added first (innermost) so that
+# CORSMiddleware, added last (outermost), gets a chance to attach CORS headers
+# even on a 429 response the rate limiter returns directly without calling
+# call_next(). With the reverse order, a rate-limited response bypasses
+# CORSMiddleware entirely and the browser reports it as a CORS failure instead
+# of a readable 429.
+app.add_middleware(RateLimiterMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
@@ -31,7 +48,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(RateLimiterMiddleware)
 
 # NOTE: copilot and support are intentionally NOT module-gated here — both
 # have endpoints designed to work for anonymous/optional-auth users
@@ -279,6 +295,13 @@ app.include_router(
     prefix="/api/v1/tenders",
     tags=["Tenders"],
     dependencies=[Depends(require_module_access("tenders"))],
+)
+
+app.include_router(
+    knowledge_graph.router,
+    prefix="/api/v1/knowledge-graph",
+    tags=["Knowledge Graph"],
+    dependencies=[Depends(require_module_access("reports"))],
 )
 
 @app.get("/")

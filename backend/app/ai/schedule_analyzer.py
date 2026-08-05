@@ -1,3 +1,9 @@
+"""
+AI analysis of construction project schedules. Produces a narrative delay/
+critical-path report with structured schedule risk metrics, extracts
+structured task records from uploaded schedule documents, and predicts
+delays, runs what-if scenarios, and generates recovery plans.
+"""
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field

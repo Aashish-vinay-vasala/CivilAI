@@ -1,3 +1,9 @@
+"""
+Payment tracker routes (/api/v1/payments): invoice CRUD plus AI payment
+analysis. Endpoints: POST /extract-invoices (from an uploaded document),
+/analyze, /reminder, /forecast (cashflow forecast); GET/POST /invoices,
+PATCH/DELETE /invoices/{invoice_id}.
+"""
 from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional
@@ -30,7 +36,7 @@ supabase = create_client(
     settings.SUPABASE_SECRET_KEY,
     SyncClientOptions(httpx_client=httpx.Client(limits=httpx.Limits(max_keepalive_connections=0))),
 )
-_finance_roles = ("project_director", "admin")
+_finance_roles = ("admin", "project_manager", "procurement_manager")
 
 class PaymentData(BaseModel):
     project_name: str

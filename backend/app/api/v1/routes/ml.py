@@ -1,3 +1,12 @@
+"""
+ML prediction routes (/api/v1/ml): trained-model inference and dataset/stats
+endpoints backing the dashboards. Endpoints: POST /cost-overrun, /delay,
+/safety-risk, /turnover, /equipment-failure (single predictions); GET
+/safety-stats, /delay-stats, /workforce-stats, /equipment-stats,
+/performance-trend, /cost-overrun-auto; POST /cost-overrun/train, GET
+/cost-overrun/history, POST /cost-overrun/dataset/validate and
+/cost-overrun/versions/{version}/activate (model retraining/versioning).
+"""
 import uuid
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile

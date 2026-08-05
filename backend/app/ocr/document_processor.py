@@ -1,3 +1,11 @@
+"""
+Multi-format document extraction used by the document-upload/analysis routes:
+PDF text (pdfplumber) and tables (camelot, with a Ghostscript-dependent
+lattice fallback), Excel (openpyxl, with xlrd fallback for legacy .xls) and
+Word docs, PDF page-to-image rendering, and CSV. Image/PDF-page OCR goes
+through Gemini vision first, falling back to Groq vision on failure.
+"""
+
 import io
 import os
 import logging
@@ -7,10 +15,25 @@ import pdfplumber
 import openpyxl
 import docx
 from PIL import Image
-from app.ai.gemini_client import analyze_image, analyze_text
+from app.ai.gemini_client import analyze_image
 from app.ai.groq_client import analyze_document
+from app.ai import groq_vision
 
 logger = logging.getLogger("civilai.document_processor")
+
+
+def _analyze_image_with_fallback(image_data: bytes, prompt: str, is_pdf: bool = False) -> str:
+    """Gemini vision first; on failure (billing hold, rate limit, etc.) falls
+    to Groq's vision model instead of losing the extraction entirely."""
+    try:
+        return analyze_image(image_data, prompt)
+    except Exception as exc:
+        logger.warning("Gemini image analysis failed, falling back to Groq vision: %s", exc)
+        try:
+            return groq_vision.analyze_image_text(image_data, prompt, is_pdf=is_pdf)
+        except Exception as groq_exc:
+            logger.error("Groq vision fallback also failed: %s", groq_exc)
+            return ""
 
 
 # ── PDF text extraction ────────────────────────────────────────────────────────
@@ -172,7 +195,7 @@ def process_document(file_bytes: bytes, filename: str, prompt: str = None) -> di
             if not text.strip():
                 images = extract_pdf_images(file_bytes)
                 if images:
-                    text = analyze_image(images[0], "Extract all text from this document")
+                    text = _analyze_image_with_fallback(images[0], "Extract all text from this document")
 
         elif ext in ("xlsx", "xls"):
             text = extract_excel(file_bytes)
@@ -181,7 +204,7 @@ def process_document(file_bytes: bytes, filename: str, prompt: str = None) -> di
             text = extract_word(file_bytes)
 
         elif ext in ("png", "jpg", "jpeg", "webp"):
-            text = analyze_image(file_bytes, "Extract all text and data from this image")
+            text = _analyze_image_with_fallback(file_bytes, "Extract all text and data from this image")
 
         elif ext == "csv":
             import csv as _csv

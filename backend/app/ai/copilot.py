@@ -1,3 +1,10 @@
+"""
+CivilAI Copilot — the general-purpose chat assistant behind the app's main
+chat widget. Builds the system prompt (domain terminology, response
+formatting rules, and injected live project data / web search context) and
+calls groq_client's chat()/chat_stream() to answer free-form user questions
+across every module (scheduling, cost/EVM, safety, contracts, workforce, etc.).
+"""
 import logging
 from app.ai.groq_client import chat as groq_chat, chat_stream as groq_chat_stream, _FAST_MODEL
 

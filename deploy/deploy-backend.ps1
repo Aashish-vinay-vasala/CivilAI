@@ -36,7 +36,13 @@ Write-Host "Staging build context in $StageDir ..."
 # Exclude Dockerfile/.dockerignore: gcloud run deploy --source prefers a
 # Dockerfile over buildpacks when one is present, which would silently
 # defeat the whole point of this script.
-robocopy $BackendDir $StageDir /E /XD venv __pycache__ .pytest_cache data nemo_config /XF mlflow.db *.pyc Dockerfile .dockerignore | Out-Null
+#
+# The "data" exclusion below must be a full path, not a bare name: robocopy
+# /XD matches bare names anywhere in the tree, so "data" was also excluding
+# backend/app/data/fallback_models/*.ifc (the committed BIM fixture files
+# served by /api/v1/bim/fallback-models) along with the intended target,
+# the large local-only ML data cache at backend/data/.
+robocopy $BackendDir $StageDir /E /XD venv __pycache__ .pytest_cache (Join-Path $BackendDir "data") nemo_config /XF mlflow.db *.pyc Dockerfile .dockerignore | Out-Null
 
 Copy-Item (Join-Path $BackendDir "requirements.prod.txt") (Join-Path $StageDir "requirements.txt") -Force
 
@@ -51,7 +57,7 @@ gcloud run deploy $Service `
     --region $Region `
     --allow-unauthenticated `
     --env-vars-file $EnvFile `
-    --memory 2Gi `
+    --memory 4Gi `
     --cpu 2 `
     --timeout 300 `
     --min-instances 0 `

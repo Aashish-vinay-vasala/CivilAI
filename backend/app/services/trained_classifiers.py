@@ -1,3 +1,12 @@
+"""
+Generic wrapper (TrainedClassifier) for loading and running scikit-learn/
+XGBoost classifiers produced by models/train_all.py, each paired with its
+LabelEncoder(s) and training-report metadata from app/ml_models/. Mirrors
+cost_overrun_model.py's load/fallback contract: real inference when
+artifacts are present, a clearly-labeled failure otherwise so callers know
+to fall back to a heuristic instead of a real prediction.
+"""
+
 import json
 import logging
 from collections import Counter

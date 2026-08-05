@@ -1,3 +1,11 @@
+"""
+Shared constant values used across dashboard/reporting endpoints — invoice
+statuses, chart lookback/forecast windows, KPI scoring weights, cash-flow
+projection factors, and the module→alert-severity map used to render
+dashboard alerts. Kept here so these numbers aren't duplicated/hardcoded
+in each route.
+"""
+
 MONTH_NAMES = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",

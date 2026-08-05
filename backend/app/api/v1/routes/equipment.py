@@ -1,3 +1,10 @@
+"""
+Equipment routes (/api/v1/equipment): equipment inventory plus AI
+maintenance/failure analysis. Endpoints: GET /all, POST / (create),
+PATCH/DELETE /{equipment_id}; GET /maintenance-summary; POST /analyze,
+/extract-items (from documents), /predict-failure, /maintenance-schedule,
+/downtime-analysis.
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional

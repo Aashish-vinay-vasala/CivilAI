@@ -9,7 +9,7 @@ import {
   FileText, Boxes, BarChart3, Bot, Building2,
   ChevronLeft, ChevronRight, X, Calendar, HardHat,
   Shield, ClipboardList, FolderOpen, Pin, PinOff,
-  Zap, HeadphonesIcon, Mic, Wand2, ShieldCheck,
+  Zap, HeadphonesIcon, Mic, Wand2, ShieldCheck, Share2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRoleStore, ROLE_LABELS } from "@/lib/stores/roleStore";
@@ -50,6 +50,7 @@ const navGroups: NavGroup[] = [
       { href: "/voice",    icon: Mic,            label: "Voice Bot" },
       { href: "/analytics",  icon: BarChart3,     label: "Analytics" },
       { href: "/reports",    icon: ClipboardList, label: "Reports" },
+      { href: "/knowledge-graph", icon: Share2,   label: "Knowledge Graph", requiresModule: "reports" },
     ],
   },
   {

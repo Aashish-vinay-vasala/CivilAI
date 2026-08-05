@@ -1,3 +1,8 @@
+"""
+Email notification routes (/api/v1/email): outbound transactional email.
+Endpoints: POST /send (arbitrary custom email), POST /report (renders and
+emails a report as HTML), POST /alert (sends an alert notification email).
+"""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List

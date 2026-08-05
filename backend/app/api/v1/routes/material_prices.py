@@ -1,3 +1,10 @@
+"""
+Material prices routes (/api/v1/material-prices): tracked material pricing,
+manual entry, and AI extraction from documents. Endpoints: GET / (list, with
+optional history), POST / (manual entry), PATCH/DELETE /{entry_id}, POST
+/extract (AI extraction from an uploaded price sheet), POST /import
+(confirm reviewed AI-extracted prices).
+"""
 import io
 import csv
 import json

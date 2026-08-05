@@ -1,3 +1,12 @@
+"""
+Core input/output guardrails used across the AI copilot/agent and API routes:
+prompt-injection pattern blocking, control-character stripping, PII redaction
+before persisting text to memory stores, safety-disclaimer injection on
+safety-related AI responses, and the role x module x action RBAC permission
+matrix (has_permission / ROLE_PERMISSIONS) used by app/core/security.py.
+Exercised by test_guardrails.py.
+"""
+
 import re
 import logging
 

@@ -1,3 +1,10 @@
+"""
+Safety routes (/api/v1/safety): incident tracking and AI safety analysis.
+Endpoints: GET/POST /incidents, PATCH/DELETE /incidents/{incident_id}
+(incident CRUD, routed through human-in-the-loop checks); GET /stats; POST
+/analyze-report (uploaded safety report), /extract-incidents,
+/incident-report, /zone-risk.
+"""
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional

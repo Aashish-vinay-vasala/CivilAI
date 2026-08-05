@@ -1,5 +1,14 @@
+"""
+DuckDuckGo web search wrapper used by the AI copilot/agent for live web
+search: strips the frontend's "[Context: ...]" page-tag prefix before
+querying, runs the search (never raises — returns [] on failure, logging
+usage via usage_tracker), and filters results down to only the sources the
+model actually cited in its response.
+"""
+
 import logging
 import re
+import time
 
 from ddgs import DDGS
 
@@ -23,12 +32,14 @@ def search_web(query: str, max_results: int = 5) -> list[dict]:
     if not query or not query.strip():
         return []
 
-    usage_tracker.add_web_search_call()
+    t0 = time.time()
     try:
         results = DDGS().text(query, max_results=max_results)
     except Exception as exc:
         logger.warning("Web search failed for %r: %s", query, exc)
         return []
+    finally:
+        usage_tracker.add_web_search_call(provider="duckduckgo", source="web_search_service.search_web", latency_ms=(time.time() - t0) * 1000)
 
     return [
         {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")}

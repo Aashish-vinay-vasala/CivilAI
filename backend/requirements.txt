@@ -142,6 +142,7 @@ PyJWT==2.12.1
 PyMuPDF==1.27.2.2
 PyNiteFEA==3.0.0
 pyparsing==3.3.2
+pytesseract==0.3.13
 pypdfium2==5.7.0
 PyPika==0.51.1
 pyproject_hooks==1.2.0

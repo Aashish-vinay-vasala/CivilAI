@@ -1,3 +1,9 @@
+"""
+Structured extraction of construction budget line items (by CSI division,
+with original/revised/projected budget, committed and direct costs) from
+uploaded document text via instructor_client. Extraction-only — no narrative
+analysis; auto-computes revised/projected totals when the document omits them.
+"""
 import logging
 from pydantic import BaseModel, Field
 from app.ai.groq_client import instructor_client, _FAST_MODEL

@@ -1,3 +1,8 @@
+"""
+Transcription routes (/api/v1/transcribe): audio-to-text via Groq Whisper.
+Single endpoint: POST / (accepts an audio file upload, returns the
+transcript text).
+"""
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from app.ai.groq_client import client

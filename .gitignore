@@ -88,3 +88,6 @@ Desktop.ini
 /*.png
 /*.jpg
 /*.jpeg
+# ─── Local secrets / data ──────────────────────────────────────────────────
+/token.txt
+backend/data/mem0_chroma/

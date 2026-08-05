@@ -8,6 +8,7 @@ import io
 import os
 import logging
 import tempfile
+import time
 from typing import Optional
 from groq import Groq
 from app.config import settings
@@ -36,7 +37,6 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "audio.webm") -> str:
     if not audio_bytes:
         raise ValueError("Empty audio data")
 
-    usage_tracker.add_audio_call()
     suffix  = ("." + filename.rsplit(".", 1)[-1]) if "." in filename else ".webm"
     tmp_path = None
     try:
@@ -44,6 +44,7 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "audio.webm") -> str:
             tmp.write(audio_bytes)
             tmp_path = tmp.name
 
+        t0 = time.time()
         with open(tmp_path, "rb") as f:
             result = _groq.audio.transcriptions.create(
                 file=(filename, f),
@@ -51,6 +52,10 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "audio.webm") -> str:
                 response_format="text",
                 language="en",
             )
+        usage_tracker.add_audio_call(
+            provider="groq", model=_STT_MODEL, source="voice_processor.transcribe_audio",
+            latency_ms=(time.time() - t0) * 1000,
+        )
 
         # response_format="text" returns the transcript as a plain string
         text = result if isinstance(result, str) else getattr(result, "text", str(result))

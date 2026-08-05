@@ -1,3 +1,12 @@
+"""
+ML prediction glue for the /ml routes: rule-based heuristic fallbacks (cost
+overrun, delay, safety risk, turnover, equipment failure) used whenever a
+trained model can't be loaded, plus helpers that wire predictions to
+app/services/trained_classifiers.py. Heuristic results are always tagged
+model_version="heuristic-fallback" so callers never mistake them for real
+model output.
+"""
+
 import logging
 
 from app.services.trained_classifiers import TrainedClassifier

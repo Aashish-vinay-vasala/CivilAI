@@ -1,3 +1,10 @@
+"""
+Construction management routes (/api/v1/construction): day-to-day site
+record-keeping. CRUD endpoints (GET/POST/PATCH/DELETE) for punch-list items,
+RFIs, submittals, daily-reports, meetings, and cost-codes, all scoped by
+project_id; POST /extract for AI extraction of items from documents; GET/POST
+for evm-snapshots and anomaly-history.
+"""
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from typing import Optional

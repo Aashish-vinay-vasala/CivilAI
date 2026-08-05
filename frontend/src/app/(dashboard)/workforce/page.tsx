@@ -156,8 +156,10 @@ export default function WorkforcePage() {
         training_hours: 10, overtime_hours: 30, tenure_months: 8,
       });
       setMlTurnover(mlRes.data);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      // 403 = role lacks write access to the ml module (see require_module_access
+      // in backend/main.py) — expected for viewer/site_engineer, not a real failure.
+      if (err?.response?.status !== 403) console.error(err);
     } finally {
       setMlLoading(false);
     }

@@ -1,3 +1,9 @@
+"""
+File upload/download helpers backed by Supabase Storage buckets (default
+bucket: "documents"): upload, download, list, and delete, plus creating the
+corresponding `documents` DB row via app/services/db_service.create_document.
+"""
+
 import logging
 from supabase import create_client
 from app.config import settings

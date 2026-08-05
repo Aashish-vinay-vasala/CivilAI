@@ -1,3 +1,10 @@
+"""
+Structured extraction of general project-administration records from uploaded
+documents: punch list items, RFIs, submittals, meeting minutes, and cost
+codes. Each extract_* function uses instructor_client to pull a typed list of
+records (Pydantic models below) out of free-form document text — no
+narrative/risk analysis here, just extraction.
+"""
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field

@@ -1,3 +1,10 @@
+"""
+AI analysis of construction regulatory compliance. Produces a narrative
+compliance report (permit status, regulatory/code violations, action plan)
+plus structured compliance risk metrics and extracted permit records, and
+also drafts permit applications and summarizes regulatory changes for a
+given region/project type.
+"""
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field

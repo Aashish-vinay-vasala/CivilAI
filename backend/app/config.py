@@ -1,3 +1,11 @@
+"""
+App-wide configuration via pydantic-settings — the single `settings` object
+every module imports for API keys (Groq/Gemini/Supabase/HuggingFace/Redis/
+ElevenLabs/mem0/Zep), CORS origins, auth toggles, and observability
+(LangSmith/OTel) config. Values load from environment variables / a local
+.env file; see inline comments for what each optional var enables.
+"""
+
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 
@@ -15,6 +23,11 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str
     GROQ_API_KEY_2: Optional[str] = None  # fallback key when primary hits daily TPD limit
     GROQ_API_KEY_3: Optional[str] = None  # second fallback
+    # Separate quota pool dedicated to the AI copilot/agent's main response
+    # generation (agent_copilot.py) so a burst of guardrail/document-analysis
+    # traffic on GROQ_API_KEY(_2/_3) can't starve the copilot's own calls, and
+    # vice versa. Falls back to the shared pool's active key when unset.
+    GROQ_API_KEY_COPILOT: Optional[str] = None
     GEMINI_API_KEY: str
     SUPABASE_URL: str
     SUPABASE_SECRET_KEY: str

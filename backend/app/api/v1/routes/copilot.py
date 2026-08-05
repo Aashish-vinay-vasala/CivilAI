@@ -1,3 +1,10 @@
+"""
+Copilot routes (/api/v1/copilot): the main AI chat assistant, with tool-use,
+memory, guardrails, and file-upload support. Endpoints: POST /chat and
+/chat/stream (streaming), /structured, /upload (chat with attached file);
+DELETE /session/{id}, GET /sessions/{id}/history, GET/POST/DELETE /sessions
+(session persistence); POST /transcripts/save; GET /health, /usage, /favicon.
+"""
 import asyncio
 import json
 import logging
@@ -17,10 +24,13 @@ from app.ai.pydantic_agent import pydantic_chat
 from app.core.guardrails import sanitize_prompt, validate_output
 from app.core.llama_guard import check_input, check_output
 from app.core.nemo_rails import check_message
+from app.core.grounding import check_grounding, GROUNDING_CAVEAT
+from app.core import hitl
 from app.core.security import get_optional_user
 from app.services.voice_db_service import build_module_context
 from app.services.web_search_service import search_web, build_search_query, filter_cited_sources
 from app.services import usage_tracker
+from app.services import semantic_cache
 from app.ai.groq_client import get_key_pool_size
 
 _AUDIO_EXTS = {"mp3", "wav", "webm", "m4a", "ogg", "flac", "mp4"}
@@ -60,8 +70,20 @@ class ChatResponse(BaseModel):
     session_id: str = ""
     status: str = "success"
     warnings: list[str] = []
-    sources: list[Source] = []
+    sources: list[Source] = []            # web-search citations, not tool provenance
     tool_steps: list[ToolStep] = []
+    tool_sources: list[str] = []          # distinct tool names the reply is grounded in
+    requires_review: bool = False         # True when the grounding check flagged this reply
+    review_id: str | None = None          # ai_review_queue row id when requires_review is True
+
+
+def _tool_sources(tool_steps: list[dict]) -> list[str]:
+    seen: list[str] = []
+    for step in tool_steps:
+        name = step.get("tool")
+        if name and name not in seen:
+            seen.append(name)
+    return seen
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -81,7 +103,9 @@ async def chat_with_copilot(
         warnings.extend(sanitize_warnings)
 
         # ── Layer 2: LlamaGuard — screen user input ─────────────────────────
-        input_safe, input_violation = check_input(clean_message)
+        # fail_closed=True: this route reaches write-capable agent tools, so a
+        # guardrail outage should block the request rather than pass it through.
+        input_safe, input_violation = check_input(clean_message, fail_closed=True)
         if not input_safe:
             logger.warning(
                 "LlamaGuard INPUT blocked | ip=%s | role=%s | violation=%s",
@@ -94,7 +118,7 @@ async def chat_with_copilot(
             )
 
         # ── Layer 3: Groq classifier — jailbreak + topical rails ────────────
-        nemo_passed, nemo_refusal = await check_message(clean_message)
+        nemo_passed, nemo_refusal = await check_message(clean_message, fail_closed=True)
         if not nemo_passed:
             logger.warning(
                 "Groq classifier blocked | ip=%s | role=%s | refusal=%.60s",
@@ -118,6 +142,25 @@ async def chat_with_copilot(
         except Exception as _ctx_err:
             logger.debug("Module context fetch skipped: %s", _ctx_err)
             module_ctx = ""
+
+        # ── Semantic cache — skip the agent entirely on a close-enough repeat ──
+        # Only checked (and only ever populated) for non-web-search requests:
+        # web_search means the user explicitly wants fresh external results,
+        # which a cached answer can't reflect. cache_key includes module_ctx so
+        # a changed data snapshot naturally produces a different embedding and
+        # a correct miss — no manual invalidation needed. See
+        # app/services/semantic_cache.py for why only no-tool-call responses
+        # are ever stored.
+        cache_key = f"{effective_msg}\n\n{module_ctx}"
+        if not payload.web_search:
+            cached = await asyncio.to_thread(semantic_cache.get, cache_key)
+            if cached is not None:
+                add_message(session_id, "user", payload.message)
+                add_message(session_id, "assistant", cached)
+                turn_messages = [{"role": "user", "content": payload.message}, {"role": "assistant", "content": cached}]
+                asyncio.create_task(asyncio.to_thread(mem0_add, turn_messages, session_id))
+                asyncio.create_task(zep_add_messages(session_id, turn_messages))
+                return ChatResponse(response=cached, session_id=session_id, warnings=warnings)
 
         # ── Optional live web search ─────────────────────────────────────────
         web_results: list[dict] = []
@@ -148,7 +191,7 @@ async def chat_with_copilot(
         tool_steps = agent_result["tool_steps"]
 
         # ── Layer 5: LlamaGuard — screen assistant output ───────────────────
-        output_safe, output_violation = check_output(clean_message, response)
+        output_safe, output_violation = check_output(clean_message, response, fail_closed=True)
         if not output_safe:
             logger.warning(
                 "LlamaGuard OUTPUT blocked | ip=%s | role=%s | violation=%s",
@@ -164,6 +207,22 @@ async def chat_with_copilot(
         # ── Layer 6: output validation + safety disclaimer ───────────────────
         safe_response, _ = validate_output(response, context=clean_message)
 
+        # ── Store in semantic cache — only responses with zero tool calls.
+        # A tool-driven answer reflects live project data at this moment;
+        # caching it risks replaying a stale number later. See
+        # app/services/semantic_cache.py.
+        if not tool_steps and not payload.web_search:
+            asyncio.create_task(asyncio.to_thread(semantic_cache.set, cache_key, safe_response))
+
+        # ── Layer 7: grounding check — flag ungrounded replies for review ────
+        is_grounded, grounding_reason = await check_grounding(safe_response, tool_steps)
+        requires_review, review_id = False, None
+        if not is_grounded:
+            requires_review, review_id, _ = hitl.check_agent_reply(
+                safe_response, grounding_reason, tool_steps, session_id, None,
+            )
+            safe_response += GROUNDING_CAVEAT
+
         # ── Persist to Supabase session memory ───────────────────────────────
         add_message(session_id, "user", payload.message)
         add_message(session_id, "assistant", safe_response)
@@ -177,6 +236,8 @@ async def chat_with_copilot(
         return ChatResponse(
             response=safe_response, session_id=session_id, warnings=warnings,
             sources=sources, tool_steps=[ToolStep(**s) for s in tool_steps],
+            tool_sources=_tool_sources(tool_steps),
+            requires_review=requires_review, review_id=review_id,
         )
 
     except HTTPException:
@@ -230,7 +291,7 @@ async def chat_with_copilot_stream(
     except ValueError as e:
         return StreamingResponse(blocked(str(e)), media_type="application/x-ndjson")
 
-    input_safe, input_violation = check_input(clean_message)
+    input_safe, input_violation = check_input(clean_message, fail_closed=True)
     if not input_safe:
         logger.warning("LlamaGuard INPUT blocked | ip=%s | role=%s | violation=%s", ip, user_role, input_violation)
         return StreamingResponse(
@@ -238,7 +299,7 @@ async def chat_with_copilot_stream(
             media_type="application/x-ndjson",
         )
 
-    nemo_passed, nemo_refusal = await check_message(clean_message)
+    nemo_passed, nemo_refusal = await check_message(clean_message, fail_closed=True)
     if not nemo_passed:
         logger.warning("Groq classifier blocked | ip=%s | role=%s | refusal=%.60s", ip, user_role, nemo_refusal)
         return StreamingResponse(blocked(nemo_refusal, status="guardrail_triggered"), media_type="application/x-ndjson")
@@ -303,7 +364,7 @@ async def chat_with_copilot_stream(
             return
 
         # ── Output safety screen — runs on the fully-assembled text ─────────────
-        output_safe, output_violation = check_output(clean_message, full_text)
+        output_safe, output_violation = check_output(clean_message, full_text, fail_closed=True)
         if not output_safe:
             logger.warning("LlamaGuard OUTPUT blocked | ip=%s | role=%s | violation=%s", ip, user_role, output_violation)
             yield _ndjson({
@@ -313,6 +374,15 @@ async def chat_with_copilot_stream(
             return
 
         safe_response, _ = validate_output(full_text, context=clean_message)
+
+        # ── Grounding check — flag ungrounded replies for review ────────────────
+        is_grounded, grounding_reason = await check_grounding(safe_response, tool_steps)
+        requires_review, review_id = False, None
+        if not is_grounded:
+            requires_review, review_id, _ = hitl.check_agent_reply(
+                safe_response, grounding_reason, tool_steps, session_id, None,
+            )
+            safe_response += GROUNDING_CAVEAT
 
         add_message(session_id, "user", payload.message)
         add_message(session_id, "assistant", safe_response)
@@ -327,6 +397,9 @@ async def chat_with_copilot_stream(
             "session_id": session_id,
             "sources": sources,
             "tool_steps": tool_steps,
+            "tool_sources": _tool_sources(tool_steps),
+            "requires_review": requires_review,
+            "review_id": review_id,
             "warnings": [web_search_warning] if web_search_warning else [],
         })
 
@@ -373,14 +446,25 @@ async def structured_chat(payload: ChatMessage):
 
     result = await pydantic_chat(clean_message, history, web_ctx)
 
-    add_message(session_id, "user", payload.message)
-    add_message(session_id, "assistant", result.answer)
+    output_safe, output_violation = check_output(clean_message, result.answer)
+    if not output_safe:
+        logger.warning("Structured chat LlamaGuard OUTPUT blocked | violation=%s", output_violation)
+        return {
+            "status": "output_blocked", "session_id": session_id, "warnings": warnings, "sources": [],
+            "answer": "I generated a response that couldn't be delivered due to content policy. Please rephrase your question.",
+            "confidence": 0.0, "domain": "general", "follow_up": None,
+        }
 
-    sources = filter_cited_sources(result.answer, web_results)
+    safe_answer, _ = validate_output(result.answer, context=clean_message)
+
+    add_message(session_id, "user", payload.message)
+    add_message(session_id, "assistant", safe_answer)
+
+    sources = filter_cited_sources(safe_answer, web_results)
 
     return {
         "status": "success", "session_id": session_id, "warnings": warnings, "sources": sources,
-        **result.model_dump(),
+        **{**result.model_dump(), "answer": safe_answer},
     }
 
 
@@ -472,6 +556,15 @@ async def upload_and_chat(
             status="input_blocked",
         )
 
+    input_safe, input_violation = check_input(clean_q)
+    if not input_safe:
+        logger.warning("Upload LlamaGuard INPUT blocked | ip=%s | violation=%s", ip, input_violation)
+        return ChatResponse(
+            response=f"I'm unable to respond to that question. It was flagged for: {input_violation}. Please rephrase and try again.",
+            session_id=session_id or f"copilot_{int(time.time()*1000)}",
+            status="input_blocked",
+        )
+
     # ── Module context + session ──────────────────────────────────────────────
     try:
         module_ctx = await asyncio.to_thread(build_module_context, clean_q)
@@ -504,6 +597,16 @@ async def upload_and_chat(
         logger.error("Copilot upload LLM error | ip=%s | file=%s | error=%s", ip, filename, exc)
         raise HTTPException(500, f"LLM error: {exc}")
 
+    output_safe, output_violation = check_output(clean_q, raw_response)
+    if not output_safe:
+        logger.warning("Upload LlamaGuard OUTPUT blocked | ip=%s | violation=%s", ip, output_violation)
+        return ChatResponse(
+            response="I generated a response that couldn't be delivered due to content policy. Please rephrase your question.",
+            session_id=sid,
+            status="output_blocked",
+            warnings=[f"Output blocked: {output_violation}"],
+        )
+
     safe_response, _ = validate_output(raw_response, context=combined_msg)
 
     # ── Persist ───────────────────────────────────────────────────────────────
@@ -526,8 +629,10 @@ async def copilot_health():
 
 @router.get("/usage")
 async def get_usage():
-    """Today's usage (UTC) for the widget's usage gauges — see app/services/usage_tracker.py."""
-    return usage_tracker.get_usage(key_pool_size=get_key_pool_size())
+    """Today's usage (UTC) for the widget's usage gauges — see app/services/usage_tracker.py.
+    Reads from ai_usage_log (not the in-memory counters) so the numbers survive
+    backend restarts instead of resetting to zero every time --reload fires."""
+    return await asyncio.to_thread(usage_tracker.get_usage_from_db, get_key_pool_size())
 
 
 # ── Chat session history (the floating widget's "New Chat" / History list) ────
@@ -536,6 +641,18 @@ class ChatSessionUpsert(BaseModel):
     id: str
     label: str = ""
     messages: list = []
+
+    @field_validator("id")
+    @classmethod
+    def _id_must_be_uuid(cls, v: str) -> str:
+        # copilot_chat_sessions.id is a uuid column — a malformed id (e.g. a stale
+        # pre-UUID value from the frontend's localStorage) would otherwise reach
+        # Supabase as a raw Postgres 22P02 error surfaced as a 500.
+        try:
+            uuid.UUID(v)
+        except ValueError:
+            raise ValueError("id must be a valid UUID")
+        return v
 
 
 @router.get("/sessions")

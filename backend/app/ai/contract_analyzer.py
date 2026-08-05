@@ -1,3 +1,9 @@
+"""
+AI analysis of construction contracts. Produces a narrative risk assessment
+(risky/missing clauses, obligations, dispute risk, recommendations) plus a
+structured contract risk score, and also drafts RFIs and analyzes change
+orders for cost/time impact and an approve/negotiate/reject recommendation.
+"""
 import logging
 from typing import Literal
 from pydantic import BaseModel, Field

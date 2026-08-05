@@ -1,3 +1,9 @@
+"""
+Generates narrative project reports from arbitrary project data dicts: weekly
+progress reports, client-facing stakeholder reports, risk registers, meeting
+summaries, and KPI summaries. All via analyze_document(); no structured
+extraction here.
+"""
 from app.ai.groq_client import analyze_document
 from app.ai.gemini_client import analyze_text
 

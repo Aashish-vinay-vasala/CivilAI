@@ -1,3 +1,11 @@
+"""
+Projects routes (/api/v1/projects): the core project registry and dashboard
+data feeding the app's home views. Endpoints: GET/POST / (list/create),
+PATCH/DELETE/GET /{project_id}; GET /kpis, /alerts, /charts/progress,
+/charts/kpi-trends, /charts/costs, /charts/cashflow; per-project sub-resource
+reads/writes under /{project_id}/{cost,schedule,safety,workforce,equipment,
+contracts,permits,purchase-orders,overview}.
+"""
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel

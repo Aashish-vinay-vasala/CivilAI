@@ -1,3 +1,12 @@
+"""
+Main Supabase data-access layer, imported throughout the app. Covers
+projects (with aggregated cost/progress/committed-cost rollups), cost
+entries, schedule tasks, safety incidents, workforce, equipment, contracts,
+permits, purchase orders, documents, BIM models (including version history/
+promotion), and IoT sensor readings. Uses a dedicated httpx client with
+keep-alive disabled to avoid a Windows socket race under concurrent requests.
+"""
+
 import logging
 import httpx
 from supabase import create_client, Client

@@ -1,3 +1,12 @@
+"""
+Serving/inference side of the cost-overrun ML model: loads the active trained
+version's classifier (+ calibration wrapper), quantile regressor, label
+encoder, and SHAP explainer from app/ml_models/cost_overrun/, and exposes
+predict-style helpers to the ml routes. Training itself lives in
+app/services/cost_overrun_trainer.py; this file only loads and serves the
+resulting artifacts, falling back to a heuristic if they're missing/unloadable.
+"""
+
 import json
 import logging
 from collections import Counter

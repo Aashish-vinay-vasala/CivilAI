@@ -1,3 +1,12 @@
+"""
+Preliminary structural screening for BIM-extracted beams, built on PyNiteFEA.
+Models each beam as an independently simply-supported single-span member
+under self-weight plus an assumed uniform live load, checks it against an
+L/360 deflection limit, and reports pass/fail per beam. Explicitly not a
+certified design check — see DISCLAIMER. Degrades gracefully (HAS_PYNITE=False)
+if PyNiteFEA isn't installed.
+"""
+
 import logging
 import math
 from typing import Optional

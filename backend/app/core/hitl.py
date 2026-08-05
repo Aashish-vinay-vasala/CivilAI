@@ -23,6 +23,12 @@ Supabase table required:
         project_id      TEXT,
         created_at      TIMESTAMPTZ DEFAULT NOW()
     );
+
+Every successful queue write also fans out a `notifications` row (see
+app/api/v1/routes/notifications.py) to each `profiles` row with role='admin',
+so a flagged output doesn't sit unseen until someone happens to open the
+review dashboard. Notification failures are logged and swallowed — they must
+never block or fail the underlying review-queue write.
 """
 import json
 import re
@@ -65,6 +71,29 @@ def _extract_risk_score(risk_data_text: str) -> float:
     return 0.0
 
 
+def _notify_admins(route: str, trigger_reason: str, risk_score: float, review_id: Optional[str]) -> None:
+    """Fan out an in-app notification (see app/api/v1/routes/notifications.py)
+    to every admin so a queued review doesn't sit unseen until someone happens
+    to open the review dashboard. Best-effort — a notification failure must
+    never take down the underlying review-queue write."""
+    try:
+        admins = (
+            supabase.table("profiles").select("id").eq("role", "admin").execute().data or []
+        )
+        for admin in admins:
+            supabase.table("notifications").insert({
+                "user_id": admin["id"],
+                "type":    "warning",
+                "title":   "AI output flagged for review",
+                "message": f"{route}: {trigger_reason}"[:500],
+                "module":  "review",
+                "read":    False,
+            }).execute()
+    except Exception as exc:
+        logger.warning("HITL admin notification failed | route=%s | review_id=%s | error=%s",
+                        route, review_id, exc)
+
+
 def _queue(
     route: str,
     trigger_reason: str,
@@ -90,6 +119,7 @@ def _queue(
             "HITL queued | route=%s | score=%.1f | id=%s | reason=%.80s",
             route, risk_score, review_id, trigger_reason,
         )
+        _notify_admins(route, trigger_reason, risk_score, review_id)
         return review_id
     except Exception as exc:
         logger.error("HITL queue write failed | route=%s | error=%s", route, exc)
@@ -165,6 +195,26 @@ def check_vendor(
         )
         return True, review_id, reason
     return False, None, ""
+
+
+def check_agent_reply(
+    reply: str,
+    grounding_reason: str,
+    tool_steps: list[dict],
+    session_id: str,
+    project_id: Optional[str] = None,
+) -> tuple[bool, Optional[str], str]:
+    """Flag an agent/copilot reply that failed the grounding check (see
+    app/core/grounding.py) for human review. Unlike the other check_* functions,
+    this is always called with something to queue — the caller only invokes it
+    once check_grounding() has already returned is_grounded=False."""
+    tools_used = ", ".join(s.get("tool", "?") for s in tool_steps) or "none"
+    reason = f"Agent reply failed grounding check — {grounding_reason} (tools called: {tools_used})"
+    review_id = _queue(
+        "agent/chat", reason,
+        f"Session: {session_id}", reply, 6.0, project_id,
+    )
+    return True, review_id, reason
 
 
 def check_safety_incident(

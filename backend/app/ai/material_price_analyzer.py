@@ -1,3 +1,8 @@
+"""
+Structured extraction of material unit-price quotes (material, price, unit,
+as-of date, supplier/region notes) from uploaded document text via
+instructor_client. Extraction-only — no narrative analysis.
+"""
 import logging
 from typing import Optional
 from pydantic import BaseModel, Field

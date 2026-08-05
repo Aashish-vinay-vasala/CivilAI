@@ -1,3 +1,9 @@
+"""
+AI analysis of invoices and payment records. Extracts structured invoice
+records from uploaded documents, produces a narrative payment status/cash
+flow/dispute-risk analysis, and drafts payment reminder letters and 90-day
+cash flow forecasts.
+"""
 import logging
 from typing import Literal, Optional
 from pydantic import BaseModel, Field

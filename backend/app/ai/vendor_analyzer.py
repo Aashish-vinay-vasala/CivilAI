@@ -1,3 +1,11 @@
+"""
+AI scoring and analysis of construction vendors/subcontractors. Produces a
+narrative evaluation plus structured 0-100 scores across quality, delivery,
+safety, financial stability, and communication, with a
+Preferred/Approved/Review/Blacklist recommendation. Also compares vendors,
+extracts structured vendor records from documents, and generates vendor
+performance reports.
+"""
 import logging
 from typing import Literal
 from pydantic import BaseModel, Field

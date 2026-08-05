@@ -1,3 +1,10 @@
+"""
+Documents routes (/api/v1/documents): general file storage, listing, and a
+document Q&A endpoint. Endpoints: POST /upload (stores + auto-classifies a
+document), GET /list, GET /storage/{bucket} (list files in a bucket), GET
+/storage/{bucket}/{filename}/download, DELETE /storage/{bucket}/{filename},
+POST /ask (RAG-style question answering over stored documents).
+"""
 import logging
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form

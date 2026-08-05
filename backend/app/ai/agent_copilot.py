@@ -1486,16 +1486,33 @@ _TOOLS = [
     add_punch_list_item,
 ]
 
+# Flips permanently (per process) once the dedicated copilot key itself gets
+# rate-limited — from then on _get_llm() falls back to groq_client's shared
+# pool instead, so a stuck copilot key doesn't mean an outright failure once
+# GROQ_API_KEY_2/_3 are available. See run_agent's retry loop.
+_copilot_key_exhausted = False
+
+
 def _get_llm() -> ChatGroq:
-    """Build a fresh client bound to whichever key groq_client's rotation has
-    currently active — a fixed, module-level ChatGroq (the original approach)
-    never rotated off GROQ_API_KEY even after groq_client.py moved to key 2/3,
-    since it's a completely separate client with its own key baked in at
-    construction time."""
+    """Build a fresh client bound to whichever key this call should use.
+
+    GROQ_API_KEY_COPILOT, when set, is a quota pool dedicated to the agent's
+    own response generation — isolated from GROQ_API_KEY(_2/_3), which the
+    guardrail classifiers and document-analysis tools share. Without this
+    isolation, a burst of guardrail/analysis traffic can exhaust the same
+    key the copilot needs to answer at all. Falls back to groq_client's
+    shared active key when the dedicated one isn't configured, or once the
+    dedicated key itself has been rate-limited (_copilot_key_exhausted).
+
+    Built fresh each call (not a fixed module-level client) so key rotation
+    on the shared pool — see run_agent's retry loop — actually takes effect;
+    a client built once at import time would keep the key it started with."""
     from app.ai import groq_client
+    use_dedicated = settings.GROQ_API_KEY_COPILOT and not _copilot_key_exhausted
+    api_key = settings.GROQ_API_KEY_COPILOT if use_dedicated else groq_client.get_active_key()
     return ChatGroq(
         model=_MODEL,
-        api_key=groq_client.get_active_key(),
+        api_key=api_key,
         temperature=0.1,
         max_tokens=4096,
     )
@@ -1634,13 +1651,6 @@ def _is_groq_rate_limited(exc: Exception) -> bool:
     return "429" in err or "rate_limit_exceeded" in err
 
 
-def _is_daily_limit(exc: Exception) -> bool:
-    """Tokens-per-day exhaustion — per-key, so rotating to the next key actually
-    helps (unlike the per-minute/per-org case in _is_unrecoverable_rate_limit)."""
-    err = str(exc)
-    return "rate_limit_exceeded" in err and "tokens per day" in err.lower()
-
-
 def _is_malformed_tool_call(exc: Exception) -> bool:
     """Groq's Llama function-calling occasionally emits syntactically broken tool-call
     tokens (tool_use_failed) unrelated to rate limits or the tool's own schema — not
@@ -1666,16 +1676,24 @@ def _track_tokens(result: dict) -> None:
     """Record actual token usage from the ReAct agent's own orchestration LLM
     calls. The per-tool analyze_document() Groq calls are already tracked in
     groq_client.py, but this top-level LLM wasn't tracked at all before,
-    which meant usage_tracker.is_over_budget() would undercount real usage."""
+    which meant usage_tracker.is_over_budget() would undercount real usage.
+
+    No latency_ms here — this sums usage across every LLM call in a
+    multi-step tool-calling loop, so a single call's latency doesn't apply."""
     try:
         from app.services import usage_tracker
-        total = 0
+        total = input_total = output_total = 0
         for msg in result.get("messages", []):
             usage = getattr(msg, "usage_metadata", None)
             if usage:
                 total += usage.get("total_tokens", 0) or 0
+                input_total += usage.get("input_tokens", 0) or 0
+                output_total += usage.get("output_tokens", 0) or 0
         if total:
-            usage_tracker.add_llm_tokens(total)
+            usage_tracker.add_llm_tokens(
+                total, provider="groq", model=_MODEL, source="agent_copilot.run_agent",
+                input_tokens=input_total or None, output_tokens=output_total or None,
+            )
     except Exception:
         pass
 
@@ -1732,11 +1750,16 @@ def run_agent(
                 used_malformed_retry = True
                 logger.warning("Malformed tool call from Groq — retrying once: %s", exc)
                 continue
-            if _is_daily_limit(exc) and groq_client.rotate_key():
-                logger.warning("Agent LLM hit its daily limit — retrying with next Groq key")
-                continue
             if _is_groq_rate_limited(exc):
-                logger.warning("Agent LLM rate-limited — falling back to Gemini (no tool-calling this turn): %s", exc)
+                global _copilot_key_exhausted
+                if settings.GROQ_API_KEY_COPILOT and not _copilot_key_exhausted:
+                    _copilot_key_exhausted = True
+                    logger.warning("Copilot's dedicated Groq key rate-limited — falling back to the shared key pool")
+                    continue
+                if groq_client.rotate_key():
+                    logger.warning("Agent LLM rate-limited — retrying with next Groq key")
+                    continue
+                logger.warning("Agent LLM rate-limited and all Groq keys exhausted — falling back to Gemini (no tool-calling this turn): %s", exc)
                 try:
                     return {"reply": _gemini_fallback_reply(msgs), "tool_steps": []}
                 except Exception as gem_exc:
@@ -1785,7 +1808,10 @@ async def run_agent_stream(
                         output = event["data"].get("output")
                         usage = getattr(output, "usage_metadata", None)
                         if usage:
-                            usage_tracker.add_llm_tokens(usage.get("total_tokens", 0) or 0)
+                            usage_tracker.add_llm_tokens(
+                                usage.get("total_tokens", 0) or 0, provider="groq", model=_MODEL, source="agent_copilot.run_agent_stream",
+                                input_tokens=usage.get("input_tokens") or None, output_tokens=usage.get("output_tokens") or None,
+                            )
                     except Exception:
                         pass
 
@@ -1823,15 +1849,19 @@ async def run_agent_stream(
                 logger.warning("Malformed tool call from Groq — retrying stream once: %s", exc)
                 continue
 
-            if not emitted_any and _is_daily_limit(exc) and groq_client.rotate_key():
-                logger.warning("Agent stream hit its daily limit before any output — retrying with next Groq key")
-                continue
-
             # Only fall back if nothing has streamed yet — a failure mid-stream (after
             # partial output already reached the client) just ends the generator early,
             # same as before; retrying would duplicate/conflict with what's already shown.
             if not emitted_any and _is_groq_rate_limited(exc):
-                logger.warning("Agent stream rate-limited before any output — falling back to Gemini: %s", exc)
+                global _copilot_key_exhausted
+                if settings.GROQ_API_KEY_COPILOT and not _copilot_key_exhausted:
+                    _copilot_key_exhausted = True
+                    logger.warning("Copilot's dedicated Groq key rate-limited — falling back to the shared key pool")
+                    continue
+                if groq_client.rotate_key():
+                    logger.warning("Agent stream rate-limited — retrying with next Groq key")
+                    continue
+                logger.warning("Agent stream rate-limited and all Groq keys exhausted — falling back to Gemini: %s", exc)
                 try:
                     reply = _gemini_fallback_reply(msgs)
                     for i, word in enumerate(reply.split(" ")):

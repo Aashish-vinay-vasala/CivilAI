@@ -1,5 +1,7 @@
-# Production-only requirements — excludes torch/ML training packages
-# (torch is ~2GB and only needed for local ML work, not API serving)
+# Production-only requirements — excludes ML *training*-only packages
+# (datasets/ragas/deepeval/silero-vad — not reachable via any API route).
+# torch IS included below: Document Q&A (LlamaIndex) and Speaker Diarization
+# (pyannote) are live, user-facing features that need it to actually work.
 fastapi==0.135.3
 uvicorn==0.44.0
 python-multipart==0.0.26
@@ -32,6 +34,59 @@ PyMuPDF==1.27.2.2
 python-docx==1.2.0
 openpyxl==3.1.5
 xlrd==2.0.1
+pytesseract==0.3.13
+networkx==3.6.1
+camelot-py==2.0.0
+
+# Accounting extraction (app/ai/accounting_extractor.py) — price_parser is imported
+# unguarded in _extract_amounts(), so every /accounting/extract call 500s without it
+price-parser==0.5.1
+invoice2data==1.0.0
+
+# Voice bot (app/ai/vad_processor.py, voice.py) — guarded imports, so these were
+# silently no-op-ing (falling back / disabled) in prod rather than erroring.
+#
+# openwakeword deliberately omitted: every release hard-requires tflite-runtime
+# on Linux (openwakeword's own PyPI metadata), and tflite-runtime has never
+# published a wheel for Python 3.13 — it can't install on this buildpack no
+# matter which openwakeword version is pinned. Wake-word detection keeps
+# returning its existing "not installed" fallback; nothing else regresses.
+av==17.1.0
+webrtcvad-wheels==2.0.14
+gTTS==2.5.3
+
+# Copilot memory + alt-agent backends (app/ai/memory_zep.py, pydantic_agent.py) —
+# only activate when their env vars are set, but were unimportable.
+# zep-python/pydantic-ai left unpinned (not in the dev venv to verify a version
+# against, same as requirements.txt does for them)
+mem0ai==2.0.10
+zep-python
+pydantic-ai
+
+# Document Q&A (app/ai/llama_rag.py) — this IS the entire "ask a question about
+# your documents" feature (POST /api/v1/documents/ask), not an optional extra.
+# Pulls in torch via sentence-transformers for the embeddings model.
+llama-index-core
+llama-index-llms-groq
+llama-index-embeddings-huggingface
+sentence-transformers==4.1.0
+torch==2.11.0
+
+# Speaker Diarization (app/ai/vad_processor.py) — the entire "who spoke when"
+# feature (POST /api/v1/voice/diarize) and the meeting-summary flow that
+# depends on it. No fallback engine exists if this is missing.
+pyannote.audio==4.0.6
+
+# Silero VAD (app/ai/vad_processor.py) — the more-accurate alternative to
+# WebRTC VAD in the Voice > VAD tab. Rides on torch, already included above.
+silero-vad
+
+# AI-answer-quality evaluation endpoints (/api/v1/evaluation/ragas,
+# /api/v1/evaluation/deepeval) — not called by any page in the app; only
+# useful if you hit these endpoints directly yourself.
+# `datasets` isn't listed separately — it installs transitively via ragas.
+ragas
+deepeval
 
 # ChromaDB (uses onnxruntime for embeddings, much lighter than torch)
 chromadb==1.5.7

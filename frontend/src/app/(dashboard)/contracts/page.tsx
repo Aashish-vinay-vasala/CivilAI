@@ -38,6 +38,16 @@ import DownloadModal from "@/components/shared/DownloadModal";
 import { MarkdownText } from "@/lib/renderMarkdown";
 import { ACCENT, AccentKey, glassInputClass, glassInputStyle, gradientButtonStyle, glassButtonStyle } from "@/lib/theme";
 import { useDataRefreshStore } from "@/lib/stores/dataRefreshStore";
+
+// A 403 here always means require_module_access("contracts") denied a write —
+// show that plainly instead of the generic/misleading per-action fallback message.
+function showApiError(err: any, fallback: string) {
+  if (err?.response?.status === 403) {
+    toast.error("You don't have permission to do this. Contracts can only be edited by a Project Manager, Procurement Manager, or Admin — ask one of them for access.");
+    return;
+  }
+  toast.error(err?.response?.data?.detail ?? fallback);
+}
 import { downloadEntries, ExportColumn, ExportFormat, ExportMode } from "@/lib/export/downloadEntries";
 
 const DOCS_TABS = [
@@ -269,7 +279,7 @@ export default function ContractsPage() {
       fetchContracts();
       triggerRefresh("contracts");
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail ?? "Failed to add contract");
+      showApiError(e, "Failed to add contract");
     } finally {
       setAdding(false);
     }
@@ -301,8 +311,8 @@ export default function ContractsPage() {
       setEditContractFile(null);
       fetchContracts();
       triggerRefresh("contracts");
-    } catch {
-      toast.error("Failed to update contract");
+    } catch (e: any) {
+      showApiError(e, "Failed to update contract");
     } finally {
       setSaving(false);
     }
@@ -315,8 +325,8 @@ export default function ContractsPage() {
       toast.success("Contract deleted");
       fetchContracts();
       triggerRefresh("contracts");
-    } catch {
-      toast.error("Failed to delete contract");
+    } catch (e: any) {
+      showApiError(e, "Failed to delete contract");
     }
   };
 
@@ -339,8 +349,8 @@ export default function ContractsPage() {
       if (response.data.risk_data) setRiskData(response.data.risk_data);
       setRequiresReview(response.data.requires_review || false);
       toast.success("Contract analyzed!");
-    } catch {
-      toast.error("Failed to analyze contract");
+    } catch (e: any) {
+      showApiError(e, "Failed to analyze contract");
     } finally {
       setLoading(false);
     }
@@ -355,8 +365,8 @@ export default function ContractsPage() {
       );
       setRfiResult(response.data.rfi);
       toast.success("RFI generated!");
-    } catch {
-      toast.error("Failed to generate RFI");
+    } catch (e: any) {
+      showApiError(e, "Failed to generate RFI");
     } finally {
       setRfiLoading(false);
     }
@@ -375,8 +385,8 @@ export default function ContractsPage() {
       setChangeOrderResult(response.data.analysis);
       if (response.data.requires_review) setChangeOrderReviewId(response.data.review_id);
       toast.success("Change order analyzed!");
-    } catch {
-      toast.error("Failed to analyze change order");
+    } catch (e: any) {
+      showApiError(e, "Failed to analyze change order");
     } finally {
       setChangeOrderLoading(false);
     }

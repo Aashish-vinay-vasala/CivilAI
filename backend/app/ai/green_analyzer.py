@@ -1,3 +1,9 @@
+"""
+AI analysis for sustainability/ESG data: waste generation and recycling
+recommendations, ESG (Environmental/Social/Governance) report generation, and
+carbon footprint estimation with reduction strategies. All narrative-only via
+analyze_document().
+"""
 from app.ai.groq_client import analyze_document
 from app.ai.gemini_client import analyze_text
 
